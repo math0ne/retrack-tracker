@@ -1,0 +1,80 @@
+# Playback modes. The master take puts the tone on the left channel for its
+# first second and on the right for its second second, so the channel that
+# sounds tells which way the loop is being read.
+wait 300
+tone_ch left
+tap 0
+wait 1000
+tone_ch right
+wait 1000
+tap 0
+tone off
+
+# Forward, just after the loop start: the left half plays.
+wait 100
+reset_levels
+wait 700
+expect_ch left 0.2
+expect_ch right silent
+
+# Reverse from here (about 0.9 s in): the read position runs back through 0
+# and on into the right half, where it stays for the next second.
+# F5 opens the mode bar, F2 is Reverse.
+press F5
+shot ../build/sim/check/modes_bar.png
+press F2
+wait 1000
+reset_levels
+wait 700
+expect_ch right 0.2
+expect_ch left silent
+shot ../build/sim/check/modes_reverse.png
+
+# Every other mode makes sound.
+press F5
+press F3
+wait 200
+reset_levels
+wait 1500
+expect_audio 0.2
+press F5
+press F4
+wait 200
+reset_levels
+wait 1500
+expect_audio 0.2
+# Half speed: no overdub (the hint shows)
+press REC
+wait 100
+shot ../build/sim/check/modes_half_speed_hint.png
+press F5
+press F5
+wait 200
+reset_levels
+wait 1000
+expect_audio 0.2
+press F5
+press F6
+wait 200
+reset_levels
+wait 1500
+expect_audio 0.2
+shot ../build/sim/check/modes_half_time.png
+press F5
+press F7
+wait 200
+reset_levels
+wait 1500
+expect_audio 0.2
+press F5
+press F8
+wait 200
+reset_levels
+wait 1500
+expect_audio 0.2
+
+# Any non-F key closes the mode bar without changing the mode.
+press F5
+press UP
+wait 100
+shot ../build/sim/check/modes_cancel.png

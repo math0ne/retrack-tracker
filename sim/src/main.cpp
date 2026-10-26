@@ -1,7 +1,7 @@
 // Tracker Looper simulator: the looper app on the OpenTracker host HAL
 // (software FT81x, SDL audio, the front panel drawn around the screen).
 //
-//   looper-sim [--line-in] [--tone HZ] [--scale N] [--quit-after MS]
+//   looper-sim [--line-in] [--tone HZ] [--tone-ch left|right|both] [--scale N] [--quit-after MS]
 //   looper-sim --script FILE [--tone HZ] [--wav OUT.wav] [--shot OUT.png]   (headless)
 //
 // Interactive keys: pads = the four keyboard rows 1..=, q..], a..', z../
@@ -15,9 +15,12 @@
 //   press NAME         button down, 30 ms, up     hold NAME / release NAME
 //   enc N              encoder detents
 //   tone HZ | tone off synthetic line input (bursts of a sine)
-//   levels             print and reset the output peak since the last reset
-//   expect_audio MIN   fail unless the output peak since the last reset >= MIN (0..1)
-//   expect_silent      fail unless the output peak since the last reset < 0.001
+//   tone_ch left|right|both   which input channels carry the tone
+//   levels             print and reset the output peaks since the last reset
+//   reset_levels       reset them without printing
+//   expect_audio MIN   fail unless the output peak since the last reset >= MIN (0..1), then reset
+//   expect_silent      fail unless the output peak since the last reset < 0.001, then reset
+//   expect_ch left|right MIN|silent   the same for one channel (no reset)
 //   shot PATH          PNG of the front panel; screen PATH = the 800x480 screen only
 #include <SDL.h>
 
@@ -49,6 +52,7 @@ struct Options {
     float tone = 0.0f;
     int scale = 1;
     long quitAfterMs = -1;
+    std::string toneCh = "both";
     std::string script, wav, shot;
 };
 
@@ -59,13 +63,14 @@ bool parseArgs(int argc, char** argv, Options& o) {
         const char* v = nullptr;
         if (a == "--line-in") o.lineIn = true;
         else if (a == "--tone" && (v = next())) o.tone = float(std::atof(v));
+        else if (a == "--tone-ch" && (v = next())) o.toneCh = v;
         else if (a == "--scale" && (v = next())) o.scale = std::atoi(v) < 1 ? 1 : std::atoi(v);
         else if (a == "--quit-after" && (v = next())) o.quitAfterMs = std::atol(v);
         else if (a == "--script" && (v = next())) o.script = v;
         else if (a == "--wav" && (v = next())) o.wav = v;
         else if (a == "--shot" && (v = next())) o.shot = v;
         else {
-            std::fprintf(stderr, "usage: %s [--line-in] [--tone HZ] [--scale N] [--quit-after MS] "
+            std::fprintf(stderr, "usage: %s [--line-in] [--tone HZ] [--tone-ch left|right|both] [--scale N] [--quit-after MS] "
                                  "[--script FILE [--wav OUT] [--shot OUT.png]]\n", argv[0]);
             return false;
         }
@@ -73,9 +78,12 @@ bool parseArgs(int argc, char** argv, Options& o) {
     return true;
 }
 
-// Synthetic line input: 0.25 s rising bursts of a sine, every 0.5 s.
+// Synthetic line input: 0.25 s falling bursts of a sine, every 0.5 s, on both
+// channels or only one (stereo checks).
 struct ToneIn {
+    enum Channels : uint8_t { kBoth, kLeft, kRight };
     float hz = 0.0f;
+    Channels ch = kBoth;
     uint64_t n = 0;
     int16_t buf[128 * 2] = {};
     const int16_t* block() {
@@ -85,10 +93,40 @@ struct ToneIn {
             const double ph = std::fmod(t, 0.5);
             const double env = ph > 0.25 ? 0.0 : (1.0 - ph / 0.25);
             const int16_t v = int16_t(14000.0 * env * std::sin(2.0 * 3.14159265 * hz * t));
-            buf[2 * i] = buf[2 * i + 1] = v;
+            buf[2 * i] = ch == kRight ? 0 : v;
+            buf[2 * i + 1] = ch == kLeft ? 0 : v;
         }
         return buf;
     }
+};
+
+// Sits between the app and ManualAudio to measure each output channel.
+class ChannelProbe final : public ot::IAudioOut {
+public:
+    explicit ChannelProbe(ManualAudio& a) : a_(a) {}
+    void setCallback(FillFn fn, void* ctx) override {
+        fn_ = fn;
+        ctx_ = ctx;
+        a_.setCallback(&ChannelProbe::fill, this);
+    }
+    bool start() override { return a_.start(); }
+    void stop() override { a_.stop(); }
+    float peak(int ch) const { return peak_[ch]; }
+    void reset() { peak_[0] = peak_[1] = 0.0f; }
+
+private:
+    static void fill(int16_t* out, uint32_t frames, void* ctx) {
+        ChannelProbe* p = static_cast<ChannelProbe*>(ctx);
+        if (p->fn_) p->fn_(out, frames, p->ctx_);
+        for (uint32_t i = 0; i < frames * 2; ++i) {
+            const float v = std::fabs(float(out[i]) / 32768.0f);
+            if (v > p->peak_[i & 1]) p->peak_[i & 1] = v;
+        }
+    }
+    ManualAudio& a_;
+    FillFn fn_ = nullptr;
+    void* ctx_ = nullptr;
+    float peak_[2] = {0.0f, 0.0f};
 };
 
 struct Machine {
@@ -98,6 +136,7 @@ struct Machine {
     SimLeds leds;
     SdlAudio sdlAudio;
     ManualAudio manualAudio;
+    ChannelProbe probe{manualAudio};
     ToneIn tone;
     ot::IAudioOut* audio = nullptr;
     std::vector<uint8_t> loopMem, scratch;
@@ -106,9 +145,10 @@ struct Machine {
     bool start(const Options& o, bool headless) {
         clock.setVirtual(headless);
         tone.hz = o.tone;
+        tone.ch = o.toneCh == "left" ? ToneIn::kLeft : (o.toneCh == "right" ? ToneIn::kRight : ToneIn::kBoth);
         looper::Platform p;
         if (headless) {
-            audio = &manualAudio;
+            audio = &probe;
             if (!o.wav.empty() && !manualAudio.recordWav(o.wav.c_str()))
                 std::fprintf(stderr, "cannot write %s\n", o.wav.c_str());
         } else {
@@ -164,6 +204,11 @@ struct Headless {
     Machine& m;
     double frameAcc = 0.0;
 
+    void resetLevels() {
+        m.manualAudio.resetLevels();
+        m.probe.reset();
+    }
+
     void advance(uint32_t ms) {
         for (uint32_t i = 0; i < ms; ++i) {
             m.clock.advanceUs(1000);
@@ -217,16 +262,32 @@ struct Headless {
                 if (id >= 0) m.input.button(uint8_t(id), cmd == "hold");
             } else if (cmd == "enc") m.input.encoder(std::atoi(arg.c_str()));
             else if (cmd == "tone") m.tone.hz = arg == "off" ? 0.0f : float(std::atof(arg.c_str()));
-            else if (cmd == "levels") {
-                std::printf("levels: peak %.3f rms %.3f\n", m.manualAudio.peakLevel(), m.manualAudio.rmsLevel());
-                m.manualAudio.resetLevels();
+            else if (cmd == "tone_ch") {
+                if (arg == "left") m.tone.ch = ToneIn::kLeft;
+                else if (arg == "right") m.tone.ch = ToneIn::kRight;
+                else m.tone.ch = ToneIn::kBoth;
+            } else if (cmd == "levels") {
+                std::printf("levels: peak %.3f rms %.3f (L %.3f R %.3f)\n", m.manualAudio.peakLevel(),
+                            m.manualAudio.rmsLevel(), m.probe.peak(0), m.probe.peak(1));
+                resetLevels();
             } else if (cmd == "expect_audio" || cmd == "expect_silent") {
                 const float pk = m.manualAudio.peakLevel();
                 const bool pass = cmd == "expect_silent" ? pk < 0.001f : pk >= float(std::atof(arg.c_str()));
                 std::printf("%s:%d: %s %s (peak %.3f)\n", path.c_str(), lineNo, cmd.c_str(), pass ? "PASS" : "FAIL", pk);
                 ok = ok && pass;
-                m.manualAudio.resetLevels();
-            } else if (cmd == "shot" || cmd == "screen") panelShot(m, arg, cmd == "screen");
+                resetLevels();
+            } else if (cmd == "expect_ch") {
+                // expect_ch left|right MIN   or   expect_ch left|right silent
+                std::string lim;
+                in >> lim;
+                const int ch = arg == "right" ? 1 : 0;
+                const float pk = m.probe.peak(ch);
+                const bool pass = lim == "silent" ? pk < 0.001f : pk >= float(std::atof(lim.c_str()));
+                std::printf("%s:%d: expect_ch %s %s %s (peak %.3f)\n", path.c_str(), lineNo, arg.c_str(), lim.c_str(),
+                            pass ? "PASS" : "FAIL", pk);
+                ok = ok && pass;
+            } else if (cmd == "reset_levels") resetLevels();
+            else if (cmd == "shot" || cmd == "screen") panelShot(m, arg, cmd == "screen");
             else {
                 std::fprintf(stderr, "%s:%d: unknown command %s\n", path.c_str(), lineNo, cmd.c_str());
                 ok = false;

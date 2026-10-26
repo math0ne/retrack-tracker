@@ -1,0 +1,54 @@
+# Stereo: channels stay separate through record, playback and overdub.
+# The tone is switched off before every check, so only the loops are heard.
+wait 300
+
+# Track 1: left-only take (master, 2 s).
+tone_ch left
+tap 0
+wait 2000
+tap 0
+tone off
+reset_levels
+wait 1000
+expect_ch left 0.2
+expect_ch right silent
+
+# Track 2: right-only take; track 1 muted so only track 2 plays. The take starts
+# mid-bar, so it covers about 1..3 s of a two-bar (4 s) loop: listen a whole pass.
+tone 330
+tone_ch right
+tap 12
+wait 2000
+tap 12
+tone off
+tap 2
+wait 100
+reset_levels
+wait 4100
+expect_ch right 0.2
+expect_ch left silent
+tap 2
+
+# Overdub the right channel onto track 1; with track 2 muted, track 1 now has both.
+tone 550
+tap 0
+wait 2000
+tap 0
+tone off
+tap 14
+wait 100
+reset_levels
+wait 1000
+expect_ch left 0.2
+expect_ch right 0.2
+tap 14
+
+# Track 3: a both-channel take for comparison in the screenshot.
+tone 440
+tone_ch both
+tap 24
+wait 1000
+tap 24
+tone off
+wait 600
+shot ../build/sim/check/stereo_lanes.png

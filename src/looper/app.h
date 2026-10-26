@@ -1,16 +1,21 @@
 // Looper app: front-panel input, pad LEDs and the screen, around the Engine.
 //
-// Controls
+// Screen: four track lanes and, along the bottom edge, the labels of the eight
+// screen keys F1..F8, each centred over its key as on the stock Tracker.
+//   F1 Rec/Dub   F2 Play/Stop   F3 Mute   F4 Clear (Shift: all)     -- selected track
+//   F5 Mode      opens the mode bar: the eight labels become the eight playback
+//                modes, the key under one picks it (any other key cancels)
+//   F6 Input     line / mic low / mic high   F7 Monitor on/off   F8 overdub feedback
+// Other keys
 //   Pads (4 rows x 12): row = track. Col 1 REC/DUB, col 2 PLAY/STOP, col 3 MUTE,
 //                       col 4 CLEAR, cols 5..12 jump to that eighth of the loop
-//                       (keeps the phase inside the eighth, so it stays in time).
-//   Rec      record / overdub the selected track     Play   transport start/stop
-//   Delete   clear the selected track (Shift: all)    Up/Down, F1..F4  select track
-//   Encoder  selected track volume (Shift: input gain)
-//   F5 monitor on/off   F6 input source   F7/F8 overdub feedback -/+
-//   Power    hold 1.5 s to switch off
+//   Rec / Play   record-overdub the selected track / transport start-stop
+//   Delete       clear the selected track (Shift: all)   Up/Down  select track
+//   Encoder      selected track volume (Shift: input gain)
+//   Help         toggle the load / frame-rate readout
+//   Power        hold 1.5 s to switch off
 //
-// Screen: drawn straight on the FT81x display list (no widget layer). The
+// Drawing goes straight to the FT81x display list (no widget layer). The
 // waveforms are RGB332 bitmaps rendered here and copied to RAM_G, so each lane
 // costs a handful of display-list words however detailed it is.
 #pragma once
@@ -28,20 +33,23 @@ public:
     void loop();
 
     // Bitmap geometry (public for the RAM_G layout check).
-    static constexpr uint16_t kWaveW = 600, kWaveH = 72;
+    static constexpr uint16_t kWaveW = 660, kWaveH = 88;
     static constexpr uint32_t kWaveBytes = uint32_t(kWaveW) * kWaveH;
     static constexpr uint32_t kWaveRamG = 0x090000;   // above the font image (ends 0x08C3E0)
 
 private:
     static void audioFill(int16_t* out, uint32_t frames, void* ctx);
     void onInput(const ot::InputEvent& ev);
+    void onFKey(int key);
     void onPad(int pad, bool down);
+    void record(int t);
+    void hint(int t, const char* msg, uint32_t now);
     void updateLeds(uint32_t now);
     void updateWaves(uint32_t now);
     void renderWave(int t, uint32_t span);
     void render(uint32_t now);
 
-    // drawing helpers (count display-list words for the on-screen budget)
+    // drawing helpers (count display-list words for the readout)
     void color(uint32_t rgb);
     void alpha(uint8_t a);
     void fillRect(int x0, int y0, int x1, int y1, int radius = 0);
@@ -52,21 +60,27 @@ private:
     void scissor(int x, int y, int w, int h);
     void scissorOff();
 
-    void drawHeader(uint32_t now);
     void drawLane(int t, uint32_t now);
-    void drawFooter();
+    void drawFKeys();
+    void drawStats();
 
     Platform p_;
     Engine engine_;
     ot::IDisplay* d_ = nullptr;
-    bool fonts_ = false;
 
     int selected_ = 0;
     bool shift_ = false;
+    bool modeBar_ = false;       // F5 pressed: the F-key labels show the playback modes
+    bool stats_ = false;
     uint8_t source_ = 0;         // 0 line, 2 mic low, 3 mic high
     uint8_t inputGain_ = 50;
     uint32_t powerDownMs_ = 0;
     bool powerHeld_ = false;
+
+    // a short message on one lane (e.g. why overdub is not available)
+    int hintTrack_ = -1;
+    const char* hintText_ = nullptr;
+    uint32_t hintUntilMs_ = 0;
 
     // waveform cache per lane
     uint32_t waveVersion_[kTracks] = {};
@@ -74,8 +88,7 @@ private:
     uint32_t waveDrawnMs_[kTracks] = {};
     bool waveValid_[kTracks] = {};
 
-    // meters (decayed on the UI side)
-    float inMeter_[2] = {}, outMeter_[2] = {}, trackMeter_[kTracks] = {};
+    float inMeter_[2] = {}, trackMeter_[kTracks] = {};
 
     // frame pacing and stats
     uint32_t lastFrameMs_ = 0, lastLedMs_ = 0, fpsWindowMs_ = 0;

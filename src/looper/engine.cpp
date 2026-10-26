@@ -1,5 +1,6 @@
 #include "looper/engine.h"
 
+#include <cmath>
 #include <cstring>
 
 namespace looper {
@@ -15,6 +16,12 @@ inline int16_t sat16(float v) {
     return int16_t(v);
 }
 
+// Grain window: sin^2 over the grain, so two grains half a grain apart sum to 1.
+constexpr uint32_t kWinSize = 512;
+float gWin[kWinSize];
+
+inline float lerp(int16_t a, int16_t b, float fr) { return float(a) + (float(b) - float(a)) * fr; }
+
 inline uint8_t peak8(int a, int b) {
     if (a < 0) a = -a;
     if (b < 0) b = -b;
@@ -22,9 +29,23 @@ inline uint8_t peak8(int a, int b) {
     return uint8_t(m >> 7);
 }
 
+// Waveform peak cell of frame i: [2 * cell] left, [2 * cell + 1] right. A cell
+// restarts at its first frame, so an overdub pass replaces the old peaks.
+inline void notePeak(uint8_t* peaks, uint32_t i, int16_t l, int16_t r) {
+    uint8_t* c = peaks + size_t(i / kPeakFrames) * 2;
+    if (i % kPeakFrames == 0) c[0] = c[1] = 0;
+    const uint8_t pl = peak8(l, 0), pr = peak8(r, 0);
+    if (pl > c[0]) c[0] = pl;
+    if (pr > c[1]) c[1] = pr;
+}
+
 }  // namespace
 
 void Engine::init(const TrackMemory mem[kTracks]) {
+    for (uint32_t i = 0; i < kWinSize; ++i) {
+        const float s = std::sin(3.14159265f * float(i) / float(kWinSize));
+        gWin[i] = s * s;
+    }
     for (int t = 0; t < kTracks; ++t) {
         mem_[t] = mem[t];
         trk_[t] = Track{};
@@ -55,7 +76,7 @@ void Engine::service() {
         const uint32_t from = todo - n;
         std::memset(mem_[t].frames + size_t(from) * 2, 0, size_t(n) * 2 * sizeof(int16_t));
         const uint32_t c0 = from / kPeakFrames, c1 = (todo + kPeakFrames - 1) / kPeakFrames;
-        std::memset(mem_[t].peaks + c0, 0, c1 - c0);
+        std::memset(mem_[t].peaks + size_t(c0) * 2, 0, size_t(c1 - c0) * 2);
         zeroTodo_[t].store(from, std::memory_order_release);
         return;   // one chunk per call keeps the main loop responsive
     }
@@ -67,11 +88,57 @@ bool Engine::allEmpty() const {
     return true;
 }
 
-uint32_t Engine::indexOf(const Track& k) const {
-    if (!k.len) return 0;
-    int64_t d = (int64_t(t_) - int64_t(k.anchor) + int64_t(k.offset)) % int64_t(k.len);
-    if (d < 0) d += k.len;
-    return uint32_t(d);
+uint64_t Engine::period16(const Track& k) const {
+    return (uint64_t(k.len) * (modeInfo(k.mode).pingPong ? 2u : 1u)) << 16;
+}
+
+uint64_t Engine::phase16(const Track& k) const {
+    const uint64_t P = period16(k);
+    if (!P) return 0;
+    const int64_t d = (int64_t(t_) - int64_t(k.anchor)) * int64_t(modeInfo(k.mode).time16) + int64_t(k.offset16 % P);
+    int64_t r = d % int64_t(P);
+    if (r < 0) r += int64_t(P);
+    return uint64_t(r);
+}
+
+uint32_t Engine::posOfPhase(const Track& k, uint64_t ph) const {
+    const ModeInfo& mi = modeInfo(k.mode);
+    const uint32_t p = uint32_t(ph >> 16);
+    if (mi.reverse) return k.len - 1 - p;
+    if (mi.pingPong && p >= k.len) return 2 * k.len - 1 - p;
+    return p;
+}
+
+uint64_t Engine::phaseOfPos(const Track& k, uint32_t pos, bool secondHalf) const {
+    const ModeInfo& mi = modeInfo(k.mode);
+    if (mi.reverse) return uint64_t(k.len - 1 - pos) << 16;
+    if (mi.pingPong && secondHalf) return uint64_t(2 * k.len - 1 - pos) << 16;
+    return uint64_t(pos) << 16;
+}
+
+void Engine::restartGrains(Track& k, uint64_t pos16) {
+    // The second grain starts at its window peak, so the sound carries on at once.
+    k.grain[0] = Grain{pos16, 0};
+    k.grain[1] = Grain{pos16, kGrainFrames / 2};
+}
+
+void Engine::setMode(int t, PlayMode mode) {
+    Track& k = trk_[t];
+    if (!k.len) {   // empty or recording: the mode applies once there is a loop
+        k.mode = mode;
+        return;
+    }
+    // Keep the read position: the new phase function passes through it now.
+    const uint64_t ph = phase16(k);
+    const uint32_t pos = posOfPhase(k, ph);
+    const bool second = modeInfo(k.mode).pingPong && (ph >> 16) >= k.len;
+    k.mode = mode;
+    const uint64_t P = period16(k);
+    const uint64_t want = phaseOfPos(k, pos, second);
+    k.offset16 = 0;
+    k.offset16 = (want + P - phase16(k)) % P;
+    restartGrains(k, uint64_t(pos) << 16);
+    if (k.state == TrackState::kOverdubbing && !modeInfo(mode).canDub) k.state = TrackState::kPlaying;
 }
 
 void Engine::startRecording(int t) {
@@ -95,7 +162,7 @@ void Engine::startRecording(int t) {
     }
     k.recStart = t_;
     k.len = 0;
-    k.offset = 0;
+    k.offset16 = 0;
     k.written = t_ - k.anchor;
     k.state = TrackState::kRecording;
 }
@@ -122,6 +189,7 @@ void Engine::finishRecording(int t) {
     // Frames past len (a late press) were written too: the next clear zeroes them.
     k.written = n > k.len ? n : k.len;
     k.state = TrackState::kPlaying;
+    restartGrains(k, uint64_t(posOf(k)) << 16);
 }
 
 void Engine::clearTrack(int t) {
@@ -154,6 +222,7 @@ void Engine::apply(const Msg& m) {
                 case TrackState::kRecording: finishRecording(t); break;
                 case TrackState::kPlaying:
                 case TrackState::kStopped:
+                    if (!modeInfo(k.mode).canDub) break;   // the app tells the user why
                     k.state = TrackState::kOverdubbing;
                     if (!running_) running_ = true;
                     break;
@@ -176,15 +245,24 @@ void Engine::apply(const Msg& m) {
         case kMute: k.muted = !k.muted; break;
         case kClear: clearTrack(t); break;
         case kJump:
+            // Move the read position to the same place inside eighth `arg`, in
+            // whatever direction the mode is reading.
             if (k.len >= kSegments && m.arg >= 0 && m.arg < kSegments) {
                 const uint32_t seg = k.len / kSegments;
-                const uint32_t cur = indexOf(k) / seg;
-                int64_t off = int64_t(k.offset) + (int64_t(m.arg) - int64_t(cur)) * seg;
-                off %= int64_t(k.len);
-                if (off < 0) off += k.len;
-                k.offset = uint32_t(off);
+                const uint64_t ph = phase16(k);
+                const uint32_t pos = posOfPhase(k, ph);
+                const bool second = modeInfo(k.mode).pingPong && (ph >> 16) >= k.len;
+                uint32_t cur = pos / seg;
+                if (cur >= uint32_t(kSegments)) cur = kSegments - 1;
+                int64_t np = (int64_t(pos) + (int64_t(m.arg) - int64_t(cur)) * seg) % int64_t(k.len);
+                if (np < 0) np += k.len;
+                const uint64_t P = period16(k);
+                const uint64_t want = phaseOfPos(k, uint32_t(np), second) | (ph & 0xFFFFu);
+                k.offset16 = (k.offset16 % P + (want + P - ph)) % P;
+                restartGrains(k, uint64_t(np) << 16);
             }
             break;
+        case kMode: setMode(t, PlayMode(m.arg >= 0 && m.arg < kModeCount ? m.arg : 0)); break;
         case kVolume: k.volume = uint8_t(m.arg < 0 ? 0 : (m.arg > 100 ? 100 : m.arg)); break;
         case kTransport:
             if (running_) {
@@ -248,10 +326,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                 const int16_t l = in ? in[2 * f] : 0, r = in ? in[2 * f + 1] : 0;
                 m.frames[2 * i] = l;
                 m.frames[2 * i + 1] = r;
-                const uint32_t cell = i / kPeakFrames;
-                if (i % kPeakFrames == 0) m.peaks[cell] = 0;
-                const uint8_t p = peak8(l, r);
-                if (p > m.peaks[cell]) m.peaks[cell] = p;
+                notePeak(m.peaks, i, l, r);
             }
             k.written = i;
             wrote = true;
@@ -259,31 +334,61 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
         } else if (running_ && k.len &&
                    (k.state == TrackState::kPlaying || k.state == TrackState::kOverdubbing ||
                     k.state == TrackState::kStopped)) {
-            const bool dub = k.state == TrackState::kOverdubbing;
+            const ModeInfo& mi = modeInfo(k.mode);
+            const bool dub = k.state == TrackState::kOverdubbing && mi.canDub;
             const float target = (k.state == TrackState::kStopped || k.muted) ? 0.0f : float(k.volume) / 100.0f;
             const float step = (target - k.gain) / float(n);
             float g = k.gain;
-            uint32_t i = indexOf(k);
+            const uint64_t P = period16(k), L16 = uint64_t(k.len) << 16;
+            uint64_t ph = phase16(k);
             for (uint32_t f = 0; f < n; ++f) {
-                const int16_t sl = m.frames[2 * i], sr = m.frames[2 * i + 1];
-                if (dub) {
-                    const int16_t l = in ? in[2 * f] : 0, r = in ? in[2 * f + 1] : 0;
-                    const int16_t nl = sat16(float(sl) * fb + float(l));
-                    const int16_t nr = sat16(float(sr) * fb + float(r));
-                    m.frames[2 * i] = nl;
-                    m.frames[2 * i + 1] = nr;
-                    const uint32_t cell = i / kPeakFrames;
-                    if (i % kPeakFrames == 0) m.peaks[cell] = 0;
-                    const uint8_t p = peak8(nl, nr);
-                    if (p > m.peaks[cell]) m.peaks[cell] = p;
+                float sl = 0.0f, sr = 0.0f;
+                switch (mi.reader) {
+                    case ModeInfo::kDirect: {   // speed 1: forward, reverse, ping-pong; overdub writes here
+                        const uint32_t i = posOfPhase(k, ph);
+                        const int16_t a = m.frames[2 * i], b = m.frames[2 * i + 1];
+                        sl = a;
+                        sr = b;
+                        if (dub) {
+                            const int16_t l = in ? in[2 * f] : 0, r = in ? in[2 * f + 1] : 0;
+                            const int16_t nl = sat16(float(a) * fb + float(l));
+                            const int16_t nr = sat16(float(b) * fb + float(r));
+                            m.frames[2 * i] = nl;
+                            m.frames[2 * i + 1] = nr;
+                            notePeak(m.peaks, i, nl, nr);
+                        }
+                        break;
+                    }
+                    case ModeInfo::kTape: {     // varispeed: pitch follows speed
+                        const uint32_t i = uint32_t(ph >> 16), j = i + 1 < k.len ? i + 1 : 0;
+                        const float fr = float(uint32_t(ph & 0xFFFFu)) * (1.0f / 65536.0f);
+                        sl = lerp(m.frames[2 * i], m.frames[2 * j], fr);
+                        sr = lerp(m.frames[2 * i + 1], m.frames[2 * j + 1], fr);
+                        break;
+                    }
+                    case ModeInfo::kGrains: {   // tempo from the phase, pitch from the grain read rate
+                        for (Grain& gr : k.grain) {
+                            if (gr.age >= kGrainFrames) gr = Grain{ph, 0};
+                            const float w = gWin[gr.age * kWinSize / kGrainFrames];
+                            const uint32_t i = uint32_t(gr.pos16 >> 16), j = i + 1 < k.len ? i + 1 : 0;
+                            const float fr = float(uint32_t(gr.pos16 & 0xFFFFu)) * (1.0f / 65536.0f);
+                            sl += w * lerp(m.frames[2 * i], m.frames[2 * j], fr);
+                            sr += w * lerp(m.frames[2 * i + 1], m.frames[2 * j + 1], fr);
+                            gr.pos16 += mi.pitch16;
+                            if (gr.pos16 >= L16) gr.pos16 -= L16;
+                            ++gr.age;
+                        }
+                        break;
+                    }
                 }
+                ph += mi.time16;
+                if (ph >= P) ph -= P;
                 g += step;
-                const float ol = float(sl) * g, orr = float(sr) * g;
+                const float ol = sl * g, orr = sr * g;
                 mixL[f] += ol;
                 mixR[f] += orr;
                 const uint8_t p = peak8(int(ol), int(orr));
                 if (p > level) level = p;
-                if (++i == k.len) i = 0;
             }
             k.gain = target;
             wrote = dub;
@@ -314,9 +419,10 @@ void Engine::publish() {
         TrackView& v = view_[t];
         v.state.store(uint8_t(k.state), std::memory_order_relaxed);
         v.muted.store(k.muted, std::memory_order_relaxed);
+        v.mode.store(uint8_t(k.mode), std::memory_order_relaxed);
         v.len.store(k.len, std::memory_order_relaxed);
         v.written.store(k.state == TrackState::kRecording ? k.written : k.len, std::memory_order_relaxed);
-        v.pos.store(k.state == TrackState::kRecording ? k.written : indexOf(k), std::memory_order_relaxed);
+        v.pos.store(k.state == TrackState::kRecording ? k.written : posOf(k), std::memory_order_relaxed);
     }
     master_.store(L_, std::memory_order_relaxed);
     tPub_.store(t_, std::memory_order_relaxed);

@@ -9,8 +9,12 @@
 //
 // Timing: one global frame counter t runs while the transport plays. The
 // first recording sets the master length L and t = 0. Every other track is
-// anchored to a multiple of L and its length is rounded up to a multiple of L,
-// so idx = (t - anchor + offset) mod len stays bar-aligned for all tracks.
+// anchored to a multiple of L and its length is rounded up to a multiple of L.
+// A track's phase is a function of t only:
+//   phase = ((t - anchor) * timeRate + offset) mod period      (16.16 fixed point)
+// so every playback mode stays locked to the bar clock. The mode maps the
+// phase to a read position (reverse, ping-pong) and picks the reader: direct,
+// interpolated (tape speed) or two cross-faded grains (stretch / pitch shift).
 #pragma once
 
 #include <atomic>
@@ -22,19 +26,49 @@ constexpr int kTracks = 4;
 constexpr int kSegments = 8;                 // pad columns 4..11 jump between eighths
 constexpr uint32_t kPeakFrames = 256;        // frames per waveform peak cell
 constexpr uint32_t kSampleRate = 44100;
+constexpr uint32_t kGrainFrames = 2048;      // granular modes: 46 ms grains, 50 % overlap
 
 enum class TrackState : uint8_t { kClearing, kEmpty, kRecording, kPlaying, kOverdubbing, kStopped };
+
+enum class PlayMode : uint8_t {
+    kForward, kReverse, kPingPong, kHalfSpeed, kDoubleSpeed, kStretch, kOctaveUp, kOctaveDown, kCount
+};
+constexpr int kModeCount = int(PlayMode::kCount);
+
+struct ModeInfo {
+    enum Reader : uint8_t { kDirect, kTape, kGrains };
+    const char* name;       // F-key label
+    Reader reader;
+    uint32_t time16;        // phase advance per output frame, 16.16 (tempo)
+    uint32_t pitch16;       // grain read rate, 16.16 (kGrains only)
+    bool pingPong;          // period = 2 * len
+    bool reverse;
+    bool canDub;            // overdub writes where it reads: only at speed 1
+};
+
+constexpr ModeInfo kModes[kModeCount] = {
+    {"Forward", ModeInfo::kDirect, 65536, 65536, false, false, true},
+    {"Reverse", ModeInfo::kDirect, 65536, 65536, false, true, true},
+    {"Ping-pong", ModeInfo::kDirect, 65536, 65536, true, false, true},
+    {"Half speed", ModeInfo::kTape, 32768, 32768, false, false, false},
+    {"Double", ModeInfo::kTape, 131072, 131072, false, false, false},
+    {"Half time", ModeInfo::kGrains, 32768, 65536, false, false, false},   // half tempo, same pitch
+    {"Octave up", ModeInfo::kGrains, 65536, 131072, false, false, false},
+    {"Octave dn", ModeInfo::kGrains, 65536, 32768, false, false, false},
+};
+inline const ModeInfo& modeInfo(PlayMode m) { return kModes[int(m) < kModeCount ? int(m) : 0]; }
 
 struct TrackMemory {
     int16_t* frames = nullptr;   // interleaved stereo
     uint32_t capacity = 0;       // frames
-    uint8_t* peaks = nullptr;    // capacity / kPeakFrames cells, 0..255
+    uint8_t* peaks = nullptr;    // capacity / kPeakFrames cells of 2 bytes (left, right), 0..255
 };
 
 // Snapshot the UI reads; written by the audio thread only.
 struct TrackView {
     std::atomic<uint8_t> state{uint8_t(TrackState::kClearing)};
     std::atomic<bool> muted{false};
+    std::atomic<uint8_t> mode{0};        // PlayMode
     std::atomic<uint32_t> len{0};        // loop length, frames (0 while empty / recording)
     std::atomic<uint32_t> written{0};    // frames recorded so far (recording) or len
     std::atomic<uint32_t> pos{0};        // play index of the last block
@@ -55,6 +89,7 @@ public:
         kClearAll,
         kMonitor,      // arg = 0/1 input monitoring
         kFeedback,     // arg = 0..100 overdub feedback
+        kMode,         // arg = PlayMode; the read position carries on from where it was
     };
 
     void init(const TrackMemory mem[kTracks]);
@@ -69,21 +104,28 @@ public:
     bool running() const { return runPub_.load(std::memory_order_relaxed); }
     bool monitoring() const { return monitor_; }
     uint8_t volume(int t) const { return trk_[t].volume; }
+    PlayMode mode(int t) const { return PlayMode(view_[t].mode.load(std::memory_order_relaxed)); }
     uint8_t feedback() const { return feedback_; }
     uint8_t inputLevel(int ch) const { return inPeak_[ch].load(std::memory_order_relaxed); }
     uint8_t outputLevel(int ch) const { return outPeak_[ch].load(std::memory_order_relaxed); }
 
 private:
+    struct Grain {
+        uint64_t pos16 = 0;          // read position, 16.16 frames
+        uint32_t age = 0;            // output frames since the grain started
+    };
     struct Track {
         TrackState state = TrackState::kClearing;
+        PlayMode mode = PlayMode::kForward;
         bool muted = false;
         uint8_t volume = 80;
         float gain = 0.0f;           // smoothed (mute / volume ramps)
-        uint32_t anchor = 0;         // global frame where idx 0 starts (multiple of L)
+        uint32_t anchor = 0;         // global frame where phase 0 starts (multiple of L)
         uint32_t len = 0;
-        uint32_t offset = 0;         // jump offset, multiple of len / kSegments
+        uint64_t offset16 = 0;       // phase offset (jumps, mode changes), 16.16
         uint32_t written = 0;        // high-water mark of frames touched since the last clear
         uint32_t recStart = 0;       // global frame of the recording start
+        Grain grain[2];
     };
     struct Msg {
         uint8_t cmd, track;
@@ -94,7 +136,13 @@ private:
     void startRecording(int t);
     void finishRecording(int t);
     void clearTrack(int t);
-    uint32_t indexOf(const Track& k) const;
+    void setMode(int t, PlayMode mode);
+    uint64_t period16(const Track& k) const;
+    uint64_t phase16(const Track& k) const;           // current phase at t_
+    uint32_t posOfPhase(const Track& k, uint64_t phase16) const;   // read position, frames
+    uint64_t phaseOfPos(const Track& k, uint32_t pos, bool secondHalf) const;
+    uint32_t posOf(const Track& k) const { return posOfPhase(k, phase16(k)); }
+    void restartGrains(Track& k, uint64_t pos16);
     bool allEmpty() const;
     void publish();
 

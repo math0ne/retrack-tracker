@@ -31,8 +31,12 @@ Needs `arm-none-eabi-gcc` + newlib, GNU make, Python 3 (firmware), and g++ + SDL
 make                 # build/PolyendTracLooperv01.ptf
 make SELFTEST=1      # OpenTracker hardware selftest image
 make sim             # build/sim/looper-sim
-make -C sim check    # headless test script, screenshots in build/sim/check/
+make -C sim check    # headless test scripts (sim/scripts), screenshots in build/sim/check/
 ```
+
+`sim/scripts/stereo.txt` checks that left and right stay separate through
+record, playback and overdub; `--tone-ch left|right|both` puts the simulator's
+test tone on one channel when you run it interactively.
 
 ## Run the simulator
 
@@ -47,7 +51,21 @@ mouse wheel = encoder. The panel is clickable.
 
 ## Controls
 
-| Control | Action |
+The screen is the four track lanes and, along the bottom, the labels of the
+eight screen keys, each centred over its key as on the stock Tracker.
+
+| Screen key | Action (selected track for F1–F5) |
+|---|---|
+| F1 REC | Record / finish / overdub / stop overdub |
+| F2 PLAY | Play / stop the track |
+| F3 MUTE | Mute on/off |
+| F4 CLEAR | Clear the track; with Shift, all tracks |
+| F5 MODE | Opens the mode bar: the eight labels become the playback modes and the key under one picks it. Any other key closes it. |
+| F6 INPUT | Line in / mic low / mic high (the cell shows the input level) |
+| F7 MONITOR | Input monitoring on/off |
+| F8 FEEDBACK | Overdub feedback 100 / 90 / 75 / 50 % |
+
+| Other control | Action |
 |---|---|
 | Pad column 1 | Record / overdub (empty → record → play ↔ overdub) |
 | Pad column 2 | Play / stop the track |
@@ -57,11 +75,33 @@ mouse wheel = encoder. The panel is clickable.
 | Rec | Record / overdub the selected track |
 | Play | Transport start / stop (restarts from bar 1) |
 | Delete | Clear the selected track; Shift + Delete clears all |
+| Up / Down, any pad | Select track |
 | Encoder | Selected track volume; Shift + encoder = input gain |
-| F1–F4, Up/Down | Select track |
-| F5 / F6 | Input monitor on/off / input source (line, mic low, mic high) |
-| F7 / F8 | Overdub feedback − / + |
+| Help | Show / hide the CPU, frame-rate and display-list readout |
 | Power (hold 1.5 s) | Switch off |
+
+### Playback modes
+
+Every mode's read position is computed from the shared bar clock, so tracks stay
+in time whatever mode they are in. Switching modes carries on from the current
+position instead of jumping.
+
+| Mode | What it does | Overdub |
+|---|---|---|
+| Forward | Plays as recorded | yes |
+| Reverse | Plays backwards | yes |
+| Ping-pong | Forwards then backwards (one cycle = two loop lengths) | yes |
+| Half speed | Tape style: half tempo, an octave down | no |
+| Double | Tape style: double tempo, an octave up | no |
+| Half time | Time-stretched: half tempo, same pitch (two cross-faded 46 ms grains) | no |
+| Octave up | Pitch-shifted: same tempo, an octave up (grains) | no |
+| Octave dn | Pitch-shifted: same tempo, an octave down (grains) | no |
+
+Overdub needs speed 1 so it can write where it reads; in the other modes REC
+shows a hint instead.
+
+Tracks are stereo. Each lane draws the left channel above its centre line and
+the right channel below it.
 
 The first recording sets the master length. Later takes start in phase with
 it and are rounded to whole bars (a release less than an eighth of a bar late
