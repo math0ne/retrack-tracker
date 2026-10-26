@@ -10,10 +10,11 @@ performance numbers.
   `PolyendTracLooperv01.ptf` (from `make`: copy `build/sdcard/Firmware/` onto the card).
 - Install: with the stock firmware or OpenTracker running, Config > Firmware
   update and pick `PolyendTracLooperv01.ptf`.
-- The way back: the looper has **no firmware-update screen**, so this is the
-  only route. Write `PolyendTracker_1.9.2.ptf` (or an OpenTracker image name)
-  into `/Firmware/ot_restore.txt` on a computer and power-cycle. The check runs
-  at boot before the looper starts, so it works even if the looper hangs.
+- The way back: Config > F1 Firmware, pick `PolyendTracker_1.9.2.ptf`, F1
+  twice. If the looper hangs, write that name (or an OpenTracker image name)
+  into `/Firmware/ot_restore.txt` on a computer and power-cycle: the check runs
+  at boot before the looper starts. (Builds before the Firmware screen have
+  only this route; `make` writes an `ot_restore.txt` into `build/sdcard/Firmware/`.)
 - Open a serial terminal on the Tracker's USB serial port (any baud rate; it is
   USB CDC, e.g. PuTTY on the COM port, or `screen /dev/ttyACM0`). Boot
   diagnostics, crash reports and the telemetry lines appear only while a

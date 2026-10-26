@@ -7,6 +7,7 @@
 #include "hal/audio_sgtl5000.h"
 #include "hal/board.h"
 #include "hal/diag.h"
+#include "hal/fw_update.h"
 #include "hal/ft81x.h"
 #include "hal/hal.h"
 #include "hal/i2c_bus.h"
@@ -57,6 +58,14 @@ bool storageReady() { return ot::hal::bootReport().sdMounted && ot::hal::storage
 
 void setHeadphones(uint8_t level) { ot::hal::audio().setHeadphoneVolume(float(level > 100 ? 100 : level) / 100.0f); }
 
+bool firmwareUpdate(const char* name) {
+    if (!storageReady() || !ot::hal::isUpdateImageName(name)) return false;
+    ot::hal::audio().setHeadphoneVolume(0.0f);   // no noise while the bootloader takes over
+    if (ot::hal::requestFirmwareUpdate(ot::hal::storage(), name)) return true;   // does not return
+    ot::hal::audio().setHeadphoneVolume(0.7f);
+    return false;
+}
+
 }  // namespace
 
 void otAppMain(ot::hal::HalSet& hal) {
@@ -83,6 +92,7 @@ void otAppMain(ot::hal::HalSet& hal) {
     p.storageReady = &storageReady;
     p.setHeadphones = &setHeadphones;
     p.version = OT_VERSION;
+    p.firmwareUpdate = &firmwareUpdate;
     p.loopMem = sd;
     p.loopMemBytes = kLoopBytes;
     p.fxMem = sd + kLoopBytes;

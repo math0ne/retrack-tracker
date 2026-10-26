@@ -532,7 +532,7 @@ void App::closePerf() {
 }
 
 void App::goHome() {
-    mixer_ = options_ = edit_ = config_ = file_ = false;
+    mixer_ = options_ = edit_ = config_ = file_ = fwPage_ = false;
     fxPage_ = -1;
     fxBar_ = modeBar_ = false;
     confirm_ = -1;
@@ -1120,9 +1120,20 @@ void App::drawFKeys() {
                 title[i] = "HOME";
                 std::snprintf(val[i], sizeof val[i], "Loops");
             }
-        } else if (config_) {   // only F8: Up / Down pick a setting, the encoder sets it
-            title[i] = i == 7 ? "HOME" : "";
-            std::snprintf(val[i], sizeof val[i], "%s", i == 7 ? "Loops" : "");
+        } else if (config_ && fwPage_) {   // F1 flash (twice), F2 rescan, F7 back, F8 home
+            const bool armed = confirm_ == 0 && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0;
+            static const char* const kT[8] = {"FLASH", "RESCAN", "", "", "", "", "BACK", "HOME"};
+            title[i] = kT[i];
+            const char* v = "";
+            if (i == 0) v = !fwCount_ ? "-" : (armed ? "Sure?" : "Image");
+            else if (i == 1) v = "Card";
+            else if (i == 6) v = "Config";
+            else if (i == 7) v = "Loops";
+            std::snprintf(val[i], sizeof val[i], "%s", v);
+            hot = i == 0 && armed;
+        } else if (config_) {   // F1 firmware, F8 home: Up / Down pick a setting, the encoder sets it
+            title[i] = i == 7 ? "HOME" : (i == 0 ? "FIRMWARE" : "");
+            std::snprintf(val[i], sizeof val[i], "%s", i == 7 ? "Loops" : (i == 0 ? "Update" : ""));
         } else if (file_) {   // projects and export
             const bool armed = confirm_ == i && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0;
             switch (i) {
@@ -1743,12 +1754,27 @@ const char* const kCfgName[kCfgRows] = {"Display brightness", "Pad brightness", 
 }  // namespace
 
 void App::configKey(uint8_t id) {
-    if (id == b::F8) goHome();
+    if (fwPage_) {
+        fwKey(id);
+        return;
+    }
+    if (id == b::F1) {   // the firmware screen
+        fwPage_ = true;
+        fwMsg_ = nullptr;
+        confirm_ = -1;
+        fwScan();
+    } else if (id == b::F8) goHome();
     else if (id == b::Up && cfgRow_ > 0) --cfgRow_;
     else if (id == b::Down && cfgRow_ < kCfgRows - 1) ++cfgRow_;
 }
 
 void App::configEncoder(int delta) {
+    if (fwPage_) {   // the encoder picks an image
+        fwSel_ += delta > 0 ? 1 : -1;
+        fwSel_ = fwSel_ < 0 ? 0 : (fwSel_ >= fwCount_ ? (fwCount_ ? fwCount_ - 1 : 0) : fwSel_);
+        confirm_ = -1;
+        return;
+    }
     auto step = [&](uint8_t& v, int s, int lo, int hi) {
         int x = int(v) + delta * s;
         v = uint8_t(x < lo ? lo : (x > hi ? hi : x));
@@ -1772,7 +1798,151 @@ void App::configEncoder(int delta) {
     markConfig();
 }
 
+namespace {
+// The names the update bootloader takes (the stock updater's filter, as in
+// hal/fw_update.cpp): at least 15 characters, PolyendTrac*.ptf or mt*.hex.
+bool isImageName(const char* n) {
+    const size_t len = std::strlen(n);
+    if (len < 15 || len >= 64) return false;   // App::FwImage::name
+    auto endsWith = [&](const char* s) {
+        const size_t m = std::strlen(s);
+        if (len < m) return false;
+        for (size_t i = 0; i < m; ++i) {
+            char c = n[len - m + i];
+            if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+            if (c != s[i]) return false;
+        }
+        return true;
+    };
+    return (std::strncmp(n, "PolyendTrac", 11) == 0 && endsWith(".ptf")) ||
+           (std::strncmp(n, "mt", 2) == 0 && endsWith(".hex"));
+}
+}  // namespace
+
+void App::fwScan() {
+    fwCount_ = 0;
+    if (!p_.storage || !files_.cardReady()) return;
+    p_.storage->listDir(
+        "/Firmware",
+        [](const ot::IStorage::DirEntry& e, void* ctx) {
+            App& a = *static_cast<App*>(ctx);
+            if (e.isDir || !isImageName(e.name)) return true;
+            if (a.fwCount_ >= kMaxImages) return false;
+            FwImage& f = a.fw_[a.fwCount_++];
+            std::snprintf(f.name, sizeof f.name, "%s", e.name);
+            f.bytes = e.size;
+            return true;
+        },
+        this);
+    // By name (the card's order is the order the files were written).
+    for (int i = 1; i < fwCount_; ++i)
+        for (int j = i; j > 0 && std::strcmp(fw_[j - 1].name, fw_[j].name) > 0; --j) {
+            const FwImage x = fw_[j];
+            fw_[j] = fw_[j - 1];
+            fw_[j - 1] = x;
+        }
+    // Start on the image this build came from, else the first.
+    fwSel_ = 0;
+    char mine[64];
+    runningImage(mine, sizeof mine);
+    for (int i = 0; i < fwCount_; ++i)
+        if (std::strcmp(fw_[i].name, mine) == 0) fwSel_ = i;
+}
+
+void App::runningImage(char* out, size_t n) const {
+    // "looper-0.1" -> PolyendTracLooperv01.ptf (the Makefile's image name).
+    char digits[16];
+    size_t d = 0;
+    for (const char* c = p_.version; *c && d + 1 < sizeof digits; ++c)
+        if (*c >= '0' && *c <= '9') digits[d++] = *c;
+    digits[d] = '\0';
+    std::snprintf(out, n, "PolyendTracLooperv%s.ptf", digits);
+}
+
+void App::fwKey(uint8_t id) {
+    const uint32_t now = p_.clock->millis();
+    switch (id) {
+        case b::F1:   // flash: press twice
+            if (!fwCount_ || files_.busy()) return;
+            if (confirm_ == 0 && int32_t(confirmUntilMs_ - now) > 0) {
+                confirm_ = -1;
+                fwMsg_ = nullptr;
+                if (!p_.firmwareUpdate || !p_.firmwareUpdate(fw_[fwSel_].name))
+                    fwMsg_ = "The updater refused this image (nothing was changed)";
+            } else {
+                confirm_ = 0;
+                confirmUntilMs_ = now + 2000;
+            }
+            return;
+        case b::F2: fwScan(); fwMsg_ = nullptr; break;   // rescan the card
+        case b::F7: fwPage_ = false; break;              // back to the settings
+        case b::F8: goHome(); break;
+        case b::Up:
+            if (fwSel_ > 0) --fwSel_;
+            break;
+        case b::Down:
+            if (fwSel_ + 1 < fwCount_) ++fwSel_;
+            break;
+        default: return;
+    }
+    confirm_ = -1;
+}
+
+void App::drawFirmware() {
+    char buf[96];
+    color(kAmber);
+    text(20, 22, kFontBig, Disp::kOptCenterY, "FIRMWARE");
+    char mine[64];
+    runningImage(mine, sizeof mine);
+    if (!files_.cardReady() || !fwCount_) {
+        color(kDim);
+        text(40, 120, kFontBody, 0, files_.cardReady() ? "No update images in /Firmware" : "No SD card");
+        text(40, 150, kFontSmall, 0, "Copy a PolyendTrac*.ptf file into the card's Firmware folder, then F2 to look again.");
+    }
+    // Six rows, scrolled to keep the selection in view.
+    constexpr int kRows = 6;
+    const int first = fwSel_ < kRows ? 0 : fwSel_ - kRows + 1;
+    for (int r = 0; r < kRows && first + r < fwCount_; ++r) {
+        const int i = first + r;
+        const int y0 = 46 + r * 46, y1 = y0 + 40;
+        const bool sel = fwSel_ == i;
+        if (sel) {
+            color(kAmber);
+            fillRect(18, y0 - 2, 782, y1 + 2, 9);
+        }
+        color(sel ? kLaneSel : kLane);
+        fillRect(20, y0, 780, y1, 8);
+        color(sel ? kInk : kDim);
+        text(40, (y0 + y1) / 2, kFontBody, Disp::kOptCenterY, fw_[i].name);
+        const bool running = std::strcmp(fw_[i].name, mine) == 0;
+        const bool stock = std::strncmp(fw_[i].name, "PolyendTracker", 14) == 0;
+        if (running || stock) {
+            color(running ? kAmber : 0x3DDC97);
+            text(560, (y0 + y1) / 2, kFontSmall, Disp::kOptRightX | Disp::kOptCenterY, running ? "this looper" : "stock");
+        }
+        color(sel ? kInk : kDim);
+        std::snprintf(buf, sizeof buf, "%lu KB", static_cast<unsigned long>((fw_[i].bytes + 1023) / 1024));
+        text(760, (y0 + y1) / 2, kFontBody, Disp::kOptRightX | Disp::kOptCenterY, buf);
+    }
+    if (fwCount_ > kRows) {
+        color(kDim);
+        std::snprintf(buf, sizeof buf, "%d of %d", fwSel_ + 1, fwCount_);
+        text(760, 22, kFontSmall, Disp::kOptRightX | Disp::kOptCenterY, buf);
+    }
+    color(fwMsg_ ? kRed : kDim);
+    text(40, 340, kFontSmall, 0,
+         fwMsg_ ? fwMsg_ : "F1 twice flashes the selected image. The Tracker restarts into the updater.");
+    color(kDim);
+    text(40, 362, kFontSmall, 0, "Loops that are not saved are lost. To come back, flash the looper image again.");
+    color(0x4A5563);
+    text(760, 384, kFontSmall, Disp::kOptRightX, "Up / Down or encoder: image");
+}
+
 void App::drawConfig() {
+    if (fwPage_) {
+        drawFirmware();
+        return;
+    }
     char buf[96];
     color(kAmber);
     text(20, 22, kFontBig, Disp::kOptCenterY, "CONFIG");

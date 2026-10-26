@@ -1,0 +1,34 @@
+# Config > Firmware: lists the update images in /Firmware, F1 twice flashes one.
+sd_file Firmware/PolyendTracker_1.9.2.ptf 900000
+sd_file Firmware/PolyendTracLooperv01.ptf 880000
+sd_file Firmware/notes.txt 10
+sd_file Firmware/short.ptf 10
+wait 300
+
+press CONFIG
+expect_flash none
+press F1
+wait 100
+# Sorted by name (the looper image first), starting on this build's image.
+shot ../build/sim/check/firmware_page.png
+# One press only arms it.
+press F1
+wait 100
+expect_flash none
+# The arm runs out after 2 s.
+wait 2100
+press F1
+wait 100
+expect_flash none
+# Down to the stock image, then F1 twice.
+press DOWN
+press F1
+press F1
+wait 100
+expect_flash PolyendTracker_1.9.2.ptf
+
+# F7 back to the settings, F8 home.
+press F7
+wait 50
+shot ../build/sim/check/firmware_config.png
+press F8

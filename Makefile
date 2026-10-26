@@ -73,9 +73,12 @@ $(PTF): $(BUILD)/looper.hex
 	cp $< $@
 
 # build/sdcard mirrors the SD card: copy its Firmware folder onto the card's root.
+# ot_restore.txt names the image, so a Tracker running the looper (or OpenTracker)
+# flashes it at the next power-on; it renames the file to ot_restore.done after.
 $(SDCARD): $(PTF)
 	@mkdir -p $(dir $@)
 	cp $< $@
+	printf '%s\r\n' '$(PTF_NAME)' > $(dir $@)ot_restore.txt
 
 clean:
 	rm -rf build

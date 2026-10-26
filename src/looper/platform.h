@@ -37,6 +37,10 @@ struct Platform {
     // Headphone level 0..100 (device only; nullptr = not adjustable).
     void (*setHeadphones)(uint8_t level) = nullptr;
     const char* version = "dev";
+    // Hand over to the update bootloader to flash /Firmware/<name>. On the device
+    // it does not return when it works; false = refused (no such image, a name
+    // the bootloader would not take, or the EEPROM flag cannot be set).
+    bool (*firmwareUpdate)(const char* name) = nullptr;
 
     // Loop memory (external SDRAM on the device), effect memory, and a staging buffer for
     // waveform bitmaps on their way to the display's RAM_G.

@@ -27,6 +27,8 @@
 //                                 beats, metronome, click, threshold) as the options page does
 //   expect_opt TRACK NAME VALUE   an option's value (names as for opt)
 //   expect_file PATH MINBYTES     a file on the SD card folder, at least MINBYTES long
+//   sd_file PATH BYTES            write a file of BYTES zero bytes on the SD card folder
+//   expect_flash NAME|none        the image the last firmware update asked for
 //   expect_fx SLOT TYPE [K V]     FX slot (1..2) holds TYPE (and knob K, 1..4, is V)
 //   expect_perfknob FX VALUE      performance effect FX (1..8) knob value
 //   tone_shape steady|bursts      a continuous sine, or the default bursts
@@ -58,6 +60,8 @@ using namespace sim;
 namespace b = ot::btn;
 
 namespace {
+
+std::string gFlashed;   // the image a firmware update asked for (expect_flash)
 
 struct Options {
     bool lineIn = false;
@@ -203,7 +207,13 @@ struct Machine {
         } else {
             std::fprintf(stderr, "no SD folder: settings and projects are off\n");
         }
-        p.version = "sim";
+        p.version = "looper-0.1";   // as the device build, so the Firmware page can mark its image
+        // The simulator has no bootloader: it notes the image and carries on.
+        p.firmwareUpdate = [](const char* name) {
+            gFlashed = name;
+            std::printf("firmware update requested: %s\n", name);
+            return true;
+        };
         if (o.telemetry) p.log = [](const char* line) { std::printf("%s\n", line); };
         if (!app.init(p)) {
             std::fprintf(stderr, "looper init failed\n");
@@ -357,6 +367,25 @@ struct Headless {
                     for (int t = t0; t <= t1; ++t) m.app.scriptOpt(t, looper::OptParam(p), v);
                     advance(5);
                 }
+            } else if (cmd == "sd_file") {
+                // sd_file PATH BYTES: a file of zero bytes on the SD card (parent folders made)
+                std::string bytes;
+                in >> bytes;
+                std::string dir;
+                for (size_t i = 1; i < arg.size(); ++i)
+                    if (arg[i] == '/') m.storage.mkdir(arg.substr(0, i).c_str());
+                const ot::IStorage::Handle fh = m.storage.open(arg.c_str(), ot::IStorage::kWrite);
+                if (fh >= 0) {
+                    std::vector<uint8_t> z(std::strtoul(bytes.c_str(), nullptr, 10), 0);
+                    m.storage.write(fh, z.data(), uint32_t(z.size()));
+                    m.storage.close(fh);
+                }
+            } else if (cmd == "expect_flash") {
+                // expect_flash NAME|none: the image the last firmware update asked for
+                const bool pass = arg == (gFlashed.empty() ? std::string("none") : gFlashed);
+                std::printf("%s:%d: expect_flash %s %s (%s)\n", path.c_str(), lineNo, arg.c_str(), pass ? "PASS" : "FAIL",
+                            gFlashed.empty() ? "none" : gFlashed.c_str());
+                ok = ok && pass;
             } else if (cmd == "expect_file") {
                 // expect_file PATH MINBYTES: a file on the SD card, at least that big
                 std::string minb;

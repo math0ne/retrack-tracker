@@ -97,6 +97,13 @@ level, input source, input gain and input monitoring (the last three are the
 same settings as F6 / F7). The page also shows the version and the recording
 time per track.
 
+**Config > F1 Firmware** lists the update images in `/Firmware` (the names the
+update bootloader takes: `PolyendTrac*.ptf`, `mt*.hex`), with this looper's
+image and the stock one marked. Up/Down or the encoder picks one, **F1 twice**
+flashes it (the Tracker restarts into the updater; unsaved loops are lost),
+F2 rescans the card, F7 back, F8 home. This is the way back to the stock
+firmware or OpenTracker, and the way to install a new looper build.
+
 **File** opens projects and export:
 
 | Key | Action |
@@ -276,8 +283,14 @@ telemetry, what to measure).
 
 Same as OpenTracker: copy the `.ptf` to `/Firmware` on the SD card and use
 the stock firmware updater. Keep `PolyendTracker_1.9.2.ptf` on the card as
-the way back: write its name into `/Firmware/ot_restore.txt` and power-cycle
-(the check runs before the app starts).
+the way back.
+
+From the looper itself: Config > F1 Firmware, pick the image, F1 twice. If the
+looper does not start, there is also the boot-time route: `/Firmware/ot_restore.txt`
+holding an image name is flashed at power-on (the check runs before the app
+starts, and the file is renamed `ot_restore.done`). `make` writes
+`build/sdcard/Firmware/` with the image and an `ot_restore.txt` naming it, so
+copying that folder onto the card and power-cycling installs the build.
 
 ## Limits found so far
 

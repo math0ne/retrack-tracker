@@ -16,6 +16,7 @@
 //   Delete       clear the selected track (Shift: all)   Up/Down  select track
 //   Encoder      selected track volume (Shift: input gain)
 //   Shift+Play   metronome on/off
+//   Config       settings; F1 there: Firmware (flash an image from /Firmware)
 //   Help         toggle the load / frame-rate readout
 //   Shift+Help   stress preset: the heaviest audio load, for measuring on the device
 //   Note         home: the loop lanes, from any page
@@ -211,6 +212,20 @@ private:
     void configKey(uint8_t id);
     void configEncoder(int delta);
     void drawConfig();
+    // Config > Firmware (F1): the update images in /Firmware; F1 twice flashes one.
+    static constexpr int kMaxImages = 16;
+    struct FwImage {
+        char name[64];
+        uint32_t bytes;
+    };
+    bool fwPage_ = false;
+    int fwCount_ = 0, fwSel_ = 0;
+    FwImage fw_[kMaxImages];
+    const char* fwMsg_ = nullptr;   // why the last flash was refused
+    void fwScan();
+    void runningImage(char* out, size_t n) const;   // this build's image name
+    void fwKey(uint8_t id);
+    void drawFirmware();
     void fileKey(uint8_t id);
     void drawFile();
     uint32_t powerDownMs_ = 0;
