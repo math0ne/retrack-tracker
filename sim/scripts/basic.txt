@@ -1,0 +1,77 @@
+# Basic looper flow, headless, with the synthetic line input (--tone).
+# Pads: row = track, col 0 REC, 1 PLAY/STOP, 2 MUTE, 3 CLEAR, 4..11 jump.
+wait 300
+shot ../build/sim/check/01_empty.png
+
+# Track 1 master take: 2 s of input.
+tap 0
+wait 1200
+shot ../build/sim/check/02_recording_master.png
+wait 800
+tap 0
+levels
+
+# Input off: whatever plays now comes from the loop.
+tone off
+wait 1000
+expect_audio 0.2
+
+# Track 2 takes 3 s, so it rounds up to two master bars (4 s).
+tone 220
+tap 12
+wait 3000
+tap 12
+tone off
+wait 600
+shot ../build/sim/check/03_two_tracks.png
+expect_audio 0.2
+
+# Mute both: silence (input is off, so the monitor adds nothing).
+tap 2
+tap 14
+wait 300
+levels
+wait 1000
+expect_silent
+tap 2
+tap 14
+
+# Overdub track 1 with a new tone for one bar, then jump track 2 to its 6th eighth.
+tone 660
+tap 0
+wait 2000
+tap 0
+tone off
+tap 21
+wait 400
+shot ../build/sim/check/04_overdub_jump.png
+expect_audio 0.2
+
+# Track 3 and 4 too, then the transport off: silence.
+tone 440
+tap 24
+wait 2000
+tap 24
+tap 36
+wait 1000
+tap 36
+tone off
+wait 500
+shot ../build/sim/check/05_four_tracks.png
+press PLAY
+wait 200
+levels
+wait 1000
+expect_silent
+
+# Clear all (Shift + Delete): back to empty, the buffers are zeroed in the background.
+hold SHIFT
+press DELETE
+release SHIFT
+wait 1500
+shot ../build/sim/check/06_cleared.png
+press PLAY
+wait 500
+levels
+wait 500
+expect_silent

@@ -1,0 +1,11 @@
+OpenTracker changes to the vendored PJRC Teensy 3.x core (upstream commit in
+UPSTREAM_COMMIT). Everything else in this directory is unmodified.
+
+1. usb_desc.h, USB_MIDI_SERIAL section: when OT_USB_VID and OT_USB_PID are
+   defined (reimpl/Makefile passes them), use that VID/PID and the strings
+   "OpenTracker" / "OpenTracker" instead of PJRC's 0x16C0/0x0489
+   "Teensyduino" / "Teensy MIDI" (PJRC's IDs are licensed for genuine Teensy
+   boards only). Marked "OPENTRACKER PATCH". Without the -D flags the file
+   behaves exactly like upstream.
+   Current IDs: 0x1209/0x0001 = pid.codes test PID. TODO: register a real
+   pid.codes PID before any public release.
