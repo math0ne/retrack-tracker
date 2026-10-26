@@ -1,4 +1,4 @@
-# FX pages (FX1 / FX2), Note = home, sound start, F7 gain, performance knobs.
+# FX pages (FX1 / FX2), Note = home, sound start, performance knobs.
 wait 300
 
 # The default start is a count-in: a press waits a bar before recording.
@@ -82,13 +82,6 @@ expect_opt 1 metronome 1
 press F4
 wait 20
 expect_opt 1 metronome 0
-
-# F7 held + encoder: input gain (monitor stays as it was); a tap toggles monitor.
-hold F7
-enc 5
-wait 50
-shot ../build/sim/check/pages_gain.png
-release F7
 
 # Performance: hold Low-pass (track 1 pad 6) and turn the encoder: its cutoff knob.
 press PERFORMANCE

@@ -23,6 +23,7 @@
 //   expect_ch left|right MIN|silent   the same for one channel (no reset)
 //   expect_len TRACK SEC          track (1..4) loop length, within 10 ms
 //   expect_state TRACK NAME       EMPTY, COUNT, ARMED, REC, PLAY, DUB, STOP or QUEUED
+//   expect_opt also takes monitor, feedback and gain (the Input page's other settings)
 //   opt TRACK|all NAME VALUE      set an option (stop, length, start, input, after, tempo,
 //                                 beats, metronome, click, threshold) as the options page does
 //   expect_opt TRACK NAME VALUE   an option's value (names as for opt)
@@ -407,8 +408,11 @@ struct Headless {
                 for (int i = 0; i < 10; ++i)
                     if (name == kNames[i]) p = i;
                 const int t = std::atoi(arg.c_str()) - 1;
-                const int got = p >= 0 && t >= 0 && t < looper::kTracks
-                                    ? m.app.engine().opt(looper::OptParam(p), t) : -1;
+                int got = p >= 0 && t >= 0 && t < looper::kTracks ? m.app.engine().opt(looper::OptParam(p), t) : -1;
+                // Settings that are not track options, under the same command.
+                if (name == "monitor") got = m.app.engine().monitoring() ? 1 : 0;
+                else if (name == "feedback") got = m.app.engine().feedback();
+                else if (name == "gain") got = m.app.inputGain();
                 const bool pass = got == std::atoi(val.c_str());
                 std::printf("%s:%d: expect_opt %s %s %s %s (%d)\n", path.c_str(), lineNo, arg.c_str(), name.c_str(),
                             val.c_str(), pass ? "PASS" : "FAIL", got);

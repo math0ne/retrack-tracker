@@ -1,0 +1,111 @@
+# Input page (F6 on the home page): the input card and the metronome card.
+wait 300
+expect_opt 1 monitor 1
+expect_opt 1 feedback 100
+
+# Hold F6 + encoder: input gain (50 -> 40) without opening the page.
+hold F6
+enc -5
+wait 30
+shot ../build/sim/check/input_gain_knob.png
+release F6
+wait 30
+expect_opt 1 gain 40
+hold F6
+enc 5
+release F6
+wait 30
+expect_opt 1 gain 50
+
+press F6
+wait 50
+shot ../build/sim/check/input_page.png
+
+# Input card: gain (row 2) up 10, channels (row 3) to Mono L, monitor off.
+press DOWN
+enc 5
+wait 30
+expect_opt 1 gain 60
+press DOWN
+enc 1
+wait 30
+expect_opt 1 input 1
+press DOWN
+enc -1
+wait 30
+expect_opt 1 monitor 0
+# Overdub feedback: the encoder in 5 % steps, F5 steps 100 / 90 / 75 / 50.
+press DOWN
+enc -2
+wait 30
+expect_opt 1 feedback 90
+press F5
+wait 30
+expect_opt 1 feedback 75
+# F2 toggles monitor back on.
+press F2
+wait 30
+expect_opt 1 monitor 1
+
+# Metronome card: on, click 60 -> 40, tempo 120 -> 110, beats 4 -> 3.
+press RIGHT
+press UP
+press UP
+press UP
+enc 1
+wait 30
+expect_opt 1 metronome 1
+press DOWN
+enc -4
+wait 30
+expect_opt 1 click 40
+press DOWN
+enc -10
+wait 30
+expect_opt 1 tempo 110
+press DOWN
+enc -1
+wait 30
+expect_opt 1 beats 3
+# F4 toggles the metronome from either card.
+press F4
+wait 30
+expect_opt 1 metronome 0
+shot ../build/sim/check/input_metronome.png
+
+# Channels apply to the selected track only, and only while it is empty.
+press F6
+press DOWN
+press F6
+press F3
+wait 30
+expect_opt 2 input 1
+expect_opt 1 input 1
+press F8
+
+# Track 2 records mono; with a loop its channels stay put.
+opt all start 0
+tap 12
+wait 1500
+tap 12
+wait 2000
+expect_state 2 PLAY
+press F6
+press F3
+wait 30
+expect_opt 2 input 1
+shot ../build/sim/check/input_locked.png
+# F7 / F8 on the home page do nothing now; F6 held and turned leaves the page shut.
+press F8
+hold F6
+wait 30
+enc 1
+wait 30
+release F6
+wait 30
+expect_opt 1 gain 62
+press F7
+press F8
+wait 30
+expect_opt 1 monitor 1
+expect_opt 1 feedback 75

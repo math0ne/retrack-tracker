@@ -131,3 +131,18 @@ release PERFORMANCE
 wait 50
 expect_perf 1 3 off
 shot ../build/sim/check/perform_closed.png
+
+# Pattern is a second Perform key: tap to latch, tap again to leave.
+press PATTERN
+wait 100
+down 6
+wait 200
+expect_perf 1 3 on
+up 6
+wait 50
+press PATTERN
+wait 50
+down 6
+wait 200
+expect_perf 1 3 off
+up 6

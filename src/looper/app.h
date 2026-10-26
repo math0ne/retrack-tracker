@@ -7,8 +7,10 @@
 //                is a loop: 50..200 %, the pitch follows); Shift + hold: click level
 //   F5 Mode      opens the mode bar: the eight labels become the eight playback
 //                modes, the key under one picks it (any other key cancels)
-//   F6 Input     line / mic low / mic high   F8 overdub feedback
-//   F7 Monitor   tap: on/off; hold + encoder: input gain (a knob shows while held)
+//   F6 Input     tap: the Input page; hold + encoder: input gain (a knob shows while held)
+//                The page: source, gain, the track's stereo / mono, monitor,
+//                overdub feedback, and the metronome (on, click, tempo, beats / bar)
+//   F7, F8       free
 // Other keys
 //   Pads (4 rows x 12): row = track. Col 1 REC/DUB, col 2 PLAY/STOP, col 3 MUTE,
 //                       col 4 CLEAR, cols 5..12 jump to that eighth of the loop
@@ -27,7 +29,7 @@
 //   File         projects (F1 save, F2 save new, F3 load) and WAV export (F5 track, F6 all)
 //   S.Edit       loop editor for the selected track: F1/F2 start/end marker,
 //                F3 snap, F4 trim, F5 cut, F6 erase (twice), F7 undo trim, F8 home
-//   Perform      performance mode: tap to latch it on (tap again for off), or
+//   Perform      (or Pattern) performance mode: tap to latch it on (tap again for off), or
 //                hold it (off on release). The waveforms show 8 effect cells
 //                laid out like pad columns 5..12 of the track's row; a pad plays
 //                its effect on that track while held, Shift + pad latches it.
@@ -68,6 +70,7 @@ public:
     bool init(const Platform& p);
     void loop();
     const Engine& engine() const { return engine_; }   // read-only, for the simulator's checks
+    uint8_t inputGain() const { return cfg_.gain; }
     // Simulator scripts: set an option directly (as the options page would).
     void scriptOpt(int track, OptParam p, int value) {
         engine_.post(Engine::kOpt, uint8_t(track), int16_t((int(p) << 8) | (value & 0xFF)));
@@ -170,9 +173,16 @@ private:
     int confirm_ = -1;                 // F-key waiting for its second press
     uint32_t confirmUntilMs_ = 0;
 
-    // F7 on the home page: tap = monitor on/off, hold + encoder = input gain
-    bool f7Held_ = false, f7Turned_ = false;
+    // Input page (F6 on the home page): the input card (source, gain, the selected
+    // track's channels, monitor, overdub feedback) and the metronome card.
+    bool inPage_ = false;
+    int inCol_ = 0, inRow_ = 0;
+    // F6 on the home page: tap = the Input page, hold + encoder = input gain
+    bool f6Held_ = false, f6Turned_ = false;
     float gainShown_ = 0.5f;
+    void inputKey(uint8_t id);
+    void inputEncoder(int delta);
+    void drawInput();
     // F4 on the home page: tap = metronome on/off, hold + encoder = tempo
     // (Shift: click level)
     bool f4Held_ = false, f4Turned_ = false;

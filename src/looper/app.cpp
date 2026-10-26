@@ -175,7 +175,7 @@ void App::loop() {
                 waveDrawnMs_[editTrack_] = now;
                 waveValid_[editTrack_] = false;   // the lane redraws when it is back on screen
             }
-        } else if (!mixer_ && !options_ && fxPage_ < 0 && !config_ && !file_) {
+        } else if (!mixer_ && !options_ && fxPage_ < 0 && !config_ && !file_ && !inPage_) {
             updateWaves(now);   // lanes only when they are on screen
         }
         render(now);
@@ -242,19 +242,7 @@ void App::onFKey(int key) {
         case 0: record(selected_); break;
         case 1: engine_.post(Engine::kPlayStop, t); break;
         case 2: engine_.post(Engine::kMute, t); break;
-        case 4: modeBar_ = true; break;   // F4 (metronome) and F7 (monitor) are tap / hold keys: onInput
-        case 5:
-            cfg_.source = cfg_.source == 0 ? 2 : (cfg_.source == 2 ? 3 : 0);
-            markConfig();
-            if (p_.selectInput) p_.selectInput(cfg_.source, cfg_.gain);
-            break;
-        case 6: engine_.post(Engine::kMonitor, 0, engine_.monitoring() ? 0 : 1); break;
-        case 7: {
-            int i = 0;
-            while (i < int(sizeof kFeedbackSteps) && kFeedbackSteps[i] != engine_.feedback()) ++i;
-            engine_.post(Engine::kFeedback, 0, kFeedbackSteps[(i + 1) % int(sizeof kFeedbackSteps)]);
-            break;
-        }
+        case 4: modeBar_ = true; break;   // F4 (metronome / tempo) and F6 (input) are tap / hold keys: onInput
         default: break;
     }
 }
@@ -279,11 +267,11 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     if (ev.type == E::kEncoder) {
-        if (f7Held_) {   // F7 held: input gain
+        if (f6Held_) {   // F6 held: input gain
             int g = int(cfg_.gain) + ev.delta * (shift_ ? 1 : 2);
             cfg_.gain = uint8_t(g < 0 ? 0 : (g > 100 ? 100 : g));
             if (p_.selectInput) p_.selectInput(cfg_.source, cfg_.gain);
-            f7Turned_ = true;
+            f6Turned_ = true;
             markConfig();
             return;
         }
@@ -319,6 +307,10 @@ void App::onInput(const ot::InputEvent& ev) {
             configEncoder(ev.delta);
             return;
         }
+        if (inPage_) {
+            inputEncoder(ev.delta);
+            return;
+        }
         if (edit_) {
             editEncoder(ev.delta);
             return;
@@ -347,7 +339,7 @@ void App::onInput(const ot::InputEvent& ev) {
         powerHeld_ = down;
         powerDownMs_ = ev.timeMs;
     }
-    if (ev.id == b::Performance) {
+    if (ev.id == b::Performance || ev.id == b::Pattern) {   // Pattern is a second Perform key
         // Tap: latch on (a second tap turns it off). Hold: on until released.
         if (down) {
             perfToggleOff_ = perf_;
@@ -359,18 +351,17 @@ void App::onInput(const ot::InputEvent& ev) {
         }
         return;
     }
-    // Home page F7: a tap toggles monitoring; held, the encoder sets the input gain.
-    const bool home = !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !modeBar_;
-    if (ev.id == b::F7 && (home || f7Held_)) {
+    const bool home = !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !modeBar_;
+    // Home page F6: a tap opens the Input page; held, the encoder sets the input gain.
+    if (ev.id == b::F6 && (home || f6Held_)) {
         if (down) {
-            f7Held_ = true;
-            f7Turned_ = false;
-        } else if (f7Held_) {
-            f7Held_ = false;
-            if (!f7Turned_) {
-                cfg_.monitor = engine_.monitoring() ? 0 : 1;
-                engine_.post(Engine::kMonitor, 0, cfg_.monitor);
-                markConfig();
+            f6Held_ = true;
+            f6Turned_ = false;
+        } else if (f6Held_) {
+            f6Held_ = false;
+            if (!f6Turned_) {
+                inPage_ = true;
+                inCol_ = inRow_ = 0;
             }
         }
         return;
@@ -448,6 +439,10 @@ void App::onInput(const ot::InputEvent& ev) {
     }
     if (config_ && nav) {
         configKey(ev.id);
+        return;
+    }
+    if (inPage_ && nav) {
+        inputKey(ev.id);
         return;
     }
     if (file_ && nav) {
@@ -532,7 +527,7 @@ void App::closePerf() {
 }
 
 void App::goHome() {
-    mixer_ = options_ = edit_ = config_ = file_ = fwPage_ = false;
+    mixer_ = options_ = edit_ = config_ = file_ = fwPage_ = inPage_ = false;
     fxPage_ = -1;
     fxBar_ = modeBar_ = false;
     confirm_ = -1;
@@ -818,13 +813,14 @@ void App::render(uint32_t now) {
     else if (edit_) drawEditPage(now);
     else if (config_) drawConfig();
     else if (file_) drawFile();
+    else if (inPage_) drawInput();
     else if (mixer_) drawMixer();
     else if (options_) drawOptions();
     else
         for (int t = 0; t < kTracks; ++t) drawLane(t, now);
     drawFKeys();
     // Pop-up knobs: F7 held (input gain), an effect pad held in performance mode.
-    if (f7Held_) {
+    if (f6Held_) {
         char v[12];
         std::snprintf(v, sizeof v, "%u", unsigned(cfg_.gain));
         drawPopupKnob("Input gain", v, float(cfg_.gain) / 100.0f, gainShown_, 0x3DDC97,
@@ -1131,6 +1127,19 @@ void App::drawFKeys() {
             else if (i == 7) v = "Loops";
             std::snprintf(val[i], sizeof val[i], "%s", v);
             hot = i == 0 && armed;
+        } else if (inPage_) {   // quick keys for the main switches, F6 / F8 close
+            const uint8_t ch = engine_.opt(OptParam::kInput, selected_);
+            static const char* const kCh[4] = {"Stereo", "Mono L", "Mono R", "Mono sum"};
+            switch (i) {
+                case 0: title[i] = "SOURCE"; std::snprintf(val[i], sizeof val[i], "%s", sourceName(cfg_.source)); break;
+                case 1: title[i] = "MONITOR"; std::snprintf(val[i], sizeof val[i], "%s", engine_.monitoring() ? "On" : "Off"); break;
+                case 2: title[i] = "CHANNELS"; std::snprintf(val[i], sizeof val[i], "%s", kCh[ch & 3]); break;
+                case 3: title[i] = "METRONOME"; std::snprintf(val[i], sizeof val[i], "%s", engine_.opt(OptParam::kMetronome) ? "On" : "Off"); break;
+                case 4: title[i] = "FEEDBACK"; std::snprintf(val[i], sizeof val[i], "%u%%", unsigned(engine_.feedback())); break;
+                case 5: title[i] = "INPUT"; std::snprintf(val[i], sizeof val[i], "Close"); break;
+                case 7: title[i] = "HOME"; std::snprintf(val[i], sizeof val[i], "Loops"); break;
+                default: title[i] = ""; val[i][0] = '\0'; break;
+            }
         } else if (config_) {   // F1 firmware, F8 home: Up / Down pick a setting, the encoder sets it
             title[i] = i == 7 ? "HOME" : (i == 0 ? "FIRMWARE" : "");
             std::snprintf(val[i], sizeof val[i], "%s", i == 7 ? "Loops" : (i == 0 ? "Update" : ""));
@@ -1221,18 +1230,14 @@ void App::drawFKeys() {
                     title[i] = "INPUT";
                     std::snprintf(val[i], sizeof val[i], "%s", sourceName(cfg_.source));
                     break;
-                case 6:
-                    title[i] = "MONITOR";
-                    std::snprintf(val[i], sizeof val[i], "%s", engine_.monitoring() ? "On" : "Off");
-                    break;
-                default:
-                    title[i] = "FEEDBACK";
-                    std::snprintf(val[i], sizeof val[i], "%u%%", unsigned(engine_.feedback()));
+                default:   // F7, F8: free
+                    title[i] = "";
+                    val[i][0] = '\0';
                     break;
             }
         }
         uint32_t hc = tc;
-        if (config_ || file_) hc = kAmber;
+        if (config_ || file_ || inPage_) hc = kAmber;
         else if (edit_) hc = (i == 4 || i == 5) ? kAmber : kTrackColor[editTrack_];
         else if (fxPage_ >= 0) hc = stripColor(4 + fxPage_);
         else if (mixer_ && !modeBar_) hc = stripColor(i);
@@ -1243,6 +1248,7 @@ void App::drawFKeys() {
             uint32_t tcol = kDim;
             if (hot) tcol = kBg;
             else if (file_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
+            else if (inPage_) tcol = i < 5 ? scale(hc, 0.9f) : kDim;
             else if (edit_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
             else if (fxPage_ >= 0) tcol = i < 6 ? scale(hc, 0.9f) : kDim;
             else if (mixer_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
@@ -1257,7 +1263,7 @@ void App::drawFKeys() {
         text(cx, bar ? (kKeyY0 + kKeyY1) / 2 + 4 : kKeyY0 + 28, kFontSmall, Disp::kOptCenter, val[i]);
     }
     // Input level inside the INPUT cell
-    if (!modeBar_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_) {
+    if (!modeBar_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_) {
         const int x0 = 5 * kKeyW + 10, x1 = 6 * kKeyW - 10;
         for (int c = 0; c < 2; ++c) {
             const float m = inMeter_[c];
@@ -1745,6 +1751,185 @@ void App::applyConfig() {
     if (p_.setHeadphones) p_.setHeadphones(cfg_.phones);
     if (p_.selectInput) p_.selectInput(cfg_.source, cfg_.gain);
     engine_.post(Engine::kMonitor, 0, cfg_.monitor);
+}
+
+// ---------------------------------------------------------------------------
+// Input page: the input card and the metronome card
+
+namespace {
+constexpr int kInRows[2] = {5, 4};
+const char* const kInName[2][5] = {{"Source", "Gain", "Channels", "Monitor", "Overdub feedback"},
+                                   {"Metronome", "Click level", "Tempo", "Beats per bar", ""}};
+const char* const kInHelp[2][5] = {
+    {"Line in, or the mic input at low or high gain.", "Codec input gain. Watch the meter while you play.",
+     "Stereo or mono takes for the selected track (set while the track is empty).",
+     "Hear the input through the outputs.", "How much of the loop stays under each overdub pass."},
+    {"Click on every beat, accent on the bar line. Count-ins click either way.", "Click volume.",
+     "Before the first loop: the bar length. After: tape speed, 50 to 200 %.", "Beats in a bar: the grid for stops, count-ins and the click.",
+     ""}};
+const char* const kChName[4] = {"Stereo", "Mono L", "Mono R", "Mono sum"};
+}  // namespace
+
+void App::inputKey(uint8_t id) {
+    auto flipMonitor = [&] {
+        cfg_.monitor = engine_.monitoring() ? 0 : 1;
+        applyConfig();
+        markConfig();
+    };
+    switch (id) {
+        case b::F1: inCol_ = 0; inRow_ = 0; inputEncoder(1); break;   // the quick keys step their setting
+        case b::F2: inCol_ = 0; inRow_ = 3; flipMonitor(); break;
+        case b::F3: inCol_ = 0; inRow_ = 2; inputEncoder(1); break;
+        case b::F4: inCol_ = 1; inRow_ = 0; inputEncoder(engine_.opt(OptParam::kMetronome) ? -1 : 1); break;
+        case b::F5: {
+            inCol_ = 0;
+            inRow_ = 4;
+            int i = 0;
+            while (i < int(sizeof kFeedbackSteps) && kFeedbackSteps[i] != engine_.feedback()) ++i;
+            engine_.post(Engine::kFeedback, 0, kFeedbackSteps[(i + 1) % int(sizeof kFeedbackSteps)]);
+            break;
+        }
+        case b::F6:
+        case b::F8: goHome(); break;
+        case b::Up:
+            if (inRow_ > 0) --inRow_;
+            break;
+        case b::Down:
+            if (inRow_ + 1 < kInRows[inCol_]) ++inRow_;
+            break;
+        case b::Left:
+        case b::Right:
+            inCol_ = id == b::Right ? 1 : 0;
+            if (inRow_ >= kInRows[inCol_]) inRow_ = kInRows[inCol_] - 1;
+            break;
+        default: break;
+    }
+}
+
+void App::inputEncoder(int delta) {
+    auto opt = [&](OptParam p, int t, int v) { engine_.post(Engine::kOpt, uint8_t(t), int16_t((int(p) << 8) | (v & 0xFF))); };
+    auto lim = [](int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); };
+    if (inCol_ == 0) {
+        switch (inRow_) {
+            case 0: {   // line, mic low, mic high
+                static const uint8_t kSrc[3] = {0, 2, 3};
+                int i = cfg_.source == 2 ? 1 : (cfg_.source == 3 ? 2 : 0);
+                i = (i + (delta > 0 ? 1 : 2)) % 3;
+                cfg_.source = kSrc[i];
+                break;
+            }
+            case 1: cfg_.gain = uint8_t(lim(int(cfg_.gain) + delta * (shift_ ? 1 : 2), 0, 100)); break;
+            case 2: {   // the engine keeps it only while the track is empty
+                const int c = (int(engine_.opt(OptParam::kInput, selected_)) + (delta > 0 ? 1 : 3)) % 4;
+                opt(OptParam::kInput, selected_, c);
+                return;
+            }
+            case 3: cfg_.monitor = delta > 0 ? 1 : 0; break;
+            default:
+                engine_.post(Engine::kFeedback, 0, int16_t(lim(int(engine_.feedback()) + delta * (shift_ ? 1 : 5), 0, 100)));
+                return;
+        }
+        applyConfig();
+        markConfig();
+        return;
+    }
+    switch (inRow_) {
+        case 0: opt(OptParam::kMetronome, 0, delta > 0 ? 1 : 0); break;
+        case 1: opt(OptParam::kClick, 0, lim(int(engine_.opt(OptParam::kClick)) + delta * (shift_ ? 1 : 5), 0, 100)); break;
+        case 2: {
+            int lo, hi;
+            tempoRange(lo, hi);
+            opt(OptParam::kTempo, 0, lim(int(engine_.opt(OptParam::kTempo)) + delta, lo, hi));
+            break;
+        }
+        default: opt(OptParam::kBeats, 0, lim(int(engine_.opt(OptParam::kBeats)) + delta, 1, 12)); break;
+    }
+}
+
+void App::drawInput() {
+    char buf[64];
+    const bool empty = TrackState(engine_.view(selected_).state.load()) == TrackState::kEmpty;
+    for (int c = 0; c < 2; ++c) {
+        const int x0 = c ? 405 : 20, x1 = c ? 780 : 395;
+        color(kAmber);
+        text(x0, 22, kFontBig, Disp::kOptCenterY, c ? "METRONOME" : "INPUT");
+        for (int r = 0; r < kInRows[c]; ++r) {
+            const int y0 = 46 + r * 52, y1 = y0 + 44, cy = (y0 + y1) / 2;
+            const bool sel = inCol_ == c && inRow_ == r;
+            if (sel) {
+                color(kAmber);
+                fillRect(x0 - 2, y0 - 2, x1 + 2, y1 + 2, 9);
+            }
+            color(sel ? kLaneSel : kLane);
+            fillRect(x0, y0, x1, y1, 8);
+            const char* name = kInName[c][r];
+            if (c == 0 && r == 2) {
+                std::snprintf(buf, sizeof buf, "Track %d channels", selected_ + 1);
+                name = buf;
+            }
+            color(sel ? kInk : kDim);
+            text(x0 + 16, cy, kFontBody, Disp::kOptCenterY, name);
+            char v[24];
+            float frac = -1.0f, meter = -1.0f;
+            bool dim = false;
+            if (c == 0) {
+                switch (r) {
+                    case 0: std::snprintf(v, sizeof v, "%s", sourceName(cfg_.source)); break;
+                    case 1:
+                        std::snprintf(v, sizeof v, "%u", unsigned(cfg_.gain));
+                        frac = cfg_.gain / 100.0f;
+                        meter = inMeter_[0] > inMeter_[1] ? inMeter_[0] : inMeter_[1];
+                        break;
+                    case 2:
+                        std::snprintf(v, sizeof v, "%s", kChName[engine_.opt(OptParam::kInput, selected_) & 3]);
+                        dim = !empty;   // fixed once the track holds a loop
+                        break;
+                    case 3: std::snprintf(v, sizeof v, "%s", engine_.monitoring() ? "On" : "Off"); break;
+                    default:
+                        std::snprintf(v, sizeof v, "%u %%", unsigned(engine_.feedback()));
+                        frac = engine_.feedback() / 100.0f;
+                        break;
+                }
+            } else {
+                switch (r) {
+                    case 0: std::snprintf(v, sizeof v, "%s", engine_.opt(OptParam::kMetronome) ? "On" : "Off"); break;
+                    case 1: {
+                        const uint8_t k = engine_.opt(OptParam::kClick);
+                        std::snprintf(v, sizeof v, "%u", unsigned(k));
+                        frac = k / 100.0f;
+                        break;
+                    }
+                    case 2:
+                        if (engine_.masterLen() && engine_.speed() != 1.0f)
+                            std::snprintf(v, sizeof v, "%u bpm  %d%%", unsigned(engine_.opt(OptParam::kTempo)),
+                                          int(engine_.speed() * 100.0f + 0.5f));
+                        else std::snprintf(v, sizeof v, "%u bpm", unsigned(engine_.opt(OptParam::kTempo)));
+                        break;
+                    default: std::snprintf(v, sizeof v, "%u", unsigned(engine_.opt(OptParam::kBeats))); break;
+                }
+            }
+            if (frac >= 0.0f) {   // a level bar under the value
+                const int bx0 = x1 - 150, bx1 = x1 - 16;
+                color(kFaint);
+                fillRect(bx0, y1 - 9, bx1, y1 - 6, 2);
+                color(kAmber);
+                fillRect(bx0, y1 - 9, bx0 + 2 + int(float(bx1 - bx0 - 2) * frac), y1 - 6, 2);
+                if (meter > 0.005f) {   // the live input level just above it
+                    color(meter > 0.9f ? kRed : (meter > 0.6f ? kAmber : 0x3DDC97));
+                    fillRect(bx0, y1 - 13, bx0 + int(float(bx1 - bx0) * (meter > 1.0f ? 1.0f : meter)), y1 - 11, 1);
+                }
+            }
+            color(dim ? kDim : kInk);
+            text(x1 - 16, frac >= 0.0f ? cy - 4 : cy, kFontBody, Disp::kOptRightX | Disp::kOptCenterY, v);
+        }
+    }
+    // What the selected setting does.
+    color(kDim);
+    const char* help = kInHelp[inCol_][inRow_];
+    if (inCol_ == 0 && inRow_ == 2 && !empty) help = "This track holds a loop: clear it to change its channels.";
+    text(20, 340, kFontSmall, 0, help);
+    color(0x4A5563);
+    text(20, 384, kFontSmall, 0, "Up / Down: setting   Left / Right: card   Encoder: value (Shift: fine)");
 }
 
 namespace {

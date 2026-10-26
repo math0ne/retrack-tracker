@@ -61,9 +61,29 @@ eight screen keys, each centred over its key as on the stock Tracker.
 | F3 MUTE | Mute on/off |
 | F4 TEMPO | Tap: metronome on/off (the label is amber while it is on). Hold + encoder: tempo, 1 bpm a step (a knob shows while held). Shift + hold + encoder: click level. Delete clears tracks |
 | F5 MODE | Opens the mode bar: the eight labels become the playback modes and the key under one picks it. Any other key closes it. |
-| F6 INPUT | Line in / mic low / mic high (the cell shows the input level) |
-| F7 MONITOR | Tap: input monitoring on/off. Hold + encoder: input gain (a knob with the input level shows while held) |
-| F8 FEEDBACK | Overdub feedback 100 / 90 / 75 / 50 % |
+| F6 INPUT | Tap: the Input page (the cell shows the source and the input level). Hold + encoder: input gain (a knob with the input level shows while held) |
+| F7, F8 | Free |
+
+**Input page** (F6): two cards. Up/Down pick a setting, Left/Right the card, the
+encoder sets it (Shift: fine steps); F6 or F8 closes it.
+
+| Input card | |
+|---|---|
+| Source | Line in / mic low / mic high |
+| Gain | Codec input gain, with the live input level under it |
+| Track N channels | Stereo / Mono L / Mono R / Mono sum for the selected track (only while it is empty) |
+| Monitor | Hear the input through the outputs |
+| Overdub feedback | How much of the loop stays under each pass, 0–100 % |
+
+| Metronome card | |
+|---|---|
+| Metronome | Click on every beat (count-ins click either way) |
+| Click level | Click volume |
+| Tempo | As F4: the bar before there is a loop, tape speed after |
+| Beats per bar | 1–12 |
+
+Quick keys on the page: F1 next source, F2 monitor on/off, F3 next channel
+mode, F4 metronome on/off, F5 feedback 100 / 90 / 75 / 50 %.
 
 | Other control | Action |
 |---|---|
@@ -94,7 +114,7 @@ eight screen keys, each centred over its key as on the stock Tracker.
 saved to `Looper/config.bin` on the card a second after a change and loaded at
 start-up: display brightness (low / medium / high), pad brightness, headphone
 level, input source, input gain and input monitoring (the last three are the
-same settings as F6 / F7). The page also shows the version and the recording
+same settings as on the Input page). The page also shows the version and the recording
 time per track.
 
 **Config > F1 Firmware** lists the update images in `/Firmware` (the names the
@@ -184,7 +204,7 @@ the bar lines (numbered) and the beat lines where they fall in that take.
 
 ### Performance mode
 
-**Perform**: tap it to latch performance mode on (tap again to leave), or hold
+**Perform** (or **Pattern**, which does the same): tap it to latch performance mode on (tap again to leave), or hold
 it to use it only while held. Each lane's waveform shows eight effect cells,
 laid out like pad columns 5–12 of that track's row. Hold a pad to play its
 effect on that track; Shift + pad latches it (a dot in the cell) until pressed
