@@ -1,5 +1,6 @@
 # Tracker Looper firmware for the original Polyend Tracker hardware (MK66FX1M0).
-# make            -> build/looper.hex and build/PolyendTracLooperv<ver digits>.ptf (24 chars)
+# make            -> build/looper.hex and build/PolyendTracLooperv<ver digits>.ptf (24 chars),
+#                    also at build/sdcard/Firmware/ (copy that Firmware folder onto the SD card)
 # make SELFTEST=1 -> build/selftest/PolyendTracLooperST1.ptf, the OpenTracker hardware selftest
 # make sim        -> build/sim/looper-sim (desktop simulator, sim/README.md)
 VERSION   ?= 0.1
@@ -46,7 +47,9 @@ APP_C     := $(shell find src -name '*.c') third_party/fatfs/ff.c third_party/fa
 APP_CXX   := $(shell find src -name '*.cpp')
 OBJS      := $(patsubst %,$(BUILD)/%.o,$(CORE_C) $(CORE_CXX) $(APP_C) $(APP_CXX))
 
-all: $(BUILD)/looper.hex $(PTF)
+SDCARD    := $(BUILD)/sdcard/Firmware/$(PTF_NAME)
+
+all: $(BUILD)/looper.hex $(PTF) $(SDCARD)
 
 $(BUILD)/%.c.o: %.c
 	@mkdir -p $(dir $@)
@@ -67,6 +70,11 @@ $(BUILD)/looper.hex: $(BUILD)/looper.elf
 # stock (a locked chip) or that leaves the stock flash range.
 $(PTF): $(BUILD)/looper.hex
 	python3 tools/check_image.py $<
+	cp $< $@
+
+# build/sdcard mirrors the SD card: copy its Firmware folder onto the card's root.
+$(SDCARD): $(PTF)
+	@mkdir -p $(dir $@)
 	cp $< $@
 
 clean:

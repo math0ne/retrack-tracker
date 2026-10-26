@@ -28,7 +28,7 @@ desktop simulator; **it has not been run on a Tracker yet.**
 Needs `arm-none-eabi-gcc` + newlib, GNU make, Python 3 (firmware), and g++ + SDL2 (simulator).
 
 ```
-make                 # build/PolyendTracLooperv01.ptf
+make                 # build/PolyendTracLooperv01.ptf, also in build/sdcard/Firmware/ (copy that folder onto the SD card)
 make SELFTEST=1      # OpenTracker hardware selftest image
 make sim             # build/sim/looper-sim
 make -C sim check    # headless test scripts (sim/scripts), screenshots in build/sim/check/
@@ -59,7 +59,7 @@ eight screen keys, each centred over its key as on the stock Tracker.
 | F1 REC | Record / finish / overdub / stop overdub |
 | F2 PLAY | Stop: the track goes silent and back to its start. Play: it starts again from its start on the next bar line (WAIT; press again to cancel) |
 | F3 MUTE | Mute on/off |
-| F4 METRONOME | Tap: metronome on/off. Hold + encoder: click level (a knob shows while held). Delete clears tracks |
+| F4 TEMPO | Tap: metronome on/off (the label is amber while it is on). Hold + encoder: tempo, 1 bpm a step (a knob shows while held). Shift + hold + encoder: click level. Delete clears tracks |
 | F5 MODE | Opens the mode bar: the eight labels become the playback modes and the key under one picks it. Any other key closes it. |
 | F6 INPUT | Line in / mic low / mic high (the cell shows the input level) |
 | F7 MONITOR | Tap: input monitoring on/off. Hold + encoder: input gain (a knob with the input level shows while held) |
@@ -165,7 +165,7 @@ F1–F4 and the tempo column over F5 (same navigation as the mixer, F8 back).
 
 | Tempo column | |
 |---|---|
-| Tempo | 40–240 bpm (default 120). It sets the bar until there is a loop; after that it shows the loop's tempo. |
+| Tempo | 40–240 bpm (default 120). It sets the bar until there is a loop. After that it is tape-style varispeed: 50–200 % of the loop's own tempo, every loop speeds up or slows down together and the pitch follows. The metronome, count-ins, beat repeats and delay times follow it; new takes are resampled onto the loops' timeline, and only Forward overdubs off 100 %. Clearing every track goes back to 100 %. Projects save it. |
 | Beats / bar | 1–12 (default 4): the click, on-beat stops and the beat lines. |
 | Metronome | Click on every beat while the transport runs (the count-in always clicks). Also Shift + Play. |
 | Click | Click level. |

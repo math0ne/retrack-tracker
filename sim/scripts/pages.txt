@@ -64,16 +64,18 @@ wait 2200
 expect_state 1 PLAY
 tone off
 
-# F4 on the home page: a tap turns the metronome on; held + encoder sets the click
-# level (60 -> 85), and releasing after turning leaves the metronome as it was.
+# F4 on the home page: a tap turns the metronome on; Shift + held + encoder sets
+# the click level (60 -> 85), and releasing after turning leaves the metronome as it was.
 press F4
 wait 20
 expect_opt 1 metronome 1
+hold SHIFT
 hold F4
 enc 5
 wait 50
 shot ../build/sim/check/pages_click.png
 release F4
+release SHIFT
 wait 20
 expect_opt 1 click 85
 expect_opt 1 metronome 1

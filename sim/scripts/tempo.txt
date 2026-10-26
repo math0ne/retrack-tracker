@@ -1,0 +1,74 @@
+# Tempo: before a loop it sets the bar; after, hold F4 + encoder is tape speed.
+wait 300
+opt all start 0
+
+# Hold F4 with no loop: the set tempo (a bar of 4 beats at 100 bpm = 2.4 s).
+hold F4
+enc -20
+release F4
+wait 100
+expect_opt 1 tempo 100
+expect_opt 1 metronome 0
+
+# Track 1: a 1-bar take at 100 bpm.
+tone_shape steady
+tone 330
+tap 0
+wait 2500
+tap 0
+wait 2500
+expect_state 1 PLAY
+expect_len 1 2.4
+expect_opt 1 tempo 100
+
+# Tape speed 150 %: the loop keeps its length (in its own frames), the tempo reads 150.
+hold F4
+enc 50
+wait 100
+shot ../build/sim/check/tempo_knob.png
+release F4
+wait 100
+expect_opt 1 tempo 150
+expect_state 1 PLAY
+
+# A take at 150 %: a fixed bar (4 beats) is 2.4 s of loop, 1.6 s of real time.
+opt 2 length 4
+tap 2
+tap 12
+wait 1800
+expect_state 2 PLAY
+expect_len 2 2.4
+tap 14
+tap 2
+reset_levels
+wait 1700
+expect_audio 0.05
+
+# A tap still turns the metronome on; Shift + hold sets the click level.
+press F4
+wait 100
+expect_opt 1 metronome 1
+hold SHIFT
+hold F4
+enc -2
+release F4
+release SHIFT
+wait 100
+expect_opt 1 click 50
+expect_opt 1 tempo 150
+shot ../build/sim/check/tempo_lanes.png
+
+# Back to the loop's own tempo: exactly speed 1 again.
+hold F4
+enc -50
+release F4
+wait 100
+expect_opt 1 tempo 100
+
+# Clearing every track: the set tempo again.
+hold SHIFT
+press DELETE
+release SHIFT
+wait 600
+expect_state 1 EMPTY
+expect_opt 1 tempo 100

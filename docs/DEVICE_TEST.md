@@ -7,7 +7,7 @@ performance numbers.
 ## Before flashing
 
 - SD card `/Firmware/` holds `PolyendTracker_1.9.2.ptf` (the way back) and
-  `PolyendTracLooperv01.ptf` (from `make`, `build/`).
+  `PolyendTracLooperv01.ptf` (from `make`: copy `build/sdcard/Firmware/` onto the card).
 - Install: with the stock firmware or OpenTracker running, Config > Firmware
   update and pick `PolyendTracLooperv01.ptf`.
 - The way back: the looper has **no firmware-update screen**, so this is the

@@ -259,6 +259,19 @@ void App::onFKey(int key) {
     }
 }
 
+void App::tempoRange(int& lo, int& hi) const {
+    if (!engine_.masterLen()) {
+        lo = 40;
+        hi = 240;
+        return;
+    }
+    const float b = engine_.baseTempo();
+    lo = int(std::ceil(b * 0.5f));
+    hi = int(std::floor(b * 2.0f));
+    if (lo < 1) lo = 1;
+    if (hi > 255) hi = 255;
+}
+
 void App::onInput(const ot::InputEvent& ev) {
     using E = ot::InputEvent;
     if (ev.type == E::kPadDown || ev.type == E::kPadUp) {
@@ -274,10 +287,18 @@ void App::onInput(const ot::InputEvent& ev) {
             markConfig();
             return;
         }
-        if (f4Held_) {   // F4 held: click level
-            int c = int(engine_.opt(OptParam::kClick)) + ev.delta * (shift_ ? 1 : 5);
-            c = c < 0 ? 0 : (c > 100 ? 100 : c);
-            engine_.post(Engine::kOpt, 0, int16_t((int(OptParam::kClick) << 8) | c));
+        if (f4Held_) {   // F4 held: tempo (tape speed once there is a loop); Shift: click level
+            if (shift_) {
+                int c = int(engine_.opt(OptParam::kClick)) + ev.delta * 5;
+                c = c < 0 ? 0 : (c > 100 ? 100 : c);
+                engine_.post(Engine::kOpt, 0, int16_t((int(OptParam::kClick) << 8) | c));
+            } else {
+                int lo, hi;
+                tempoRange(lo, hi);
+                int v = int(engine_.opt(OptParam::kTempo)) + ev.delta;
+                v = v < lo ? lo : (v > hi ? hi : v);
+                engine_.post(Engine::kOpt, 0, int16_t((int(OptParam::kTempo) << 8) | v));
+            }
             f4Turned_ = true;
             return;
         }
@@ -808,12 +829,26 @@ void App::render(uint32_t now) {
         std::snprintf(v, sizeof v, "%u", unsigned(cfg_.gain));
         drawPopupKnob("Input gain", v, float(cfg_.gain) / 100.0f, gainShown_, 0x3DDC97,
                       inMeter_[0] > inMeter_[1] ? inMeter_[0] : inMeter_[1]);
-    } else if (f4Held_) {
+    } else if (f4Held_ && shift_) {
         char v[12];
         const uint8_t c = engine_.opt(OptParam::kClick);
         std::snprintf(v, sizeof v, "%u", unsigned(c));
         drawPopupKnob("Click level", v, float(c) / 100.0f, clickShown_, kAmber,
                       engine_.opt(OptParam::kMetronome) ? 0.4f : 0.0f);
+    } else if (f4Held_) {
+        // Tempo: with a loop the knob is the tape speed (50 .. 200 %, 100 % at the top).
+        char v[16];
+        int lo, hi;
+        tempoRange(lo, hi);
+        const int bpm = engine_.opt(OptParam::kTempo);
+        std::snprintf(v, sizeof v, "%d bpm", bpm);
+        const bool loop = engine_.masterLen() != 0;
+        const float frac = loop ? (engine_.speed() <= 1.0f ? (engine_.speed() - 0.5f) : 0.5f + (engine_.speed() - 1.0f) / 2.0f)
+                                : float(bpm - lo) / float(hi - lo);
+        char title[24];
+        if (loop) std::snprintf(title, sizeof title, "Tempo  %d%%", int(engine_.speed() * 100.0f + 0.5f));
+        else std::snprintf(title, sizeof title, "Tempo");
+        drawPopupKnob(title, v, frac, tempoShown_, kAmber, 0.0f);
     } else if (perf_ && heldFx_ >= 0) {
         drawPerfKnob();
     }
@@ -1164,8 +1199,8 @@ void App::drawFKeys() {
                     std::snprintf(val[i], sizeof val[i], "%s", v.muted.load() ? "On" : "Off");
                     break;
                 case 3:
-                    title[i] = "METRONOME";
-                    std::snprintf(val[i], sizeof val[i], "%s", engine_.opt(OptParam::kMetronome) ? "On" : "Off");
+                    title[i] = "TEMPO";   // amber while the metronome is on
+                    std::snprintf(val[i], sizeof val[i], "%u bpm", unsigned(engine_.opt(OptParam::kTempo)));
                     break;
                 case 4:
                     title[i] = "MODE";
@@ -1201,7 +1236,8 @@ void App::drawFKeys() {
             else if (fxPage_ >= 0) tcol = i < 6 ? scale(hc, 0.9f) : kDim;
             else if (mixer_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
             else if (options_) tcol = i < 5 ? scale(hc, 0.9f) : kDim;
-            else if (!modeBar_ && i < 5 && i != 3) tcol = scale(tc, 0.9f);   // F4 is global
+            else if (!modeBar_ && i == 3) tcol = engine_.opt(OptParam::kMetronome) ? kAmber : kDim;   // F4 is global
+            else if (!modeBar_ && i < 5) tcol = scale(tc, 0.9f);
             color(tcol);
             text(cx, kKeyY0 + 10, kFontSmall, Disp::kOptCenter, title[i]);
         }
@@ -1551,7 +1587,7 @@ void App::optEncoder(int delta) {
         case OptParam::kStart: hi = 2; break;
         case OptParam::kInput: hi = 3; break;
         case OptParam::kAfter: hi = 2; break;
-        case OptParam::kTempo: lo = 40; hi = 240; break;
+        case OptParam::kTempo: tempoRange(lo, hi); break;
         case OptParam::kBeats: lo = 1; hi = 12; break;
         case OptParam::kMetronome: hi = 1; break;
         case OptParam::kClick: hi = 100; step = shift_ ? 1 : 5; break;
@@ -1629,6 +1665,7 @@ void App::drawOptColumn(int c) {
         const uint8_t v = engine_.opt(p, t);
         bool locked = false;
         const char* note = nullptr;
+        char noteBuf[20];
         switch (p) {
             case OptParam::kStop: {
                 static const char* const n[3] = {"Free", "On bar", "On beat"};
@@ -1661,8 +1698,11 @@ void App::drawOptColumn(int c) {
             }
             case OptParam::kTempo:
                 std::snprintf(buf, sizeof buf, "%u bpm", unsigned(v));
-                locked = haveLoop;
-                note = locked ? "from loop" : nullptr;
+                if (haveLoop && engine_.speed() != 1.0f) {   // tape speed: the loop's own tempo beside it
+                    std::snprintf(noteBuf, sizeof noteBuf, "%d%% of %d", int(engine_.speed() * 100.0f + 0.5f),
+                                  int(engine_.baseTempo() + 0.5f));
+                    note = noteBuf;
+                }
                 break;
             case OptParam::kBeats: std::snprintf(buf, sizeof buf, "%u", unsigned(v)); break;
             case OptParam::kMetronome: std::snprintf(buf, sizeof buf, "%s", v ? "On" : "Off"); break;

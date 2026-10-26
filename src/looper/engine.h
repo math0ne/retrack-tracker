@@ -222,6 +222,9 @@ public:
     bool fxBusy(int slot) const { return fx_[slot].busy(); }
     float fxLfo(int slot) const { return fx_[slot].lfo(); }
     uint8_t perfParam(PerfFx fx) const { return perfParam_[int(fx)]; }
+    // Tape tempo: the speed against the tempo the loops were recorded at.
+    float speed() const { return float(speed16_) / 65536.0f; }
+    float baseTempo() const;   // the recorded tempo (from the bar); the tempo now = baseTempo() * speed()
 
 private:
     struct Grain {
@@ -266,6 +269,10 @@ private:
         uint32_t start = 0;          // buffer index of loop frame 0 (trim moves it)
         bool busy = false;           // an edit job is moving the audio
         bool launchDub = false;      // queued: overdub from the launch (Rec on a stopped track)
+        // Recording / overdub at a changed tempo: the input resampled onto the
+        // loop's own timeline (16.16 position, the input frame before).
+        int64_t recPos16 = 0;        // recording: this input frame's place in the buffer, 16.16
+        int16_t prevL = 0, prevR = 0;
         struct {
             bool has = false;
             uint32_t start = 0, len = 0, anchor = 0;
@@ -307,6 +314,7 @@ private:
     void startClockAlone(int t);
     void startRepeat(Track& k, PerfFx r);
     void beginTake(int t, uint32_t tf, const int16_t* pre, uint32_t preFrames);   // sound start
+    void dubVari(int t, uint64_t ph, uint64_t step16, const int16_t* in, float fb);   // overdub off speed 1
     void clearTrack(int t);
     void setMode(int t, PlayMode mode);
     uint64_t period16(const Track& k) const;
@@ -328,7 +336,22 @@ private:
     std::atomic<uint32_t> qHead_{0}, qTail_{0};
 
     // audio thread state
-    uint32_t t_ = 0;                 // global transport frame
+    // The bar clock runs in loop (buffer) frames, like tape: speed16_ loop
+    // frames per output frame, 16.16 (the tempo against the recorded one).
+    // t_ is its whole frames; tf(f) the clock at output frame f of the block.
+    uint32_t t_ = 0;                 // global transport frame (loop frames)
+    uint64_t tAcc_ = 0;              // the same, 16.16
+    uint32_t speed16_ = 65536;       // 32768 .. 131072 (50 .. 200 %), 1.0 while there is no loop
+    uint32_t lastBeat_ = 0xFFFFFFFFu;   // metronome: the beat of the last frame clicked
+    void setClock(uint32_t frames) {
+        t_ = frames;
+        tAcc_ = uint64_t(frames) << 16;
+        lastBeat_ = 0xFFFFFFFFu;
+    }
+    uint32_t tf(uint32_t f) const { return uint32_t((tAcc_ + uint64_t(f) * speed16_) >> 16); }
+    bool canDubNow(const Track& k) const {   // at a changed tempo only Forward overdubs (resampled)
+        return modeInfo(k.mode).canDub && (speed16_ == 65536 || k.mode == PlayMode::kForward);
+    }
     uint32_t L_ = 0;                 // master loop length
     bool running_ = false;
     bool monitor_ = true;

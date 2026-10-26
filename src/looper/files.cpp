@@ -251,7 +251,10 @@ void Files::postSettings(const ProjectFile& pf, bool tracks) {
         }
         return;
     }
-    if (pf.bar) e.post(Engine::kSetBar, 0, 0, pf.bar);
+    if (pf.bar) {
+        e.post(Engine::kSetBar, 0, 0, pf.bar);
+        opt(0, OptParam::kTempo, pf.bpm);   // with the bar in, the saved tempo is a tape speed
+    }
     for (int t = 0; t < kTracks; ++t) {
         const ProjectTrack& pt = pf.track[t];
         mix(t, MixParam::kLevel, pt.volume);
