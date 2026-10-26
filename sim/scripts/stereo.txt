@@ -1,6 +1,8 @@
 # Stereo: channels stay separate through record, playback and overdub.
 # The tone is switched off before every check, so only the loops are heard.
 wait 300
+# These checks were written for takes that start at once (the default is a count-in).
+opt all start 0
 
 # Track 1: left-only take (master, 2 s).
 tone_ch left

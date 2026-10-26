@@ -1,6 +1,8 @@
 # Send effects through the mixer page. The tails are heard after the transport
 # stops: tracks go silent, the effects ring on.
 wait 300
+# These checks were written for takes that start at once (the default is a count-in).
+opt all start 0
 tap 0
 wait 2000
 tap 0

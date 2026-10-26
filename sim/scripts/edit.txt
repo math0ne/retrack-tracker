@@ -1,0 +1,64 @@
+# Loop editor (S.Edit): trim, undo, cut, erase. Track 1: a steady tone, left
+# for the first second of a 2 s loop, right for the second, so the channel
+# tells which part of the loop is left.
+wait 300
+opt all start 0
+tone_shape steady
+tone 330
+tone_ch left
+tap 0
+wait 1000
+tone_ch right
+wait 1000
+tap 0
+tone off
+expect_len 1 2.0
+
+# Snap is a beat (0.5 s at 120 bpm). End marker two beats back: keep the first second.
+press SAMPLEEDITOR
+press F2
+enc -2
+wait 100
+shot ../build/sim/check/edit_selection.png
+press F4
+wait 100
+expect_len 1 1.0
+reset_levels
+wait 1100
+expect_ch left 0.2
+expect_ch right silent
+shot ../build/sim/check/edit_trimmed.png
+
+# Undo: the whole loop again, right half included.
+press F7
+wait 100
+expect_len 1 2.0
+reset_levels
+wait 2100
+expect_ch right 0.2
+
+# Cut the second second (start marker two beats on): press CUT twice.
+press F1
+enc 2
+press F5
+wait 50
+shot ../build/sim/check/edit_cut_confirm.png
+press F5
+wait 500
+expect_len 1 1.0
+reset_levels
+wait 1100
+expect_ch left 0.2
+expect_ch right silent
+
+# Erase the whole (now 1 s) loop: silent, same length.
+press F6
+press F6
+wait 500
+expect_len 1 1.0
+reset_levels
+wait 1100
+expect_silent
+press NOTE
+wait 100
+shot ../build/sim/check/edit_home.png

@@ -5,32 +5,45 @@
 //   F1 Rec/Dub   F2 Play/Stop   F3 Mute   F4 Clear (Shift: all)     -- selected track
 //   F5 Mode      opens the mode bar: the eight labels become the eight playback
 //                modes, the key under one picks it (any other key cancels)
-//   F6 Input     line / mic low / mic high   F7 Monitor on/off   F8 overdub feedback
+//   F6 Input     line / mic low / mic high   F8 overdub feedback
+//   F7 Monitor   tap: on/off; hold + encoder: input gain (a knob shows while held)
 // Other keys
 //   Pads (4 rows x 12): row = track. Col 1 REC/DUB, col 2 PLAY/STOP, col 3 MUTE,
 //                       col 4 CLEAR, cols 5..12 jump to that eighth of the loop
 //   Rec / Play   record-overdub the selected track / transport start-stop
 //   Delete       clear the selected track (Shift: all)   Up/Down  select track
 //   Encoder      selected track volume (Shift: input gain)
+//   Shift+Play   metronome on/off
 //   Help         toggle the load / frame-rate readout
 //   Shift+Help   stress preset: the heaviest audio load, for measuring on the device
+//   Note         home: the loop lanes, from any page
 //   Master       mixer page on/off
-//   I.Param      track options page on/off
+//   I.Param      track options page on/off;  Song: the same page at the tempo column
+//   FX1 / FX2    that effect slot's page on/off
+//   S.Edit       loop editor for the selected track: F1/F2 start/end marker,
+//                F3 snap, F4 trim, F5 cut, F6 erase (twice), F7 undo trim, F8 home
 //   Perform      performance mode: tap to latch it on (tap again for off), or
 //                hold it (off on release). The waveforms show 8 effect cells
 //                laid out like pad columns 5..12 of the track's row; a pad plays
 //                its effect on that track while held, Shift + pad latches it.
+//                Turning the encoder while an effect pad is held sets that
+//                effect's knob (shown over the lanes).
 //   Power        hold 1.5 s to switch off
 //
 // Track options page: a column per track over F1..F4 (stop: free / on bar /
-// on beat, fixed length, count-in, input stereo / mono, what follows a take)
-// and the tempo column over F5 (BPM, beats per bar, metronome, click level).
-// Same navigation as the mixer; F8 goes back.
+// on beat, fixed length, start: now / count-in / on sound, input stereo /
+// mono, what follows a take) and the tempo column over F5 (BPM, beats per bar,
+// metronome, click level, sound threshold). Same navigation as the mixer; F8 home.
 //
 // Mixer page: seven strips, each over its screen key: tracks 1-4 (send 1,
-// send 2, level), FX 1 delay (time, feedback, return), FX 2 reverb (size,
-// tone, return) and master (level). F1..F7 or Left/Right pick a strip,
-// Up/Down a row, the encoder sets it (Shift: fine). F8 goes back to the loops.
+// send 2, level), FX 1 and FX 2 (their first two knobs and return) and master
+// (level). F1..F7 or Left/Right pick a strip, Up/Down a row, the encoder sets
+// it (Shift: fine). F8 home.
+//
+// FX page (FX1 / FX2): the effect's picture on top, its knobs below. F1 TYPE
+// opens the type bar (the labels become the five effect types; the key under
+// one picks it), F2..F5 pick a knob, F6 the return, F7 the other slot, F8 home.
+// Left/Right also move between knobs; the encoder turns the selected one.
 //
 // Drawing goes straight to the FT81x display list (no widget layer). The
 // waveforms are RGB332 bitmaps rendered here and copied to RAM_G, so each lane
@@ -49,11 +62,17 @@ public:
     bool init(const Platform& p);
     void loop();
     const Engine& engine() const { return engine_; }   // read-only, for the simulator's checks
+    // Simulator scripts: set an option directly (as the options page would).
+    void scriptOpt(int track, OptParam p, int value) {
+        engine_.post(Engine::kOpt, uint8_t(track), int16_t((int(p) << 8) | (value & 0xFF)));
+    }
 
     // Bitmap geometry (public for the RAM_G layout check).
     static constexpr uint16_t kWaveW = 660, kWaveH = 88;
     static constexpr uint32_t kWaveBytes = uint32_t(kWaveW) * kWaveH;
     static constexpr uint32_t kWaveRamG = 0x090000;   // above the font image (ends 0x08C3E0)
+    static constexpr uint16_t kEditW = 760, kEditH = 160;   // the loop editor's waveform
+    static constexpr uint32_t kEditRamG = 0x0C9000;   // after the four lane bitmaps
 
 private:
     static void audioFill(int16_t* out, uint32_t frames, void* ctx);
@@ -65,6 +84,7 @@ private:
     void updateLeds(uint32_t now);
     void updateWaves(uint32_t now);
     void renderWave(int t, uint32_t span);
+    void renderBitmap(int t, uint32_t span, int w, int h, uint32_t ramg);
     void render(uint32_t now);
 
     // drawing helpers (count display-list words for the readout)
@@ -85,7 +105,10 @@ private:
     // mixer page
     static constexpr int kStrips = 7;     // 4 tracks, delay, reverb, master
     static constexpr int kRows = 3;       // two small parameters, then the fader
-    bool mixParam(int strip, int row, MixParam& p, int& track) const;
+    bool mixParam(int strip, int row, MixParam& p, int& track, int& fxKnob) const;
+    void stepFxKnob(int slot, int knob, int delta);
+    void fxKnobText(int slot, int knob, char* buf, size_t n) const;
+    float fxKnobFrac(int slot, int knob) const;
     void mixerKey(uint8_t id);
     void mixerEncoder(int delta);
     void drawMixer();
@@ -99,7 +122,52 @@ private:
     void optEncoder(int delta);
     void drawOptions();
     void drawOptColumn(int c);
-    void drawGrid(int t, int wx, int wy, uint32_t span);
+    void drawGrid(int t, int wx, int wy, uint32_t span, int w = kWaveW, int h = kWaveH);
+
+    // FX page
+    static constexpr int kFxPageKnobs = kFxKnobs + 1;   // the type's knobs, then the return
+    void goHome();
+    void fxKey(uint8_t id);
+    void fxEncoder(int delta);
+    void drawFxPage(uint32_t now);
+    void drawFxVisual(int slot, uint32_t now);
+    void drawKnob(int cx, int cy, int r, float frac, float shown, uint32_t col, bool sel, float glow,
+                  const char* name, const char* value);
+    void arc(int cx, int cy, float r, float a0, float a1, int segs);   // a LINE_STRIP arc, radians
+    int fxPage_ = -1;             // slot shown, -1 = none
+    bool fxBar_ = false;          // F1: the labels show the effect types
+    int fxSel_ = 0;               // selected knob, kFxKnobs = return
+    float knobShown_[kFxSlots][kFxPageKnobs] = {};   // eased towards the values: the knobs glide
+
+    // performance knob: hold an effect pad and turn the encoder
+    void drawPerfKnob();
+    void perfLabel(PerfFx fx, char* buf, size_t n) const;   // "Rpt 1/8" etc.
+    void perfValue(PerfFx fx, char* buf, size_t n) const;
+    int heldFx_ = -1;             // effect of the pad held last (or -1)
+    uint8_t heldPads_[kTracks] = {};   // held effect pads per track
+    float perfShown_ = 0.0f;
+    // Loop editor (S.Edit): a big waveform of one track, start / end markers on
+    // a snap grid, trim (non-destructive, undo), cut and erase (press twice).
+    void editKey(uint8_t id);
+    void editEncoder(int delta);
+    void editReset();
+    uint32_t editUnit(bool fine) const;
+    void drawEditPage(uint32_t now);
+    void fmtPos(char* buf, size_t n, uint32_t frames) const;   // bar.beat.16th from the loop start
+    bool edit_ = false;
+    int editTrack_ = 0;
+    uint32_t editA_ = 0, editB_ = 0;   // selection, loop frames
+    int editMarker_ = 0;               // 0 start, 1 end
+    uint8_t editSnap_ = 1;             // 0 bar, 1 beat, 2 1/16, 3 free
+    uint32_t editLen_ = 0, editStart_ = 0, editVersion_ = 0xFFFFFFFFu;   // what the bitmap shows
+    bool editValid_ = false;
+    int confirm_ = -1;                 // F-key waiting for its second press
+    uint32_t confirmUntilMs_ = 0;
+
+    // F7 on the home page: tap = monitor on/off, hold + encoder = input gain
+    bool f7Held_ = false, f7Turned_ = false;
+    float gainShown_ = 0.5f;
+    void drawPopupKnob(const char* title, const char* value, float frac, float& shown, uint32_t col, float meter);
 
     Platform p_;
     Engine engine_;

@@ -1,6 +1,8 @@
 # Track options: quantised stop, free stop, count-in with a fixed length, mono input.
 # Tempo 120 bpm, 4 beats: a bar is 2.0 s until the first loop sets it.
 wait 300
+# These checks were written for takes that start at once (the default is a count-in).
+opt all start 0
 
 # Track 1, stop "On bar" (the default): stopping 0.5 s into bar 2 records on to its end.
 tap 0

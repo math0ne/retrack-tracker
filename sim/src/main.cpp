@@ -22,7 +22,11 @@
 //   expect_silent      fail unless the output peak since the last reset < 0.001, then reset
 //   expect_ch left|right MIN|silent   the same for one channel (no reset)
 //   expect_len TRACK SEC          track (1..4) loop length, within 10 ms
-//   expect_state TRACK NAME       EMPTY, COUNT, REC, PLAY, DUB or STOP
+//   expect_state TRACK NAME       EMPTY, COUNT, ARMED, REC, PLAY, DUB or STOP
+//   opt TRACK|all NAME VALUE      set an option (stop, length, start, input, after, tempo,
+//                                 beats, metronome, click, threshold) as the options page does
+//   expect_fx SLOT TYPE [K V]     FX slot (1..2) holds TYPE (and knob K, 1..4, is V)
+//   expect_perfknob FX VALUE      performance effect FX (1..8) knob value
 //   tone_shape steady|bursts      a continuous sine, or the default bursts
 //   expect_below MAX              fail unless the output peak since the last reset < MAX, then reset
 //   expect_perf TRACK FX on|off   performance effect FX (1..8, pad columns 5..12) running
@@ -312,14 +316,58 @@ struct Headless {
                 ok = ok && pass;
             } else if (cmd == "expect_state") {
                 // expect_state TRACK EMPTY|COUNT|REC|PLAY|DUB|STOP
-                static const char* const kNames[] = {"CLEAR", "EMPTY", "COUNT", "REC", "PLAY", "DUB", "STOP"};
+                static const char* const kNames[] = {"CLEAR", "EMPTY", "COUNT", "ARMED", "REC", "PLAY", "DUB", "STOP"};
                 std::string want;
                 in >> want;
                 const int t = std::atoi(arg.c_str()) - 1;
                 const int s = t >= 0 && t < looper::kTracks ? int(m.app.engine().view(t).state.load()) : 0;
-                const bool pass = s >= 0 && s < 7 && want == kNames[s];
+                const bool pass = s >= 0 && s < 8 && want == kNames[s];
                 std::printf("%s:%d: expect_state %s %s %s (%s)\n", path.c_str(), lineNo, arg.c_str(), want.c_str(),
-                            pass ? "PASS" : "FAIL", s >= 0 && s < 7 ? kNames[s] : "?");
+                            pass ? "PASS" : "FAIL", s >= 0 && s < 8 ? kNames[s] : "?");
+                ok = ok && pass;
+            } else if (cmd == "opt") {
+                // opt TRACK|all NAME VALUE: a track option, as the options page sets it
+                static const char* const kNames[] = {"stop",  "length",    "start", "input", "after",
+                                                     "tempo", "beats", "metronome", "click", "threshold"};
+                std::string name, val;
+                in >> name >> val;
+                int p = -1;
+                for (int i = 0; i < 10; ++i)
+                    if (name == kNames[i]) p = i;
+                if (p < 0) {
+                    std::fprintf(stderr, "%s:%d: unknown option %s\n", path.c_str(), lineNo, name.c_str());
+                    ok = false;
+                } else {
+                    const int v = std::atoi(val.c_str());
+                    const int t0 = arg == "all" ? 0 : std::atoi(arg.c_str()) - 1;
+                    const int t1 = arg == "all" ? looper::kTracks - 1 : t0;
+                    for (int t = t0; t <= t1; ++t) m.app.scriptOpt(t, looper::OptParam(p), v);
+                    advance(5);
+                }
+            } else if (cmd == "expect_fx") {
+                // expect_fx SLOT TYPE [KNOB VALUE]: slot 1..2, type name as on the screen
+                std::string type, kn, kv;
+                in >> type >> kn >> kv;
+                const int s = std::atoi(arg.c_str()) - 1;
+                bool pass = s >= 0 && s < looper::kFxSlots &&
+                            type == looper::fxTypeInfo(m.app.engine().fxType(s)).name;
+                if (pass && !kn.empty())
+                    pass = m.app.engine().fxKnob(s, std::atoi(kn.c_str()) - 1) == std::atoi(kv.c_str());
+                std::printf("%s:%d: expect_fx %s %s %s %s %s (%s, knobs %u %u %u %u)\n", path.c_str(), lineNo,
+                            arg.c_str(), type.c_str(), kn.c_str(), kv.c_str(), pass ? "PASS" : "FAIL",
+                            s >= 0 && s < looper::kFxSlots ? looper::fxTypeInfo(m.app.engine().fxType(s)).name : "?",
+                            unsigned(m.app.engine().fxKnob(s, 0)), unsigned(m.app.engine().fxKnob(s, 1)),
+                            unsigned(m.app.engine().fxKnob(s, 2)), unsigned(m.app.engine().fxKnob(s, 3)));
+                ok = ok && pass;
+            } else if (cmd == "expect_perfknob") {
+                // expect_perfknob FX VALUE: performance effect FX (1..8) knob value
+                std::string val;
+                in >> val;
+                const int e = std::atoi(arg.c_str()) - 1;
+                const int got = e >= 0 && e < looper::kPerfFxCount ? m.app.engine().perfParam(looper::PerfFx(e)) : -1;
+                const bool pass = got == std::atoi(val.c_str());
+                std::printf("%s:%d: expect_perfknob %s %s %s (%d)\n", path.c_str(), lineNo, arg.c_str(), val.c_str(),
+                            pass ? "PASS" : "FAIL", got);
                 ok = ok && pass;
             } else if (cmd == "tone_shape") m.tone.steady = arg == "steady";
             else if (cmd == "expect_below") {

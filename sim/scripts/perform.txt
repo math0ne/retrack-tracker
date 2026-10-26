@@ -3,6 +3,8 @@
 # Pads: track row, columns 5..12 = Rpt 1/8, Rpt 1/16, Low-pass, High-pass,
 # Sweep dn, Sweep up, Vibrato, Tape stop (track 1 pads 4..11).
 wait 300
+# These checks were written for takes that start at once (the default is a count-in).
+opt all start 0
 tone_shape steady
 tone 330
 tone_ch left

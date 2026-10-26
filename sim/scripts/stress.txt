@@ -2,6 +2,8 @@
 # with both filters latched and full sends, metronome on. Device measurement
 # aid; here it only checks the preset lands.
 wait 300
+# These checks were written for takes that start at once (the default is a count-in).
+opt all start 0
 tone_shape steady
 tone 440
 tap 0

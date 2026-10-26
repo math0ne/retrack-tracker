@@ -2,6 +2,8 @@
 # first second and on the right for its second second, so the channel that
 # sounds tells which way the loop is being read.
 wait 300
+# These checks were written for takes that start at once (the default is a count-in).
+opt all start 0
 tone_ch left
 tap 0
 wait 1000

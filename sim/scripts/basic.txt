@@ -1,6 +1,8 @@
 # Basic looper flow, headless, with the synthetic line input (--tone).
 # Pads: row = track, col 0 REC, 1 PLAY/STOP, 2 MUTE, 3 CLEAR, 4..11 jump.
 wait 300
+# These checks were written for takes that start at once (the default is a count-in).
+opt all start 0
 shot ../build/sim/check/01_empty.png
 
 # Track 1 master take: 2 s of input.
