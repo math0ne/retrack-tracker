@@ -59,7 +59,7 @@ eight screen keys, each centred over its key as on the stock Tracker.
 | F1 REC | Record / finish / overdub / stop overdub |
 | F2 PLAY | Stop: the track goes silent and back to its start. Play: it starts again from its start on the next bar line (WAIT; press again to cancel) |
 | F3 MUTE | Mute on/off |
-| F4 CLEAR | Clear the track; with Shift, all tracks |
+| F4 METRONOME | Tap: metronome on/off. Hold + encoder: click level (a knob shows while held). Delete clears tracks |
 | F5 MODE | Opens the mode bar: the eight labels become the playback modes and the key under one picks it. Any other key closes it. |
 | F6 INPUT | Line in / mic low / mic high (the cell shows the input level) |
 | F7 MONITOR | Tap: input monitoring on/off. Hold + encoder: input gain (a knob with the input level shows while held) |

@@ -25,6 +25,7 @@
 //   expect_state TRACK NAME       EMPTY, COUNT, ARMED, REC, PLAY, DUB, STOP or QUEUED
 //   opt TRACK|all NAME VALUE      set an option (stop, length, start, input, after, tempo,
 //                                 beats, metronome, click, threshold) as the options page does
+//   expect_opt TRACK NAME VALUE   an option's value (names as for opt)
 //   expect_fx SLOT TYPE [K V]     FX slot (1..2) holds TYPE (and knob K, 1..4, is V)
 //   expect_perfknob FX VALUE      performance effect FX (1..8) knob value
 //   tone_shape steady|bursts      a continuous sine, or the default bursts
@@ -344,6 +345,22 @@ struct Headless {
                     for (int t = t0; t <= t1; ++t) m.app.scriptOpt(t, looper::OptParam(p), v);
                     advance(5);
                 }
+            } else if (cmd == "expect_opt") {
+                // expect_opt TRACK NAME VALUE: an option's value (names as for opt)
+                static const char* const kNames[] = {"stop",  "length",    "start", "input", "after",
+                                                     "tempo", "beats", "metronome", "click", "threshold"};
+                std::string name, val;
+                in >> name >> val;
+                int p = -1;
+                for (int i = 0; i < 10; ++i)
+                    if (name == kNames[i]) p = i;
+                const int t = std::atoi(arg.c_str()) - 1;
+                const int got = p >= 0 && t >= 0 && t < looper::kTracks
+                                    ? m.app.engine().opt(looper::OptParam(p), t) : -1;
+                const bool pass = got == std::atoi(val.c_str());
+                std::printf("%s:%d: expect_opt %s %s %s %s (%d)\n", path.c_str(), lineNo, arg.c_str(), name.c_str(),
+                            val.c_str(), pass ? "PASS" : "FAIL", got);
+                ok = ok && pass;
             } else if (cmd == "expect_fx") {
                 // expect_fx SLOT TYPE [KNOB VALUE]: slot 1..2, type name as on the screen
                 std::string type, kn, kv;

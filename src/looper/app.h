@@ -2,7 +2,8 @@
 //
 // Screen: four track lanes and, along the bottom edge, the labels of the eight
 // screen keys F1..F8, each centred over its key as on the stock Tracker.
-//   F1 Rec/Dub   F2 Play/Stop   F3 Mute   F4 Clear (Shift: all)     -- selected track
+//   F1 Rec/Dub   F2 Play/Stop   F3 Mute                             -- selected track
+//   F4 Metronome tap: on/off; hold + encoder: click level (Delete clears a track)
 //   F5 Mode      opens the mode bar: the eight labels become the eight playback
 //                modes, the key under one picks it (any other key cancels)
 //   F6 Input     line / mic low / mic high   F8 overdub feedback
@@ -167,6 +168,9 @@ private:
     // F7 on the home page: tap = monitor on/off, hold + encoder = input gain
     bool f7Held_ = false, f7Turned_ = false;
     float gainShown_ = 0.5f;
+    // F4 on the home page: tap = metronome on/off, hold + encoder = click level
+    bool f4Held_ = false, f4Turned_ = false;
+    float clickShown_ = 0.6f;
     void drawPopupKnob(const char* title, const char* value, float frac, float& shown, uint32_t col, float meter);
 
     Platform p_;

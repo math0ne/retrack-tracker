@@ -234,8 +234,7 @@ void App::onFKey(int key) {
         case 0: record(selected_); break;
         case 1: engine_.post(Engine::kPlayStop, t); break;
         case 2: engine_.post(Engine::kMute, t); break;
-        case 3: engine_.post(shift_ ? Engine::kClearAll : Engine::kClear, t); break;
-        case 4: modeBar_ = true; break;
+        case 4: modeBar_ = true; break;   // F4 (metronome) and F7 (monitor) are tap / hold keys: onInput
         case 5:
             source_ = source_ == 0 ? 2 : (source_ == 2 ? 3 : 0);
             if (p_.selectInput) p_.selectInput(source_, inputGain_);
@@ -263,6 +262,13 @@ void App::onInput(const ot::InputEvent& ev) {
             inputGain_ = uint8_t(g < 0 ? 0 : (g > 100 ? 100 : g));
             if (p_.selectInput) p_.selectInput(source_, inputGain_);
             f7Turned_ = true;
+            return;
+        }
+        if (f4Held_) {   // F4 held: click level
+            int c = int(engine_.opt(OptParam::kClick)) + ev.delta * (shift_ ? 1 : 5);
+            c = c < 0 ? 0 : (c > 100 ? 100 : c);
+            engine_.post(Engine::kOpt, 0, int16_t((int(OptParam::kClick) << 8) | c));
+            f4Turned_ = true;
             return;
         }
         if (perf_ && heldFx_ >= 0) {
@@ -327,6 +333,20 @@ void App::onInput(const ot::InputEvent& ev) {
         } else if (f7Held_) {
             f7Held_ = false;
             if (!f7Turned_) engine_.post(Engine::kMonitor, 0, engine_.monitoring() ? 0 : 1);
+        }
+        return;
+    }
+    // Home page F4: a tap turns the metronome on / off; held, the encoder sets the click level.
+    if (ev.id == b::F4 && (home || f4Held_)) {
+        if (down) {
+            f4Held_ = true;
+            f4Turned_ = false;
+        } else if (f4Held_) {
+            f4Held_ = false;
+            if (!f4Turned_) {
+                const bool on = !engine_.opt(OptParam::kMetronome);
+                engine_.post(Engine::kOpt, 0, int16_t((int(OptParam::kMetronome) << 8) | (on ? 1 : 0)));
+            }
         }
         return;
     }
@@ -745,6 +765,12 @@ void App::render(uint32_t now) {
         std::snprintf(v, sizeof v, "%u", unsigned(inputGain_));
         drawPopupKnob("Input gain", v, float(inputGain_) / 100.0f, gainShown_, 0x3DDC97,
                       inMeter_[0] > inMeter_[1] ? inMeter_[0] : inMeter_[1]);
+    } else if (f4Held_) {
+        char v[12];
+        const uint8_t c = engine_.opt(OptParam::kClick);
+        std::snprintf(v, sizeof v, "%u", unsigned(c));
+        drawPopupKnob("Click level", v, float(c) / 100.0f, clickShown_, kAmber,
+                      engine_.opt(OptParam::kMetronome) ? 0.4f : 0.0f);
     } else if (perf_ && heldFx_ >= 0) {
         drawPerfKnob();
     }
@@ -1070,9 +1096,8 @@ void App::drawFKeys() {
                     std::snprintf(val[i], sizeof val[i], "%s", v.muted.load() ? "On" : "Off");
                     break;
                 case 3:
-                    title[i] = "CLEAR";
-                    if (shift_) std::snprintf(val[i], sizeof val[i], "All");
-                    else std::snprintf(val[i], sizeof val[i], "Track %c", char('1' + selected_));
+                    title[i] = "METRONOME";
+                    std::snprintf(val[i], sizeof val[i], "%s", engine_.opt(OptParam::kMetronome) ? "On" : "Off");
                     break;
                 case 4:
                     title[i] = "MODE";
@@ -1106,7 +1131,7 @@ void App::drawFKeys() {
             else if (fxPage_ >= 0) tcol = i < 6 ? scale(hc, 0.9f) : kDim;
             else if (mixer_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
             else if (options_) tcol = i < 5 ? scale(hc, 0.9f) : kDim;
-            else if (!modeBar_ && i < 5) tcol = scale(tc, 0.9f);
+            else if (!modeBar_ && i < 5 && i != 3) tcol = scale(tc, 0.9f);   // F4 is global
             color(tcol);
             text(cx, kKeyY0 + 10, kFontSmall, Disp::kOptCenter, title[i]);
         }
