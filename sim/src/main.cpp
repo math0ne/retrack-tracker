@@ -26,6 +26,7 @@
 //   opt TRACK|all NAME VALUE      set an option (stop, length, start, input, after, tempo,
 //                                 beats, metronome, click, threshold) as the options page does
 //   expect_opt TRACK NAME VALUE   an option's value (names as for opt)
+//   expect_file PATH MINBYTES     a file on the SD card folder, at least MINBYTES long
 //   expect_fx SLOT TYPE [K V]     FX slot (1..2) holds TYPE (and knob K, 1..4, is V)
 //   expect_perfknob FX VALUE      performance effect FX (1..8) knob value
 //   tone_shape steady|bursts      a continuous sine, or the default bursts
@@ -45,6 +46,7 @@
 
 #include "canvas.h"
 #include "host_hal.h"
+#include "host_storage.h"
 #include "looper/app.h"
 #include "panel.h"
 #include "png.h"
@@ -64,6 +66,7 @@ struct Options {
     long quitAfterMs = -1;
     std::string toneCh = "both";
     bool telemetry = false;   // print the app's once-a-second telemetry line
+    std::string sd;           // the SD card: a host folder (default: "sd" next to the program)
     std::string script, wav, shot;
 };
 
@@ -76,6 +79,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--tone" && (v = next())) o.tone = float(std::atof(v));
         else if (a == "--tone-ch" && (v = next())) o.toneCh = v;
         else if (a == "--telemetry") o.telemetry = true;
+        else if (a == "--sd" && (v = next())) o.sd = v;
         else if (a == "--scale" && (v = next())) o.scale = std::atoi(v) < 1 ? 1 : std::atoi(v);
         else if (a == "--quit-after" && (v = next())) o.quitAfterMs = std::atol(v);
         else if (a == "--script" && (v = next())) o.script = v;
@@ -151,6 +155,7 @@ struct Machine {
     ManualAudio manualAudio;
     ChannelProbe probe{manualAudio};
     ToneIn tone;
+    HostStorage storage;
     ot::IAudioOut* audio = nullptr;
     std::vector<uint8_t> loopMem, scratch;
     std::vector<float> fxMem;   // float elements: 4-byte aligned
@@ -192,6 +197,13 @@ struct Machine {
         p.scratch = scratch.data();
         p.scratchBytes = uint32_t(scratch.size());
         p.powerOff = [] { std::exit(0); };
+        if (!o.sd.empty() && storage.init(o.sd)) {
+            p.storage = &storage;
+            p.storageReady = [] { return true; };
+        } else {
+            std::fprintf(stderr, "no SD folder: settings and projects are off\n");
+        }
+        p.version = "sim";
         if (o.telemetry) p.log = [](const char* line) { std::printf("%s\n", line); };
         if (!app.init(p)) {
             std::fprintf(stderr, "looper init failed\n");
@@ -345,6 +357,17 @@ struct Headless {
                     for (int t = t0; t <= t1; ++t) m.app.scriptOpt(t, looper::OptParam(p), v);
                     advance(5);
                 }
+            } else if (cmd == "expect_file") {
+                // expect_file PATH MINBYTES: a file on the SD card, at least that big
+                std::string minb;
+                in >> minb;
+                const ot::IStorage::Handle fh = m.storage.open(arg.c_str(), ot::IStorage::kRead);
+                const int32_t sz = fh >= 0 ? m.storage.size(fh) : -1;
+                if (fh >= 0) m.storage.close(fh);
+                const bool pass = sz >= std::atol(minb.c_str());
+                std::printf("%s:%d: expect_file %s %s %s (%ld bytes)\n", path.c_str(), lineNo, arg.c_str(),
+                            minb.c_str(), pass ? "PASS" : "FAIL", static_cast<long>(sz));
+                ok = ok && pass;
             } else if (cmd == "expect_opt") {
                 // expect_opt TRACK NAME VALUE: an option's value (names as for opt)
                 static const char* const kNames[] = {"stop",  "length",    "start", "input", "after",
@@ -571,6 +594,11 @@ int runInteractive(Machine& m, const Options& o) {
 int main(int argc, char** argv) {
     Options o;
     if (!parseArgs(argc, argv, o)) return 2;
+    if (o.sd.empty()) {   // the card: a folder "sd" next to the program
+        std::string self = argv[0];
+        const size_t slash = self.find_last_of('/');
+        o.sd = (slash == std::string::npos ? std::string(".") : self.substr(0, slash)) + "/sd";
+    }
     const bool headless = !o.script.empty();
     static Machine m;   // 16 MB of loop memory: keep it off the stack
     if (!m.start(o, headless)) return 1;

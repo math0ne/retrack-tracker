@@ -21,6 +21,8 @@
 //   Master       mixer page on/off
 //   Instr        track options page on/off;  Song: the same page at the tempo column
 //   FX1 / FX2    that effect slot's page on/off
+//   Config       settings: display and pad brightness, headphones, input, monitor
+//   File         projects (F1 save, F2 save new, F3 load) and WAV export (F5 track, F6 all)
 //   S.Edit       loop editor for the selected track: F1/F2 start/end marker,
 //                F3 snap, F4 trim, F5 cut, F6 erase (twice), F7 undo trim, F8 home
 //   Perform      performance mode: tap to latch it on (tap again for off), or
@@ -54,6 +56,7 @@
 #include <cstdint>
 
 #include "looper/engine.h"
+#include "looper/files.h"
 #include "looper/platform.h"
 
 namespace looper {
@@ -192,8 +195,21 @@ private:
     uint32_t perfDownMs_ = 0;
     uint8_t perfLatch_[kTracks] = {};   // latched effect bits per track
     bool stats_ = false;
-    uint8_t source_ = 0;         // 0 line, 2 mic low, 3 mic high
-    uint8_t inputGain_ = 50;
+    // Settings kept on the card (Config page; input source and gain too)
+    Files files_;
+    Config cfg_;
+    bool cfgDirty_ = false;
+    uint32_t cfgDirtyMs_ = 0;
+    void markConfig();           // saved a second after the last change
+    void applyConfig();
+    // Config and File pages
+    bool config_ = false, file_ = false;
+    int cfgRow_ = 0, projSel_ = 0;
+    void configKey(uint8_t id);
+    void configEncoder(int delta);
+    void drawConfig();
+    void fileKey(uint8_t id);
+    void drawFile();
     uint32_t powerDownMs_ = 0;
     bool powerHeld_ = false;
 

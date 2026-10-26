@@ -1,0 +1,70 @@
+# Config settings, WAV export, project save and load (on a fresh SD folder).
+wait 300
+opt all start 0
+
+# Config: pad brightness down, saved to the card a second later.
+press CONFIG
+press DOWN
+enc -3
+wait 1300
+expect_file Looper/config.bin 14
+shot ../build/sim/check/files_config.png
+press NOTE
+
+# Track 1: left first second, right second (2 s); track 2 mono, a 1-bar take.
+tone_shape steady
+tone 330
+tone_ch left
+tap 0
+wait 1000
+tone_ch right
+wait 1000
+tap 0
+opt 2 input 3
+tone_ch both
+tap 12
+wait 2000
+tap 12
+wait 2100
+tone off
+expect_len 1 2.0
+expect_state 2 PLAY
+
+# Export all: one folder, a WAV per track (2 s stereo = 352,844 bytes with the
+# header, 2 s mono = 176,444).
+press FILE
+press F6
+wait 1500
+expect_file Looper/Export/001/track1.wav 352844
+expect_file Looper/Export/001/track2.wav 176444
+shot ../build/sim/check/files_exported.png
+
+# Save as project 001, change things, then load it back.
+press F1
+wait 1500
+expect_file Looper/Projects/001/project.bin 136
+expect_file Looper/Projects/001/track1.wav 352844
+press NOTE
+hold SHIFT
+press DELETE
+release SHIFT
+wait 600
+expect_state 1 EMPTY
+press FILE
+press F3
+press F3
+wait 3000
+expect_len 1 2.0
+expect_state 1 PLAY
+expect_state 2 PLAY
+expect_opt 2 input 3
+shot ../build/sim/check/files_loaded.png
+press NOTE
+# Play starts everything from bar 1: track 1 (track 2 muted) plays its left half first.
+tap 14
+press PLAY
+wait 100
+reset_levels
+wait 700
+expect_ch left 0.2
+expect_ch right silent

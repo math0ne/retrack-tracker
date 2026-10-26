@@ -1,6 +1,7 @@
 # Tracker Looper desktop simulator: src/looper + src/platform + the OpenTracker host HAL in sim/src.
 #   make -C sim   -> build/sim/looper-sim
-#   make -C sim check  -> run the headless scripts in sim/scripts
+#   make -C sim check  -> run the headless scripts in sim/scripts, each on a fresh SD folder
+#                         (build/sim/check/sd_<script>)
 CXX      ?= g++
 ROOT     := ..
 OUT      := $(ROOT)/build/sim
@@ -12,8 +13,8 @@ LDLIBS   := $(SDL_LIBS) -lpthread
 
 APP_SRCS := $(shell find $(ROOT)/src/looper $(ROOT)/src/platform -name '*.cpp')
 APP_OBJS := $(patsubst $(ROOT)/src/%.cpp,$(OUT)/obj/%.o,$(APP_SRCS))
-# host_midi / host_storage / sim_nvstore are kept for later use but not linked yet.
-SIM_SRCS := $(addprefix src/,main.cpp canvas.cpp host_hal.cpp jpeg_decode.cpp panel.cpp png.cpp sdl_audio.cpp sw_display.cpp)
+# host_midi / sim_nvstore are kept for later use but not linked yet.
+SIM_SRCS := $(addprefix src/,main.cpp canvas.cpp host_hal.cpp host_storage.cpp jpeg_decode.cpp panel.cpp png.cpp sdl_audio.cpp sw_display.cpp)
 SIM_OBJS := $(patsubst src/%.cpp,$(OUT)/obj/sim/%.o,$(SIM_SRCS))
 BIN      := $(OUT)/looper-sim
 
@@ -33,8 +34,10 @@ $(BIN): $(APP_OBJS) $(SIM_OBJS)
 check: $(BIN)
 	@mkdir -p $(OUT)/check
 	@set -e; for s in scripts/*.txt; do \
+	    n=$$(basename $$s .txt); \
 	    echo "== $$s"; \
-	    $(BIN) --script $$s --tone 330 --shot $(OUT)/check/$$(basename $$s .txt).png; \
+	    rm -rf $(OUT)/check/sd_$$n; \
+	    $(BIN) --script $$s --tone 330 --sd $(OUT)/check/sd_$$n --shot $(OUT)/check/$$n.png; \
 	done
 
 -include $(APP_OBJS:.o=.d) $(SIM_OBJS:.o=.d)

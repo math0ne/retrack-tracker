@@ -116,7 +116,9 @@ bool App::init(const Platform& p) {
     engine_.init(mem, p_.fxMem);
 
     d_->bindFontSet(0);
-    if (p_.selectInput) p_.selectInput(source_, inputGain_);
+    files_.init(&engine_, &p_);
+    files_.loadConfig(cfg_);   // defaults when there is no card or no file yet
+    applyConfig();
     p_.audio->setCallback(&App::audioFill, this);
     return p_.audio->start();
 }
@@ -133,12 +135,18 @@ void App::loop() {
     ot::InputEvent ev;
     while (p_.input->poll(ev)) onInput(ev);
     engine_.service();
+    files_.service();   // one step of a save / load / export
 
     const uint32_t now = p_.clock->millis();
     if (powerHeld_ && now - powerDownMs_ >= kPowerHoldMs && p_.powerOff) {
         p_.leds->clear();
         p_.leds->show();
         p_.powerOff();
+    }
+    // Settings go to the card a second after the last change (one write per edit burst).
+    if (cfgDirty_ && now - cfgDirtyMs_ >= 1000 && !files_.busy()) {
+        cfgDirty_ = false;
+        files_.saveConfig(cfg_);
     }
     if (now - lastLedMs_ >= kLedMs) {
         lastLedMs_ = now;
@@ -167,7 +175,7 @@ void App::loop() {
                 waveDrawnMs_[editTrack_] = now;
                 waveValid_[editTrack_] = false;   // the lane redraws when it is back on screen
             }
-        } else if (!mixer_ && !options_ && fxPage_ < 0) {
+        } else if (!mixer_ && !options_ && fxPage_ < 0 && !config_ && !file_) {
             updateWaves(now);   // lanes only when they are on screen
         }
         render(now);
@@ -236,8 +244,9 @@ void App::onFKey(int key) {
         case 2: engine_.post(Engine::kMute, t); break;
         case 4: modeBar_ = true; break;   // F4 (metronome) and F7 (monitor) are tap / hold keys: onInput
         case 5:
-            source_ = source_ == 0 ? 2 : (source_ == 2 ? 3 : 0);
-            if (p_.selectInput) p_.selectInput(source_, inputGain_);
+            cfg_.source = cfg_.source == 0 ? 2 : (cfg_.source == 2 ? 3 : 0);
+            markConfig();
+            if (p_.selectInput) p_.selectInput(cfg_.source, cfg_.gain);
             break;
         case 6: engine_.post(Engine::kMonitor, 0, engine_.monitoring() ? 0 : 1); break;
         case 7: {
@@ -258,10 +267,11 @@ void App::onInput(const ot::InputEvent& ev) {
     }
     if (ev.type == E::kEncoder) {
         if (f7Held_) {   // F7 held: input gain
-            int g = int(inputGain_) + ev.delta * (shift_ ? 1 : 2);
-            inputGain_ = uint8_t(g < 0 ? 0 : (g > 100 ? 100 : g));
-            if (p_.selectInput) p_.selectInput(source_, inputGain_);
+            int g = int(cfg_.gain) + ev.delta * (shift_ ? 1 : 2);
+            cfg_.gain = uint8_t(g < 0 ? 0 : (g > 100 ? 100 : g));
+            if (p_.selectInput) p_.selectInput(cfg_.source, cfg_.gain);
             f7Turned_ = true;
+            markConfig();
             return;
         }
         if (f4Held_) {   // F4 held: click level
@@ -284,6 +294,10 @@ void App::onInput(const ot::InputEvent& ev) {
             fxEncoder(ev.delta);
             return;
         }
+        if (config_) {
+            configEncoder(ev.delta);
+            return;
+        }
         if (edit_) {
             editEncoder(ev.delta);
             return;
@@ -297,9 +311,9 @@ void App::onInput(const ot::InputEvent& ev) {
             return;
         }
         if (shift_) {
-            int g = int(inputGain_) + ev.delta * 2;
-            inputGain_ = uint8_t(g < 0 ? 0 : (g > 100 ? 100 : g));
-            if (p_.selectInput) p_.selectInput(source_, inputGain_);
+            int g = int(cfg_.gain) + ev.delta * 2;
+            cfg_.gain = uint8_t(g < 0 ? 0 : (g > 100 ? 100 : g));
+            if (p_.selectInput) p_.selectInput(cfg_.source, cfg_.gain);
         } else {
             int v = int(engine_.volume(selected_)) + ev.delta * 2;
             engine_.post(Engine::kVolume, uint8_t(selected_), int16_t(v));
@@ -325,14 +339,18 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     // Home page F7: a tap toggles monitoring; held, the encoder sets the input gain.
-    const bool home = !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !modeBar_;
+    const bool home = !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !modeBar_;
     if (ev.id == b::F7 && (home || f7Held_)) {
         if (down) {
             f7Held_ = true;
             f7Turned_ = false;
         } else if (f7Held_) {
             f7Held_ = false;
-            if (!f7Turned_) engine_.post(Engine::kMonitor, 0, engine_.monitoring() ? 0 : 1);
+            if (!f7Turned_) {
+                cfg_.monitor = engine_.monitoring() ? 0 : 1;
+                engine_.post(Engine::kMonitor, 0, cfg_.monitor);
+                markConfig();
+            }
         }
         return;
     }
@@ -367,6 +385,21 @@ void App::onInput(const ot::InputEvent& ev) {
         }
         return;
     }
+    if (ev.id == b::Config || ev.id == b::File) {   // settings, projects and export
+        const bool wasConfig = config_, wasFile = file_;
+        goHome();
+        if (ev.id == b::Config) config_ = !wasConfig;
+        else if (!wasFile) {
+            file_ = true;
+            files_.rescan();
+            // Start on the current project (or the newest).
+            projSel_ = files_.projectCount() - 1;
+            for (int i = 0; i < files_.projectCount(); ++i)
+                if (files_.projectNumber(i) == files_.current()) projSel_ = i;
+            if (projSel_ < 0) projSel_ = 0;
+        }
+        return;
+    }
     if (ev.id == b::SampleEditor) {   // S.Edit: the loop editor for the selected track
         const bool was = edit_;
         goHome();
@@ -390,6 +423,14 @@ void App::onInput(const ot::InputEvent& ev) {
     const bool nav = b::isFKey(ev.id) || ev.id == b::Left || ev.id == b::Right || ev.id == b::Up || ev.id == b::Down;
     if (fxPage_ >= 0 && nav) {
         fxKey(ev.id);
+        return;
+    }
+    if (config_ && nav) {
+        configKey(ev.id);
+        return;
+    }
+    if (file_ && nav) {
+        fileKey(ev.id);
         return;
     }
     if (edit_ && nav) {
@@ -470,7 +511,7 @@ void App::closePerf() {
 }
 
 void App::goHome() {
-    mixer_ = options_ = edit_ = false;
+    mixer_ = options_ = edit_ = config_ = file_ = false;
     fxPage_ = -1;
     fxBar_ = modeBar_ = false;
     confirm_ = -1;
@@ -540,7 +581,7 @@ void App::updateLeds(uint32_t now) {
         const bool content = len > 0;
         const int row = t * ot::kPadCols;
         auto set = [&](int col, float lv) {
-            const uint8_t b = uint8_t(lv * 255.0f);
+            const uint8_t b = uint8_t(lv * 255.0f * float(cfg_.pads) / 100.0f);   // Config: pad brightness
             L.setPad(uint8_t(row + col), b, b, b);
         };
 
@@ -754,6 +795,8 @@ void App::render(uint32_t now) {
 
     if (fxPage_ >= 0) drawFxPage(now);
     else if (edit_) drawEditPage(now);
+    else if (config_) drawConfig();
+    else if (file_) drawFile();
     else if (mixer_) drawMixer();
     else if (options_) drawOptions();
     else
@@ -762,8 +805,8 @@ void App::render(uint32_t now) {
     // Pop-up knobs: F7 held (input gain), an effect pad held in performance mode.
     if (f7Held_) {
         char v[12];
-        std::snprintf(v, sizeof v, "%u", unsigned(inputGain_));
-        drawPopupKnob("Input gain", v, float(inputGain_) / 100.0f, gainShown_, 0x3DDC97,
+        std::snprintf(v, sizeof v, "%u", unsigned(cfg_.gain));
+        drawPopupKnob("Input gain", v, float(cfg_.gain) / 100.0f, gainShown_, 0x3DDC97,
                       inMeter_[0] > inMeter_[1] ? inMeter_[0] : inMeter_[1]);
     } else if (f4Held_) {
         char v[12];
@@ -1042,6 +1085,31 @@ void App::drawFKeys() {
                 title[i] = "HOME";
                 std::snprintf(val[i], sizeof val[i], "Loops");
             }
+        } else if (config_) {   // only F8: Up / Down pick a setting, the encoder sets it
+            title[i] = i == 7 ? "HOME" : "";
+            std::snprintf(val[i], sizeof val[i], "%s", i == 7 ? "Loops" : "");
+        } else if (file_) {   // projects and export
+            const bool armed = confirm_ == i && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0;
+            switch (i) {
+                case 0:
+                    title[i] = "SAVE";
+                    if (files_.current()) std::snprintf(val[i], sizeof val[i], "Proj %03d", files_.current());
+                    else std::snprintf(val[i], sizeof val[i], "New");
+                    break;
+                case 1: title[i] = "SAVE NEW"; std::snprintf(val[i], sizeof val[i], "Project"); break;
+                case 2:
+                    title[i] = "LOAD";
+                    std::snprintf(val[i], sizeof val[i], "%s", armed ? "Sure?" : "Selected");
+                    hot = armed;
+                    break;
+                case 4:
+                    title[i] = "EXPORT";
+                    std::snprintf(val[i], sizeof val[i], "Track %c", char('1' + selected_));
+                    break;
+                case 5: title[i] = "EXPORT"; std::snprintf(val[i], sizeof val[i], "All"); break;
+                case 7: title[i] = "HOME"; std::snprintf(val[i], sizeof val[i], "Loops"); break;
+                default: title[i] = ""; val[i][0] = 0; break;
+            }
         } else if (edit_) {   // the loop editor
             static const char* const kSnap[4] = {"Bar", "Beat", "1/16", "Free"};
             const TrackView& ev = engine_.view(editTrack_);
@@ -1105,7 +1173,7 @@ void App::drawFKeys() {
                     break;
                 case 5:
                     title[i] = "INPUT";
-                    std::snprintf(val[i], sizeof val[i], "%s", sourceName(source_));
+                    std::snprintf(val[i], sizeof val[i], "%s", sourceName(cfg_.source));
                     break;
                 case 6:
                     title[i] = "MONITOR";
@@ -1118,7 +1186,8 @@ void App::drawFKeys() {
             }
         }
         uint32_t hc = tc;
-        if (edit_) hc = (i == 4 || i == 5) ? kAmber : kTrackColor[editTrack_];
+        if (config_ || file_) hc = kAmber;
+        else if (edit_) hc = (i == 4 || i == 5) ? kAmber : kTrackColor[editTrack_];
         else if (fxPage_ >= 0) hc = stripColor(4 + fxPage_);
         else if (mixer_ && !modeBar_) hc = stripColor(i);
         else if (options_ && !modeBar_) hc = i < kTracks ? kTrackColor[i] : (i == 4 ? kAmber : kDim);
@@ -1127,6 +1196,7 @@ void App::drawFKeys() {
         if (title[i][0]) {
             uint32_t tcol = kDim;
             if (hot) tcol = kBg;
+            else if (file_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
             else if (edit_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
             else if (fxPage_ >= 0) tcol = i < 6 ? scale(hc, 0.9f) : kDim;
             else if (mixer_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
@@ -1140,7 +1210,7 @@ void App::drawFKeys() {
         text(cx, bar ? (kKeyY0 + kKeyY1) / 2 + 4 : kKeyY0 + 28, kFontSmall, Disp::kOptCenter, val[i]);
     }
     // Input level inside the INPUT cell
-    if (!modeBar_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_) {
+    if (!modeBar_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_) {
         const int x0 = 5 * kKeyW + 10, x1 = 6 * kKeyW - 10;
         for (int c = 0; c < 2; ++c) {
             const float m = inMeter_[c];
@@ -1607,6 +1677,225 @@ void App::drawOptColumn(int c) {
             color(0x4A5563);
             text(cx, by0 + 55, kFontSmall, Disp::kOptCenter, note);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Config page
+
+void App::markConfig() {
+    cfgDirty_ = true;
+    cfgDirtyMs_ = p_.clock->millis();
+}
+
+void App::applyConfig() {
+    // Push the settings to the hardware and the engine (start-up, Config edits).
+    d_->setBacklight(Disp::brightnessDuty(cfg_.brightness));
+    if (p_.setHeadphones) p_.setHeadphones(cfg_.phones);
+    if (p_.selectInput) p_.selectInput(cfg_.source, cfg_.gain);
+    engine_.post(Engine::kMonitor, 0, cfg_.monitor);
+}
+
+namespace {
+constexpr int kCfgRows = 6;
+const char* const kCfgName[kCfgRows] = {"Display brightness", "Pad brightness", "Headphones",
+                                        "Input",              "Input gain",     "Monitor input"};
+}  // namespace
+
+void App::configKey(uint8_t id) {
+    if (id == b::F8) goHome();
+    else if (id == b::Up && cfgRow_ > 0) --cfgRow_;
+    else if (id == b::Down && cfgRow_ < kCfgRows - 1) ++cfgRow_;
+}
+
+void App::configEncoder(int delta) {
+    auto step = [&](uint8_t& v, int s, int lo, int hi) {
+        int x = int(v) + delta * s;
+        v = uint8_t(x < lo ? lo : (x > hi ? hi : x));
+    };
+    switch (cfgRow_) {
+        case 0: step(cfg_.brightness, 1, 0, 2); break;
+        case 1: step(cfg_.pads, shift_ ? 1 : 10, 10, 100); break;
+        case 2: step(cfg_.phones, shift_ ? 1 : 5, 0, 100); break;
+        case 3: {   // line, mic low, mic high
+            static const uint8_t kSrc[3] = {0, 2, 3};
+            int i = cfg_.source == 2 ? 1 : (cfg_.source == 3 ? 2 : 0);
+            i = (i + (delta > 0 ? 1 : 2)) % 3;
+            cfg_.source = kSrc[i];
+            break;
+        }
+        case 4: step(cfg_.gain, shift_ ? 1 : 2, 0, 100); break;
+        case 5: cfg_.monitor = delta > 0 ? 1 : 0; break;
+        default: return;
+    }
+    applyConfig();
+    markConfig();
+}
+
+void App::drawConfig() {
+    char buf[96];
+    color(kAmber);
+    text(20, 22, kFontBig, Disp::kOptCenterY, "CONFIG");
+    for (int r = 0; r < kCfgRows; ++r) {
+        const int y0 = 46 + r * 46, y1 = y0 + 40;
+        const bool sel = cfgRow_ == r;
+        if (sel) {
+            color(kAmber);
+            fillRect(18, y0 - 2, 782, y1 + 2, 9);
+        }
+        color(sel ? kLaneSel : kLane);
+        fillRect(20, y0, 780, y1, 8);
+        color(sel ? kInk : kDim);
+        text(40, (y0 + y1) / 2, kFontBody, Disp::kOptCenterY, kCfgName[r]);
+        float frac = -1.0f;   // a bar for the levels
+        bool off = false;
+        switch (r) {
+            case 0: {
+                static const char* const n[3] = {"Low", "Medium", "High"};
+                std::snprintf(buf, sizeof buf, "%s", n[cfg_.brightness % 3]);
+                break;
+            }
+            case 1: std::snprintf(buf, sizeof buf, "%u %%", unsigned(cfg_.pads)); frac = cfg_.pads / 100.0f; break;
+            case 2:
+                std::snprintf(buf, sizeof buf, "%u", unsigned(cfg_.phones));
+                frac = cfg_.phones / 100.0f;
+                off = !p_.setHeadphones;   // the simulator has no headphone amp
+                break;
+            case 3: std::snprintf(buf, sizeof buf, "%s", sourceName(cfg_.source)); break;
+            case 4: std::snprintf(buf, sizeof buf, "%u", unsigned(cfg_.gain)); frac = cfg_.gain / 100.0f; break;
+            default: std::snprintf(buf, sizeof buf, "%s", cfg_.monitor ? "On" : "Off"); break;
+        }
+        if (frac >= 0.0f) {
+            color(kFaint);
+            fillRect(420, (y0 + y1) / 2 - 3, 640, (y0 + y1) / 2 + 3, 3);
+            color(off ? kDim : kAmber);
+            fillRect(420, (y0 + y1) / 2 - 3, 426 + int(214.0f * frac), (y0 + y1) / 2 + 3, 3);
+        }
+        color(off ? kDim : kInk);
+        text(760, (y0 + y1) / 2, kFontBody, Disp::kOptRightX | Disp::kOptCenterY, buf);
+    }
+    // About
+    const uint32_t cap = engine_.memory(0).capacity;
+    const uint32_t st = cap / kSampleRate, mo = 2 * cap / kSampleRate;
+    color(kDim);
+    std::snprintf(buf, sizeof buf, "Tracker Looper %s", p_.version);
+    text(40, 340, kFontSmall, 0, buf);
+    std::snprintf(buf, sizeof buf, "Recording time per track: %lu s stereo, %lu s mono", static_cast<unsigned long>(st),
+                  static_cast<unsigned long>(mo));
+    text(40, 362, kFontSmall, 0, buf);
+    text(40, 384, kFontSmall, 0, files_.cardReady() ? "SD card ready" : "No SD card: settings are not saved");
+    color(0x4A5563);
+    text(760, 362, kFontSmall, Disp::kOptRightX, "Up / Down: setting   Encoder: value");
+}
+
+// ---------------------------------------------------------------------------
+// File page
+
+void App::fileKey(uint8_t id) {
+    const uint32_t now = p_.clock->millis();
+    const int n = files_.projectCount();
+    switch (id) {
+        case b::F1: files_.save(false); break;
+        case b::F2: files_.save(true); break;
+        case b::F3:   // load: replaces the loops, so press twice
+            if (n && !files_.busy()) {
+                if (confirm_ == 2 && int32_t(confirmUntilMs_ - now) > 0) {
+                    confirm_ = -1;
+                    perf_ = false;
+                    files_.load(files_.projectNumber(projSel_));
+                } else {
+                    confirm_ = 2;
+                    confirmUntilMs_ = now + 2000;
+                }
+                return;
+            }
+            break;
+        case b::F5: files_.exportTracks(uint8_t(1u << selected_)); break;
+        case b::F6: files_.exportTracks(0x0F); break;
+        case b::F8: goHome(); break;
+        case b::Up:
+            if (projSel_ > 0) --projSel_;
+            break;
+        case b::Down:
+            if (projSel_ < n - 1) ++projSel_;
+            break;
+        default: break;
+    }
+    confirm_ = -1;
+}
+
+void App::drawFile() {
+    char buf[64];
+    color(kAmber);
+    text(20, 22, kFontBig, Disp::kOptCenterY, "FILE");
+    const bool card = files_.cardReady();
+    color(card ? kDim : kRed);
+    text(780, 22, kFontSmall, Disp::kOptRightX | Disp::kOptCenterY, card ? "SD card ready" : "No SD card");
+
+    // Projects (left)
+    color(kLane);
+    fillRect(12, 42, 392, 428, 9);
+    color(kDim);
+    text(28, 60, kFontSmall, Disp::kOptCenterY, "PROJECTS");
+    const int n = files_.projectCount();
+    if (!n) {
+        color(0x4A5563);
+        text(202, 200, kFontSmall, Disp::kOptCenter, "None yet: F1 saves this one");
+    }
+    const int rows = 9;
+    int first = projSel_ - rows / 2;
+    if (first > n - rows) first = n - rows;
+    if (first < 0) first = 0;
+    for (int i = first; i < n && i < first + rows; ++i) {
+        const int y0 = 76 + (i - first) * 38, y1 = y0 + 32;
+        const bool sel = i == projSel_, cur = files_.projectNumber(i) == files_.current();
+        color(sel ? scale(kAmber, 0.85f) : kCell);
+        fillRect(24, y0, 380, y1, 6);
+        std::snprintf(buf, sizeof buf, "Project %03d", files_.projectNumber(i));
+        color(sel ? kBg : kInk);
+        text(40, (y0 + y1) / 2, kFontBody, Disp::kOptCenterY, buf);
+        if (cur) {
+            color(sel ? kBg : kAmber);
+            text(364, (y0 + y1) / 2, kFontSmall, Disp::kOptRightX | Disp::kOptCenterY, "current");
+        }
+    }
+
+    // Tracks and the job (right)
+    color(kLane);
+    fillRect(408, 42, 788, 428, 9);
+    color(kDim);
+    text(424, 60, kFontSmall, Disp::kOptCenterY, "TRACKS");
+    for (int t = 0; t < kTracks; ++t) {
+        const TrackView& v = engine_.view(t);
+        const uint32_t len = v.len.load();
+        const int y = 92 + t * 40;
+        color(kTrackColor[t]);
+        dot(436, y, 9);
+        color(t == selected_ ? kInk : kDim);
+        if (len) {
+            char s[16];
+            fmtSeconds(s, sizeof s, len);
+            std::snprintf(buf, sizeof buf, "Track %d   %s   %s", t + 1, s, v.mono.load() ? "mono" : "stereo");
+        } else {
+            std::snprintf(buf, sizeof buf, "Track %d   empty", t + 1);
+        }
+        text(456, y, kFontSmall, Disp::kOptCenterY, buf);
+    }
+    const int sy = 270;
+    if (files_.busy()) {
+        color(kFaint);
+        fillRect(424, sy + 30, 772, sy + 40, 5);
+        color(kAmber);
+        fillRect(424, sy + 30, 430 + int(342.0f * files_.progress()), sy + 40, 5);
+    }
+    color(files_.busy() ? kAmber : kInk);
+    text(424, sy + 10, kFontSmall, Disp::kOptCenterY, files_.status()[0] ? files_.status() : "Ready");
+    color(0x4A5563);
+    text(424, 360, kFontSmall, 0, "Projects: Looper/Projects/NNN");
+    text(424, 380, kFontSmall, 0, "Exports: Looper/Export/NNN/trackN.wav");
+    if (confirm_ == 2 && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0) {
+        color(kAmber);
+        text(400, 408, kFontBody, Disp::kOptCenter, "Press LOAD again: it replaces the loops you have");
     }
 }
 

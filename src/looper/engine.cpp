@@ -434,6 +434,26 @@ void Engine::apply(const Msg& m) {
             }
             break;
         case kMute: k.muted = !k.muted; break;
+        case kSetMute: k.muted = m.arg != 0; break;
+        case kSetBar:
+            if (allEmpty() && m.a) L_ = m.a;
+            break;
+        case kInstall:
+            // A loop the app has read into this empty track (its peaks too):
+            // from its start, its bar phase kept, playing or stopped.
+            if (k.state == TrackState::kEmpty && m.a && m.a <= (m.arg & 1 ? 2 * mem_[t].capacity : mem_[t].capacity)) {
+                k.mono = (m.arg & 1) != 0;
+                k.len = m.a;
+                k.written = m.a;
+                k.start = 0;
+                k.anchor = m.b;
+                k.offset16 = 0;
+                k.undo.has = false;
+                k.state = (m.arg & 2) ? TrackState::kStopped : TrackState::kPlaying;
+                restartGrains(k, uint64_t(posOf(k)) << 16);
+                view_[t].peakVersion.fetch_add(1, std::memory_order_relaxed);
+            }
+            break;
         case kClear:
             if (job_.state.load(std::memory_order_acquire) && job_.track == t) break;   // an edit is running on it
             clearTrack(t);

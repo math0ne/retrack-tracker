@@ -83,8 +83,40 @@ eight screen keys, each centred over its key as on the stock Tracker.
 | Song | Track options page at the tempo column (BPM, metronome, click) |
 | FX1 / FX2 | That effect slot's page on / off |
 | S.Edit | Loop editor for the selected track |
+| Config | Settings page |
+| File | Projects (save / load) and WAV export |
 | Help | Show / hide the CPU, frame-rate and display-list readout; Shift + Help: stress preset |
 | Power (hold 1.5 s) | Switch off |
+
+### Config, projects and export
+
+**Config** opens the settings; Up/Down pick one, the encoder sets it. They are
+saved to `Looper/config.bin` on the card a second after a change and loaded at
+start-up: display brightness (low / medium / high), pad brightness, headphone
+level, input source, input gain and input monitoring (the last three are the
+same settings as F6 / F7). The page also shows the version and the recording
+time per track.
+
+**File** opens projects and export:
+
+| Key | Action |
+|---|---|
+| F1 SAVE | Save over the current project (the first save makes a new one) |
+| F2 SAVE NEW | Save as the next numbered project |
+| F3 LOAD | Load the selected project (Up/Down); press twice, it replaces the loops you have |
+| F5 EXPORT | The selected track as a WAV |
+| F6 EXPORT | Every track with a loop as WAVs |
+| F8 HOME | Back to the lanes |
+
+A project is a folder `Looper/Projects/NNN`: `project.bin` and `trackN.wav` per
+track with a loop (16-bit, stereo or mono as recorded). It holds the tempo and
+bar, each track's length, place on the bar grid, play / stop, mode, level,
+mute, sends and options, both FX slots, returns, master, the performance knobs,
+the metronome and the feedback. Loading clears the tracks, reads the WAVs back
+(progress bar) and leaves the transport stopped: Play starts everything from
+bar 1. Exports go to a new folder `Looper/Export/NNN` each time. Saving and
+exporting run in the background in 16 KB steps, so the audio and the screen
+keep going.
 
 ### Stop, mute and starting things
 

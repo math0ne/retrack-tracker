@@ -30,6 +30,13 @@ struct Platform {
     uint32_t (*dlBytes)() = nullptr;
     // One telemetry line a second (USB serial on the device); nullptr = none.
     void (*log)(const char* line) = nullptr;
+    // SD card (FAT on the device, a host folder in the simulator): settings and
+    // WAV exports. storageReady() false = no card.
+    ot::IStorage* storage = nullptr;
+    bool (*storageReady)() = nullptr;
+    // Headphone level 0..100 (device only; nullptr = not adjustable).
+    void (*setHeadphones)(uint8_t level) = nullptr;
+    const char* version = "dev";
 
     // Loop memory (external SDRAM on the device), effect memory, and a staging buffer for
     // waveform bitmaps on their way to the display's RAM_G.

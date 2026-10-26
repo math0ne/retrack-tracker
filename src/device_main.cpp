@@ -10,6 +10,7 @@
 #include "hal/ft81x.h"
 #include "hal/hal.h"
 #include "hal/i2c_bus.h"
+#include "hal/sd_storage.h"
 #include "hal/telemetry.h"
 #include "looper/app.h"
 
@@ -52,6 +53,10 @@ void logLine(const char* line) {
 
 void powerOff() { ot::hal::powerOff(); }
 
+bool storageReady() { return ot::hal::bootReport().sdMounted && ot::hal::storage().mounted(); }
+
+void setHeadphones(uint8_t level) { ot::hal::audio().setHeadphoneVolume(float(level > 100 ? 100 : level) / 100.0f); }
+
 }  // namespace
 
 void otAppMain(ot::hal::HalSet& hal) {
@@ -74,6 +79,10 @@ void otAppMain(ot::hal::HalSet& hal) {
     p.cpuLoad = &cpuLoad;
     p.dlBytes = &dlBytes;
     p.log = &logLine;
+    p.storage = hal.storage;
+    p.storageReady = &storageReady;
+    p.setHeadphones = &setHeadphones;
+    p.version = OT_VERSION;
     p.loopMem = sd;
     p.loopMemBytes = kLoopBytes;
     p.fxMem = sd + kLoopBytes;

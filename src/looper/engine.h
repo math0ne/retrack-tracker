@@ -185,6 +185,10 @@ public:
         kEditUndo,     // undo the last trim
         kEditCut,      // remove [a, b): the rest moves up (main loop job), silent meanwhile
         kEditErase,    // silence [a, b) (main loop job)
+        // Project load: the app has written an empty track's audio and peaks.
+        kInstall,      // a = length, b = bar phase of its start, arg = mono | stopped << 1
+        kSetBar,       // a = bar length (the master loop), only while every track is empty
+        kSetMute,      // arg = 0 / 1
     };
 
     // fxMem: kFxMemBytes, 4-byte aligned.
@@ -319,7 +323,7 @@ private:
     TrackView view_[kTracks];
 
     // main loop -> audio thread
-    static constexpr uint32_t kQueue = 64;
+    static constexpr uint32_t kQueue = 256;   // a project load posts ~80 commands at once
     Msg queue_[kQueue];
     std::atomic<uint32_t> qHead_{0}, qTail_{0};
 
