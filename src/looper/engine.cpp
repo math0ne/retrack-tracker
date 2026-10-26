@@ -62,6 +62,10 @@ float gReverbLines[kFxSlots][Reverb::kFloats];
 }  // namespace
 
 void Engine::init(const TrackMemory mem[kTracks], uint8_t* fxMem) {
+    for (int t = 0; t < kTracks; ++t) {
+        for (int g = 0; g < kGrainKnobs; ++g) grain_[t][g] = kGrainKnobInfo[g].def;
+        for (clouds::Grain& c : trk_[t].cg) c.Init();
+    }
     // FX 1 starts as a delay, FX 2 as a reverb; either can be any type.
     for (int s = 0; s < kFxSlots; ++s) {
         fx_[s].init(reinterpret_cast<int16_t*>(fxMem + size_t(s) * Delay::kBytes), gReverbLines[s]);
@@ -213,8 +217,68 @@ void Engine::restartGrains(Track& k, uint64_t pos16) {
     k.grain[1] = Grain{pos16, kGrainFrames / 2};
 }
 
+void Engine::renderGrains(int t, uint64_t ph0, uint64_t step16, uint32_t n) {
+    // Granular mode: Clouds grains (looper/clouds/grain.h) read from the loop
+    // around where it is playing now, so it keeps its time; size, overlap,
+    // scatter and pitch from the track's knobs. Out: grainOut_, +-1.
+    Track& k = trk_[t];
+    const TrackMemory& m = mem_[t];
+    const uint8_t* g = grain_[t];
+    std::memset(grainOut_, 0, sizeof(float) * 2 * n);
+    if (!k.len || n > 128) return;
+    const int16_t* buf = m.frames + (k.mono ? size_t(k.start) : size_t(k.start) * 2);
+    const int32_t len = int32_t(k.len);
+    float width = 882.0f * std::pow(25.0f, float(g[1]) / 100.0f);   // 20 .. 500 ms
+    if (width > float(len) * 0.5f) width = float(len) * 0.5f;
+    if (width < 64.0f) width = 64.0f;
+    const float d = float(g[2]) / 100.0f;
+    const float overlap = 1.0f + 7.0f * d * d;
+    const float interval = width / overlap;
+    float ratio = std::exp2(float(int(g[3]) - kGrainPitchZero) / 12.0f);
+    if (!opts_[t].stretch) ratio *= float(speed16_) / 65536.0f;   // tape: the pitch follows the tempo too
+    const float scatter = float(g[0]) / 100.0f * 0.5f * float(len);
+    for (uint32_t f = 0; f < n; ++f) {
+        k.cgPhasor += 1.0f;
+        if (k.cgPhasor < interval) continue;
+        k.cgPhasor -= interval;
+        clouds::Grain* free = nullptr;
+        for (clouds::Grain& c : k.cg)
+            if (!c.active()) {
+                free = &c;
+                break;
+            }
+        if (!free) continue;
+        // Centred on the playhead (the grain's middle plays when the loop is
+        // there), scattered by Spread, panned a little at random.
+        const int32_t here = int32_t(((ph0 + uint64_t(f) * step16) >> 16) % uint64_t(len));
+        int32_t start = here - int32_t(width * ratio * 0.5f) +
+                        int32_t(scatter * (2.0f * stmlib::Random::GetFloat() - 1.0f));
+        start %= len;
+        if (start < 0) start += len;
+        const float pan = 0.5f + 0.3f * (stmlib::Random::GetFloat() - 0.5f);
+        const float gl = pan < 0.5f ? 1.0f : 2.0f * (1.0f - pan), gr = pan < 0.5f ? 2.0f * pan : 1.0f;
+        free->Start(int32_t(f), len, start, int32_t(width) & ~1, int32_t(ratio * 65536.0f), 1.0f, gl, gr,
+                    clouds::GRAIN_QUALITY_HIGH);
+    }
+    int active = 0;
+    for (clouds::Grain& c : k.cg)
+        if (c.active()) {
+            c.OverlapAdd(buf, len, grainOut_, grainEnv_, n, k.mono ? 1 : 2);
+            ++active;
+        }
+    // Overlapping windows add up: about 1 / sqrt(n) for n grains (Clouds), gliding.
+    const float target = active > 1 ? 1.0f / std::sqrt(float(active)) * 1.4f : 1.0f;
+    for (uint32_t f = 0; f < n; ++f) {
+        k.cgNorm += 0.01f * ((target > 1.0f ? 1.0f : target) - k.cgNorm);
+        grainOut_[2 * f] *= k.cgNorm;
+        grainOut_[2 * f + 1] *= k.cgNorm;
+    }
+}
+
 void Engine::setMode(int t, PlayMode mode) {
     Track& k = trk_[t];
+    for (clouds::Grain& c : k.cg) c.Init();   // Granular starts (or stops) clean
+    k.cgPhasor = 0.0f;
     if (!k.len) {   // empty or recording: the mode applies once there is a loop
         k.mode = mode;
         return;
@@ -582,6 +646,13 @@ void Engine::apply(const Msg& m) {
                 x.perf.repFx = 0xFF;
             }
             break;
+        case kGrainParam: {
+            const int g = (uint16_t(m.arg) >> 8) & 0xFF;
+            if (t >= kTracks || g >= kGrainKnobs) break;
+            const int v = m.arg & 0xFF;
+            grain_[t][g] = uint8_t(v > kGrainKnobInfo[g].max ? kGrainKnobInfo[g].max : v);
+            break;
+        }
         case kPerfParam: {
             const int fx = (uint16_t(m.arg) >> 8) & 0xFF;
             if (fx >= kPerfFxCount) break;
@@ -1015,7 +1086,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             // Stretch tracks at a changed tempo: the position follows the clock
             // (step16), two cross-faded grains read at the mode's own rate, so
             // the pitch stays where it was recorded.
-            const bool keep = vari && opts_[t].stretch;
+            const bool keep = vari && opts_[t].stretch && mi.reader != ModeInfo::kCloud;
             const float step = (target - k.gain) / float(n);
             float g = k.gain;
             float sg[kFxSlots], sstep[kFxSlots];
@@ -1027,6 +1098,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             }
             const uint64_t P = period16(k), L16 = uint64_t(k.len) << 16;
             uint64_t ph = phase16(k);
+            if (mi.reader == ModeInfo::kCloud && !posFx) renderGrains(t, ph, step16, n);
             // Frame i as left/right; a mono buffer gives the same sample to both.
             const bool mono = k.mono;
             // Loop frame i is buffer frame start + i (a trim moves start).
@@ -1108,6 +1180,10 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                     }
                 } else
                 switch (mi.reader) {
+                    case ModeInfo::kCloud:      // rendered for the whole block above
+                        sl = grainOut_[2 * f] * 32768.0f;
+                        sr = grainOut_[2 * f + 1] * 32768.0f;
+                        break;
                     case ModeInfo::kDirect: {   // speed 1: forward, reverse, ping-pong; overdub writes here
                         if (vari) {
                             // Varispeed: between this frame and the next one along the phase.

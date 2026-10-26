@@ -176,7 +176,7 @@ void Files::snapshot(ProjectFile& pf) const {
     const Engine& e = *engine_;
     std::memset(&pf, 0, sizeof pf);
     std::memcpy(pf.magic, "LPRJ", 4);
-    pf.version = 1;
+    pf.version = 2;
     pf.bar = e.masterLen();
     pf.bpm = e.opt(OptParam::kTempo);
     pf.beats = e.beatsPerBar();
@@ -190,7 +190,10 @@ void Files::snapshot(ProjectFile& pf) const {
     pf.ret[1] = e.mix(MixParam::kReturn2);
     for (int s = 0; s < kFxSlots; ++s) {
         pf.fxType[s] = uint8_t(e.fxType(s));
-        for (int k = 0; k < kFxKnobs; ++k) pf.fxKnob[s][k] = e.fxKnob(s, k);
+        for (int k = 0; k < kFxBank; ++k) {
+            pf.fxKnob[s][k] = e.fxKnob(s, k);
+            pf.fxKnob2[s][k] = e.fxKnob(s, kFxBank + k);
+        }
     }
     for (int i = 0; i < kPerfFxCount; ++i) pf.perf[i] = e.perfParam(PerfFx(i));
     for (int t = 0; t < kTracks; ++t) {
@@ -215,6 +218,7 @@ void Files::snapshot(ProjectFile& pf) const {
         pt.input = e.opt(OptParam::kInput, t);
         pt.after = e.opt(OptParam::kAfter, t);
         pt.stretch = e.opt(OptParam::kStretch, t);
+        for (int g = 0; g < kGrainKnobs; ++g) pf.grain[t][g] = e.grainParam(t, g);
     }
 }
 
@@ -238,8 +242,11 @@ void Files::postSettings(const ProjectFile& pf, bool tracks) {
         mix(0, MixParam::kReturn2, pf.ret[1]);
         for (int s = 0; s < kFxSlots; ++s) {
             e.post(Engine::kFxType, uint8_t(s), pf.fxType[s] < kFxTypeCount ? pf.fxType[s] : 0);
-            for (int k = 0; k < kFxKnobs; ++k)
+            for (int k = 0; k < kFxBank; ++k) {
                 e.post(Engine::kFxKnob, uint8_t(s), int16_t((k << 8) | pf.fxKnob[s][k]));
+                if (pf.version >= 2)
+                    e.post(Engine::kFxKnob, uint8_t(s), int16_t(((kFxBank + k) << 8) | pf.fxKnob2[s][k]));
+            }
         }
         for (int i = 0; i < kPerfFxCount; ++i) e.post(Engine::kPerfParam, 0, int16_t((i << 8) | pf.perf[i]));
         for (int t = 0; t < kTracks; ++t) {
@@ -250,6 +257,9 @@ void Files::postSettings(const ProjectFile& pf, bool tracks) {
             opt(t, OptParam::kInput, pt.input);
             opt(t, OptParam::kAfter, pt.after);
             opt(t, OptParam::kStretch, pt.stretch);
+            if (pf.version >= 2)
+                for (int g = 0; g < kGrainKnobs; ++g)
+                    e.post(Engine::kGrainParam, uint8_t(t), int16_t((g << 8) | pf.grain[t][g]));
         }
         return;
     }
@@ -345,8 +355,11 @@ bool Files::load(int number) {
     char path[80];   // dir_ (48) + "/track1.wav"
     std::snprintf(path, sizeof path, "%s/project.bin", dir_);
     const IStorage::Handle h = fs.open(path, IStorage::kRead);
-    const bool ok = h >= 0 && fs.read(h, &pf_, sizeof pf_) == int32_t(sizeof pf_) &&
-                    !std::memcmp(pf_.magic, "LPRJ", 4) && pf_.version == 1;
+    std::memset(&pf_, 0, sizeof pf_);
+    const int32_t got = h >= 0 ? fs.read(h, &pf_, sizeof pf_) : -1;
+    const bool ok = !std::memcmp(pf_.magic, "LPRJ", 4) &&
+                    ((pf_.version == 1 && got == int32_t(kProjectV1Bytes)) ||
+                     (pf_.version == 2 && got == int32_t(sizeof pf_)));
     if (h >= 0) fs.close(h);
     if (!ok) {
         fail("Not a looper project");

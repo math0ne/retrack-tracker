@@ -21,6 +21,7 @@
 #include <cstdint>
 
 #include "looper/fx.h"
+#include "looper/clouds/grain.h"
 
 namespace looper {
 
@@ -93,12 +94,12 @@ inline float lowPassHz(uint8_t v) { return 80.0f * __builtin_powf(100.0f, float(
 inline float highPassHz(uint8_t v) { return 100.0f * __builtin_powf(80.0f, float(v) / 100.0f); }   // 100 Hz..8 kHz
 
 enum class PlayMode : uint8_t {
-    kForward, kReverse, kPingPong, kHalfSpeed, kDoubleSpeed, kStretch, kOctaveUp, kOctaveDown, kCount
+    kForward, kReverse, kPingPong, kHalfSpeed, kDoubleSpeed, kStretch, kOctaveUp, kOctaveDown, kGranular, kCount
 };
 constexpr int kModeCount = int(PlayMode::kCount);
 
 struct ModeInfo {
-    enum Reader : uint8_t { kDirect, kTape, kGrains };
+    enum Reader : uint8_t { kDirect, kTape, kGrains, kCloud };   // kCloud: Clouds grains around the playhead
     const char* name;       // F-key label
     Reader reader;
     uint32_t time16;        // phase advance per output frame, 16.16 (tempo)
@@ -117,6 +118,23 @@ constexpr ModeInfo kModes[kModeCount] = {
     {"Half time", ModeInfo::kGrains, 32768, 65536, false, false, false},   // half tempo, same pitch
     {"Octave up", ModeInfo::kGrains, 65536, 131072, false, false, false},
     {"Octave dn", ModeInfo::kGrains, 65536, 32768, false, false, false},
+    {"Granular", ModeInfo::kCloud, 65536, 65536, false, false, false},     // knobs: kGrainKnobInfo
+};
+
+// Granular mode's knobs (per track, hold F5): grains scattered around the
+// playhead, so the loop keeps its time.
+constexpr int kGrainKnobs = 4;
+constexpr int kLoopGrains = 8;          // grains per track at most (each reads the SDRAM)
+constexpr int kGrainPitchZero = 24;     // pitch 0..48 = -24..+24 semitones
+struct GrainKnob {
+    const char* name;
+    uint8_t max, def;
+};
+constexpr GrainKnob kGrainKnobInfo[kGrainKnobs] = {
+    {"Spread", 100, 0},                 // 0: at the playhead .. 100: anywhere in the loop
+    {"Size", 100, 40},                  // 20 .. 500 ms
+    {"Density", 100, 50},               // 1 .. 8 grains overlapping
+    {"Pitch", 48, kGrainPitchZero},
 };
 inline const ModeInfo& modeInfo(PlayMode m) { return kModes[int(m) < kModeCount ? int(m) : 0]; }
 
@@ -191,6 +209,7 @@ public:
         kInstall,      // a = length, b = bar phase of its start, arg = mono | stopped << 1
         kSetBar,       // a = bar length (the master loop), only while every track is empty
         kSetMute,      // arg = 0 / 1
+        kGrainParam,   // arg = (knob << 8) | value, Granular mode's knobs
     };
 
     // fxMem: kFxMemBytes, 4-byte aligned.
@@ -224,6 +243,8 @@ public:
     bool fxBusy(int slot) const { return fx_[slot].busy(); }
     float fxLfo(int slot) const { return fx_[slot].lfo(); }
     uint8_t perfParam(PerfFx fx) const { return perfParam_[int(fx)]; }
+    uint8_t grainParam(int t, int knob) const { return grain_[t][knob]; }
+    const CloudsFx& fxClouds(int slot) const { return fx_[slot].clouds(); }   // for the FX page picture
     // Tape tempo: the speed against the tempo the loops were recorded at.
     float speed() const { return float(speed16_) / 65536.0f; }
     float baseTempo() const;   // the recorded tempo (from the bar); the tempo now = baseTempo() * speed()
@@ -268,6 +289,8 @@ private:
         bool mono = false;           // set from the options when recording starts
         InputCh input = InputCh::kStereo;
         Grain grain[2];
+        clouds::Grain cg[kLoopGrains];   // Granular mode
+        float cgPhasor = 0.0f, cgNorm = 1.0f;
         Perf perf;
         uint32_t start = 0;          // buffer index of loop frame 0 (trim moves it)
         bool busy = false;           // an edit job is moving the audio
@@ -373,6 +396,9 @@ private:
     uint8_t threshold_ = 50;            // -30 dBFS
     int16_t preRoll_[kPreRollFrames * 2] = {};   // the input before this block, oldest first
     uint8_t perfParam_[kPerfFxCount] = {};
+    uint8_t grain_[kTracks][kGrainKnobs] = {};
+    float grainOut_[128 * 2], grainEnv_[128];   // Granular mode, one track at a time
+    void renderGrains(int t, uint64_t ph0, uint64_t step16, uint32_t n);
 
     // mixer and send effects (kept across track clears)
     void setMix(MixParam p, int track, int value);

@@ -1,0 +1,163 @@
+# Granular playback mode (mode bar page 2) and the Clouds FX type.
+wait 300
+opt all start 0
+# Monitor off (Input page, F2): only the loops reach the output.
+press F6
+wait 30
+press F2
+press F8
+wait 30
+
+# A 2-bar take of a steady 330 Hz tone.
+tone_shape steady
+tone 330
+tap 0
+wait 4100
+tap 0
+wait 200
+tone off
+expect_state 1 PLAY
+
+# Granular: F5, F5 (page 2), F2.
+press F5
+press F5
+press F2
+expect_mode 1 Granular
+wait 300
+reset_levels
+wait 1000
+expect_pitch 330
+expect_audio 0.1
+
+# Hold F5: the grain knobs. F4 = pitch, +12 semitones -> 660 Hz.
+hold F5
+wait 300
+shot ../build/sim/check/granular_panel.png
+press F4
+enc 12
+wait 30
+release F5
+wait 30
+expect_grain 1 4 36
+expect_mode 1 Granular
+reset_levels
+wait 1000
+# Overlapping grains read at different phases and partly cancel, so a few
+# cycles fall under the probe's threshold: a wider tolerance.
+expect_pitch 660 6
+# Back to 0, then size and density.
+hold F5
+press F4
+enc -12
+press F2
+enc 10
+press F3
+enc 20
+release F5
+wait 30
+expect_grain 1 4 24
+expect_grain 1 2 60
+expect_grain 1 3 90
+reset_levels
+wait 1000
+expect_pitch 330 4
+expect_audio 0.1
+# A quick F5 tap still opens the mode bar (no panel).
+press F5
+wait 30
+shot ../build/sim/check/granular_tap_bar.png
+press UP
+
+# At 150 % tempo the granular track keeps its pitch only on Stretch... and its
+# Tape default follows the tempo.
+hold F4
+enc 60
+release F4
+wait 100
+reset_levels
+wait 1000
+expect_pitch 495
+opt 1 stretch 1
+wait 100
+reset_levels
+wait 1000
+expect_pitch 330
+hold F4
+enc -60
+release F4
+
+# Clouds in FX 2 (F6 in the type bar), track 1 sent to it.
+press FX2
+press F1
+press F6
+wait 400
+expect_fx 2 Clouds 4 80
+# Mixer: track 1 strip, up one row from Level to its FX 2 send.
+press MASTER
+press F1
+press UP
+enc 50
+press NOTE
+wait 2000
+shot ../build/sim/check/granular_clouds_page.png
+press FX2
+wait 50
+shot ../build/sim/check/granular_clouds_fx.png
+# F4 = Pitch on the first bank (F2..F5 = knobs 1..4); Shift + F5 = Freeze on the second.
+press F4
+enc 12
+wait 30
+expect_fx 2 Clouds 3 36
+hold SHIFT
+press F5
+release SHIFT
+wait 30
+shot ../build/sim/check/granular_clouds_bank2.png
+enc 1
+wait 30
+expect_fx 2 Clouds 8 1
+press NOTE
+
+# Performance: pad 4 of row 2 toggles FX 2's freeze.
+press PERFORMANCE
+wait 50
+tap 15
+wait 30
+expect_fx 2 Clouds 8 0
+tap 15
+wait 30
+expect_fx 2 Clouds 8 1
+press PERFORMANCE
+
+# Frozen, Clouds keeps playing its buffer with the track stopped (its send silent).
+press FX2
+wait 30
+shot ../build/sim/check/granular_clouds_frozen.png
+press NOTE
+press F2
+wait 300
+expect_state 1 STOP
+reset_levels
+wait 1500
+expect_audio 0.02
+# Unfrozen, the buffer fills with the silence and the grains fade out.
+press FX2
+hold SHIFT
+press F5
+release SHIFT
+enc -1
+wait 30
+expect_fx 2 Clouds 8 0
+press NOTE
+wait 6000
+reset_levels
+wait 500
+expect_below 0.01
+press F2
+wait 100
+
+# Saved and loaded with the project (version 2: 160 bytes).
+press FILE
+press F1
+wait 1500
+expect_file Looper/Projects/001/project.bin 160

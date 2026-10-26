@@ -8,6 +8,8 @@
 
 #include <cstdint>
 
+#include "looper/clouds/clouds_fx.h"
+
 namespace looper {
 
 // Sine by rotation: four multiply-adds per sample instead of a sinf() call
@@ -26,9 +28,13 @@ struct Osc {
     void renorm();
 };
 
-enum class FxType : uint8_t { kDelay, kPingPong, kReverb, kChorus, kFlanger, kCount };
+enum class FxType : uint8_t { kDelay, kPingPong, kReverb, kChorus, kFlanger, kClouds, kCount };
 constexpr int kFxTypeCount = int(FxType::kCount);
-constexpr int kFxKnobs = 4;
+// Two banks of four (F2..F5, Shift + F2..F5); most types use the first only.
+constexpr int kFxKnobs = 8;
+constexpr int kFxBank = 4;
+constexpr int kCloudsPitchZero = 24;   // Clouds' pitch knob: 0..48 = -24..+24 semitones
+constexpr int kCloudsFreeze = 7;       // Clouds' freeze knob (Off / On)
 
 struct FxKnob {
     const char* name;   // nullptr = the type has no such knob
@@ -136,6 +142,8 @@ private:
 
 // One FX slot: the effect in it, its knobs, and a click-free type change (the
 // slot goes quiet while its lines are zeroed a chunk per block).
+static_assert(Delay::kBytes == CloudsFx::kFrames * 2 * sizeof(int16_t), "Clouds records into the slot's line");
+
 class FxUnit {
 public:
     void init(int16_t* line, float* reverbMem);
@@ -145,6 +153,7 @@ public:
     uint8_t knob(int i) const { return knob_[i]; }
     bool busy() const { return clearTodo_ != 0; }
     float lfo() const { return mod_.lfo(); }
+    const CloudsFx& clouds() const { return clouds_; }
     // barFrames: the delay times follow the bar.
     void process(const float* inL, const float* inR, float* outL, float* outR, uint32_t n, uint32_t barFrames);
 
@@ -156,6 +165,7 @@ private:
     Delay delay_;
     Reverb reverb_;
     ModDelay mod_;
+    CloudsFx clouds_;   // its record buffer is the slot's line
     uint32_t clearTodo_ = 0;   // bytes of the line still to zero (from the end)
     uint32_t revTodo_ = 0;     // bytes of the reverb lines still to zero
 };

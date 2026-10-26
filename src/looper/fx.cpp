@@ -38,6 +38,8 @@ constexpr uint32_t kClearChunk = 8192;   // bytes zeroed per block on a type cha
 const char* const kDelayDivNames[kDelayDivCount] = {"1/32", "1/16", "1/8", "3/16", "1/4", "3/8", "1/2", "3/4"};
 
 // Knobs per type: name, max, default, value list.
+const char* const kOffOn[2] = {"Off", "On"};
+
 const FxTypeInfo kFxTypes[kFxTypeCount] = {
     {"Delay", {{"Time", kDelayDivCount - 1, 2, kDelayDivNames}, {"Feedback", 95, 40, nullptr},
                {"Tone", 100, 55, nullptr}, {"Spread", 100, 0, nullptr}}},
@@ -49,6 +51,9 @@ const FxTypeInfo kFxTypes[kFxTypeCount] = {
                 {nullptr, 0, 0, nullptr}}},
     {"Flanger", {{"Rate", 100, 20, nullptr}, {"Depth", 100, 60, nullptr}, {"Feedback", 95, 60, nullptr},
                  {"Manual", 100, 30, nullptr}}},
+    {"Clouds", {{"Position", 100, 50, nullptr}, {"Size", 100, 40, nullptr}, {"Pitch", 48, kCloudsPitchZero, nullptr},
+                {"Density", 100, 80, nullptr}, {"Texture", 100, 40, nullptr}, {"Feedback", 100, 20, nullptr},
+                {"Spread", 100, 50, nullptr}, {"Freeze", 1, 0, kOffOn}}},
 };
 
 // ---------------------------------------------------------------------------
@@ -253,6 +258,7 @@ void FxUnit::init(int16_t* line, float* reverbMem) {
     delay_.init(line);
     mod_.init(line);
     reverb_.init(reverbMem);
+    clouds_.init(line);   // Delay::kBytes = CloudsFx::kFrames stereo int16
     // Zeroed once at start-up, before the audio runs.
     std::memset(line, 0, Delay::kBytes);
     std::memset(reverbMem, 0, Reverb::kBytes);
@@ -270,6 +276,7 @@ void FxUnit::setType(FxType t) {
     delay_.reset();
     reverb_.reset();
     mod_.reset();
+    clouds_.reset();
 }
 
 void FxUnit::setKnob(int i, uint8_t v) {
@@ -293,6 +300,12 @@ void FxUnit::apply(uint32_t bar) {
             break;
         }
         case FxType::kReverb: reverb_.set(knob_[0], knob_[1], knob_[2]); break;
+        case FxType::kClouds: {
+            auto u = [&](int i) { return float(knob_[i]) / 100.0f; };
+            clouds_.set(u(0), u(1), float(int(knob_[2]) - kCloudsPitchZero), u(3), u(4), u(5), u(6),
+                        knob_[kCloudsFreeze] != 0);
+            break;
+        }
         case FxType::kChorus:
         case FxType::kFlanger: {
             const bool fl = type_ == FxType::kFlanger;
@@ -327,6 +340,7 @@ void FxUnit::process(const float* inL, const float* inR, float* outL, float* out
         case FxType::kDelay:
         case FxType::kPingPong: delay_.process(inL, inR, outL, outR, n); break;
         case FxType::kReverb: reverb_.process(inL, inR, outL, outR, n); break;
+        case FxType::kClouds: clouds_.process(inL, inR, outL, outR, n); break;
         default: mod_.process(inL, inR, outL, outR, n); break;
     }
 }

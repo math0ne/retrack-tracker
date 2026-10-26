@@ -62,16 +62,21 @@ private:
     };
     struct ProjectFile {
         char magic[4];       // "LPRJ"
-        uint32_t version;    // 1
+        uint32_t version;    // 2 (1: without the part after track[])
         uint32_t bar;        // master bar length, frames (0: no loop)
         uint8_t bpm, beats, metronome, click, threshold, monitor, feedback, master;
         uint8_t ret[kFxSlots], fxType[kFxSlots];
-        uint8_t fxKnob[kFxSlots][kFxKnobs];
+        uint8_t fxKnob[kFxSlots][kFxBank];      // the first bank
         uint8_t perf[kPerfFxCount];
         ProjectTrack track[kTracks];
+        // Version 2:
+        uint8_t fxKnob2[kFxSlots][kFxBank];     // the second bank (Clouds)
+        uint8_t grain[kTracks][kGrainKnobs];    // Granular mode's knobs
     };
+    static constexpr uint32_t kProjectV1Bytes = 136;
     static_assert(sizeof(ProjectTrack) == 24, "fixed layout");
-    static_assert(sizeof(ProjectFile) == 4 + 4 + 4 + 8 + 4 + 8 + 8 + kTracks * 24, "fixed layout");
+    static_assert(sizeof(ProjectFile) == kProjectV1Bytes + kFxSlots * kFxBank + kTracks * kGrainKnobs,
+                  "fixed layout");
 
     void snapshot(ProjectFile& pf) const;
     void postSettings(const ProjectFile& pf, bool tracks);

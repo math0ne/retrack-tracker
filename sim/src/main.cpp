@@ -30,7 +30,9 @@
 //   expect_file PATH MINBYTES     a file on the SD card folder, at least MINBYTES long
 //   sd_file PATH BYTES            write a file of BYTES zero bytes on the SD card folder
 //   expect_flash NAME|none        the image the last firmware update asked for
-//   expect_pitch HZ               the left output's frequency since reset_levels, within 3 %
+//   expect_pitch HZ [TOL]         the left output's frequency since reset_levels, within 3 % (or TOL %)
+//   expect_mode TRACK NAME        playback mode (label without spaces: Halfspeed, Granular)
+//   expect_grain TRACK KNOB VALUE Granular mode's knob 1..4 (spread, size, density, pitch)
 //   expect_fx SLOT TYPE [K V]     FX slot (1..2) holds TYPE (and knob K, 1..4, is V)
 //   expect_perfknob FX VALUE      performance effect FX (1..8) knob value
 //   tone_shape steady|bursts      a continuous sine, or the default bursts
@@ -403,9 +405,12 @@ struct Headless {
                     m.storage.close(fh);
                 }
             } else if (cmd == "expect_pitch") {
-                // expect_pitch HZ: the left output's frequency since reset_levels, within 3 %
+                // expect_pitch HZ [TOL%]: the left output's frequency since reset_levels, within 3 % (or TOL)
+                std::string tol;
+                in >> tol;
+                const float tl = tol.empty() ? 3.0f : float(std::atof(tol.c_str()));
                 const float want = float(std::atof(arg.c_str())), got = m.probe.pitchHz();
-                const bool pass = want > 0.0f && std::fabs(got - want) <= want * 0.03f;
+                const bool pass = want > 0.0f && std::fabs(got - want) <= want * tl / 100.0f;
                 std::printf("%s:%d: expect_pitch %s %s (%.1f Hz)\n", path.c_str(), lineNo, arg.c_str(),
                             pass ? "PASS" : "FAIL", got);
                 ok = ok && pass;
@@ -460,6 +465,29 @@ struct Headless {
                             s >= 0 && s < looper::kFxSlots ? looper::fxTypeInfo(m.app.engine().fxType(s)).name : "?",
                             unsigned(m.app.engine().fxKnob(s, 0)), unsigned(m.app.engine().fxKnob(s, 1)),
                             unsigned(m.app.engine().fxKnob(s, 2)), unsigned(m.app.engine().fxKnob(s, 3)));
+                ok = ok && pass;
+            } else if (cmd == "expect_mode") {
+                // expect_mode TRACK NAME: the track's playback mode, its label without spaces
+                const int t = std::atoi(arg.c_str()) - 1;
+                std::string want, got;
+                in >> want;
+                if (t >= 0 && t < looper::kTracks)
+                    for (const char* c = looper::modeInfo(m.app.engine().mode(t)).name; *c; ++c)
+                        if (*c != ' ') got += *c;
+                const bool pass = got == want;
+                std::printf("%s:%d: expect_mode %s %s %s (%s)\n", path.c_str(), lineNo, arg.c_str(), want.c_str(),
+                            pass ? "PASS" : "FAIL", got.c_str());
+                ok = ok && pass;
+            } else if (cmd == "expect_grain") {
+                // expect_grain TRACK KNOB VALUE: Granular mode's knob (1 spread, 2 size, 3 density, 4 pitch)
+                std::string kn, val;
+                in >> kn >> val;
+                const int t = std::atoi(arg.c_str()) - 1, k = std::atoi(kn.c_str()) - 1;
+                const int got = t >= 0 && t < looper::kTracks && k >= 0 && k < looper::kGrainKnobs
+                                    ? m.app.engine().grainParam(t, k) : -1;
+                const bool pass = got == std::atoi(val.c_str());
+                std::printf("%s:%d: expect_grain %s %s %s %s (%d)\n", path.c_str(), lineNo, arg.c_str(), kn.c_str(),
+                            val.c_str(), pass ? "PASS" : "FAIL", got);
                 ok = ok && pass;
             } else if (cmd == "expect_perfknob") {
                 // expect_perfknob FX VALUE: performance effect FX (1..8) knob value

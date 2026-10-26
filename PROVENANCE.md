@@ -26,6 +26,14 @@ MIT notice (copyright line) from the OpenTracker author and add it here.
 | `sim/src/*` except `main.cpp` | same |
 | `sim/third_party/*` | same (DejaVu ROM-font stand-ins, stb_image) |
 
+`src/looper/clouds/` comes from the same fork's `src/core/audio/clouds/`
+(its port of Mutable Instruments Clouds, MIT, copyright 2014 Emilie Gillet):
+`stmlib_compat.*`, `resources.*`, `diffuser.h` unmodified but for include
+paths; `granular_sample_player.h` with a 128-sample block; `grain.h` reads
+mono buffers too. `clouds_fx.*` is new (the fork's `granular_cloud.*`
+rewritten: stereo in, freeze, continuous resampling, a working feedback
+high-pass).
+
 New in this repo: `src/looper/*`, `src/device_main.cpp`, `sim/src/main.cpp`,
 `sim/scripts/*`, both Makefiles (adapted from OpenTracker's).
 

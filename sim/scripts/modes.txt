@@ -25,6 +25,7 @@ expect_ch right silent
 press F5
 shot ../build/sim/check/modes_bar.png
 press F2
+expect_mode 1 Reverse
 wait 1000
 reset_levels
 wait 700
@@ -32,15 +33,17 @@ expect_ch right 0.2
 expect_ch left silent
 shot ../build/sim/check/modes_reverse.png
 
-# Every other mode makes sound.
+# Every other mode makes sound. Page 1 of the bar: F1..F4, F6..F8 (F5 turns the page).
 press F5
 press F3
+expect_mode 1 Ping-pong
 wait 200
 reset_levels
 wait 1500
 expect_audio 0.2
 press F5
 press F4
+expect_mode 1 Halfspeed
 wait 200
 reset_levels
 wait 1500
@@ -50,27 +53,43 @@ press REC
 wait 100
 shot ../build/sim/check/modes_half_speed_hint.png
 press F5
-press F5
+press F6
+expect_mode 1 Double
 wait 200
 reset_levels
 wait 1000
 expect_audio 0.2
 press F5
-press F6
+press F7
+expect_mode 1 Halftime
 wait 200
 reset_levels
 wait 1500
 expect_audio 0.2
 shot ../build/sim/check/modes_half_time.png
 press F5
-press F7
+press F8
+expect_mode 1 Octaveup
 wait 200
 reset_levels
 wait 1500
 expect_audio 0.2
+# Page 2: F5 in the bar turns to it (Octave dn, Granular).
 press F5
-press F8
+press F5
+wait 50
+shot ../build/sim/check/modes_bar_page2.png
+press F1
+expect_mode 1 Octavedn
 wait 200
+reset_levels
+wait 1500
+expect_audio 0.2
+# The bar opens on the page with the track's mode.
+press F5
+press F2
+expect_mode 1 Granular
+wait 300
 reset_levels
 wait 1500
 expect_audio 0.2

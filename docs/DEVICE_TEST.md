@@ -64,9 +64,13 @@ Run these and note the lines:
 4. **Performance mode**: hold several effects at once, filter sweeps and
    repeats.
 5. **Worst case**: record a loop on all four tracks, then **Shift + Help**.
-   Every track goes to a grain mode with both filters latched and full sends;
-   the metronome comes on. This is the highest load the app can make; its
-   `cpu max` is the number that matters. Tap Perform twice to drop the effects.
+   Every track goes to Granular (8 grains, an octave up) with both filters
+   latched and full sends; FX 1 becomes a reverb and FX 2 Clouds at full
+   density (24 grains); the metronome comes on. This is the highest load the
+   app can make; its `cpu max` is the number that matters. Every grain reads
+   the uncached 16-bit SDRAM, so this is the first number to check after the
+   Clouds port: if it is over budget, lower `CloudsFx::kMaxGrains` and
+   `kLoopGrains`. Tap Perform twice to drop the effects.
 
 Listen for clicks or dropouts in each one; a click with `cpu max` well under
 100 % points somewhere else (SDRAM, I2S), so note when it happens.

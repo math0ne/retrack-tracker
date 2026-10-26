@@ -224,10 +224,26 @@ void App::record(int t) {
     engine_.post(Engine::kRecord, uint8_t(t));
 }
 
+namespace {
+// The mode bar: two pages of the eight keys, F5 turns the page (-1), -2 = blank.
+constexpr int kModeMore = -1, kModeNone = -2;
+constexpr int kModeBarKeys[2][8] = {
+    {int(PlayMode::kForward), int(PlayMode::kReverse), int(PlayMode::kPingPong), int(PlayMode::kHalfSpeed),
+     kModeMore, int(PlayMode::kDoubleSpeed), int(PlayMode::kStretch), int(PlayMode::kOctaveUp)},
+    {int(PlayMode::kOctaveDown), int(PlayMode::kGranular), kModeNone, kModeNone, kModeMore, kModeNone, kModeNone,
+     kModeNone},
+};
+}  // namespace
+
 void App::onFKey(int key) {
     const uint8_t t = uint8_t(selected_);
-    if (modeBar_) {   // the key under a mode label picks it
-        engine_.post(Engine::kMode, t, int16_t(key));
+    if (modeBar_) {   // the key under a mode label picks it; F5 turns the page
+        const int m = kModeBarKeys[modePage_ & 1][key & 7];
+        if (m == kModeMore) {
+            modePage_ ^= 1;
+            return;
+        }
+        if (m >= 0) engine_.post(Engine::kMode, t, int16_t(m));
         modeBar_ = false;
         return;
     }
@@ -235,7 +251,7 @@ void App::onFKey(int key) {
         case 0: record(selected_); break;
         case 1: engine_.post(Engine::kPlayStop, t); break;
         case 2: engine_.post(Engine::kMute, t); break;
-        case 4: modeBar_ = true; break;   // F4 (metronome / tempo) and F6 (input) are tap / hold keys: onInput
+        // F4 (metronome / tempo), F5 (mode), F6 (input) and F7 (volume) are tap / hold keys: onInput
         default: break;
     }
 }
@@ -260,6 +276,14 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     if (ev.type == E::kEncoder) {
+        if (grainPanel()) {   // F5 held on a Granular track: the selected grain knob
+            const GrainKnob& gk = kGrainKnobInfo[grainSel_];
+            int v = int(engine_.grainParam(selected_, grainSel_)) + ev.delta * (grainSel_ == 3 || shift_ ? 1 : 2);
+            v = v < 0 ? 0 : (v > gk.max ? gk.max : v);
+            engine_.post(Engine::kGrainParam, uint8_t(selected_), int16_t((grainSel_ << 8) | v));
+            f5Used_ = true;
+            return;
+        }
         if (f7Held_) {   // F7 held: the selected track's volume
             const int vol = int(engine_.volume(selected_)) + ev.delta * (shift_ ? 1 : 2);
             engine_.post(Engine::kVolume, uint8_t(selected_), int16_t(vol < 0 ? 0 : (vol > 100 ? 100 : vol)));
@@ -350,6 +374,31 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     const bool home = !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !modeBar_;
+    // Home page F5: a tap opens the mode bar; held on a Granular track, the
+    // grain knobs (F1..F4 pick one while it is held).
+    if (ev.id == b::F5 && (home || f5Held_)) {
+        if (down) {
+            f5Held_ = true;
+            f5Used_ = false;
+            f5DownMs_ = ev.timeMs;
+        } else if (f5Held_) {
+            f5Held_ = false;
+            if (!f5Used_ && ev.timeMs - f5DownMs_ < kTapMs) {
+                modeBar_ = true;
+                modePage_ = engine_.mode(selected_) == PlayMode::kOctaveDown ||
+                                    engine_.mode(selected_) == PlayMode::kGranular
+                                ? 1 : 0;   // the page with the track's mode
+            }
+        }
+        return;
+    }
+    if (f5Held_ && down && ev.id >= b::F1 && ev.id <= b::F4 &&
+        engine_.mode(selected_) == PlayMode::kGranular) {
+        grainSel_ = ev.id - b::F1;
+        f5Used_ = true;
+        return;
+    }
+    if (f5Held_ && ev.id >= b::F1 && ev.id <= b::F4) return;   // their release too
     // Home page F7: hold + encoder sets the selected track's volume (the
     // encoder alone does too; holding shows the knob).
     if (ev.id == b::F7 && (home || f7Held_)) {
@@ -501,14 +550,16 @@ void App::onInput(const ot::InputEvent& ev) {
 
 void App::stressPreset() {
     // Shift + Help: the heaviest audio load the app can make, for measuring the
-    // ceiling on the device. Every track with a loop goes to a grain mode (two
-    // interpolated grains per sample) with both filters latched and full sends;
-    // metronome and the readout on. Tap Perform twice to drop the effects.
-    static const PlayMode kStressMode[kTracks] = {PlayMode::kStretch, PlayMode::kOctaveUp, PlayMode::kOctaveDown,
-                                                  PlayMode::kStretch};
+    // ceiling on the device. Every track with a loop goes to Granular at full
+    // density, an octave up (each grain reads twice the frames), with both
+    // filters latched and full sends; FX 1 a reverb, FX 2 Clouds at full
+    // density; metronome and the readout on. Tap Perform twice to drop the effects.
     for (int t = 0; t < kTracks; ++t) {
         if (!engine_.view(t).len.load()) continue;
-        engine_.post(Engine::kMode, uint8_t(t), int16_t(kStressMode[t]));
+        engine_.post(Engine::kMode, uint8_t(t), int16_t(PlayMode::kGranular));
+        engine_.post(Engine::kGrainParam, uint8_t(t), int16_t((1 << 8) | 100));                   // size
+        engine_.post(Engine::kGrainParam, uint8_t(t), int16_t((2 << 8) | 100));                   // density
+        engine_.post(Engine::kGrainParam, uint8_t(t), int16_t((3 << 8) | (kGrainPitchZero + 12)));
         static const PerfFx kStressFx[] = {PerfFx::kLowPass, PerfFx::kHighPass};
         for (PerfFx fx : kStressFx) {
             perfLatch_[t] |= uint8_t(1u << int(fx));
@@ -517,10 +568,13 @@ void App::stressPreset() {
         engine_.post(Engine::kMix, uint8_t(t), int16_t((int(MixParam::kSend1) << 8) | 100));
         engine_.post(Engine::kMix, uint8_t(t), int16_t((int(MixParam::kSend2) << 8) | 100));
     }
+    engine_.post(Engine::kFxType, 0, int16_t(FxType::kReverb));
+    engine_.post(Engine::kFxType, 1, int16_t(FxType::kClouds));
+    engine_.post(Engine::kFxKnob, 1, int16_t((3 << 8) | 100));   // Clouds density: every grain
     engine_.post(Engine::kOpt, 0, int16_t((int(OptParam::kMetronome) << 8) | 1));
     engine_.post(Engine::kMonitor, 0, 1);
     stats_ = true;
-    hint(selected_, "Stress: grains, both filters, full sends, click", p_.clock->millis());
+    hint(selected_, "Stress: granular, filters, reverb + Clouds, click", p_.clock->millis());
 }
 
 void App::closePerf() {
@@ -543,6 +597,13 @@ void App::onPad(int pad, bool down) {
     if (pad < 0 || pad >= ot::kPadCount) return;
     const int t = pad / ot::kPadCols, col = pad % ot::kPadCols;
     if (t >= kTracks) return;
+    if (perf_ && col == 3) {   // performance: Freeze for a Clouds slot (row 1 FX 1, row 2 FX 2)
+        if (down && t < kFxSlots && engine_.fxType(t) == FxType::kClouds) {
+            const int on = engine_.fxKnob(t, kCloudsFreeze) ? 0 : 1;
+            engine_.post(Engine::kFxKnob, uint8_t(t), int16_t((kCloudsFreeze << 8) | on));
+        }
+        return;
+    }
     if (perf_ && col >= 4) {
         // Performance: held effects, or Shift + pad to latch / unlatch.
         const int fx = col - 4;
@@ -619,7 +680,11 @@ void App::updateLeds(uint32_t now) {
         set(1, s == TrackState::kPlaying || s == TrackState::kOverdubbing ? kMid
                : s == TrackState::kQueued ? (fast ? kFull : kFaint) : (content ? kFaint : kOff));
         set(2, muted ? kFull : (content ? kFaint : kOff));
-        set(3, content || s == TrackState::kRecording ? kFaint : kOff);
+        if (perf_)   // col 4 is Freeze (rows 1 / 2) for a Clouds slot
+            set(3, t < kFxSlots && engine_.fxType(t) == FxType::kClouds
+                       ? (engine_.fxKnob(t, kCloudsFreeze) ? kFull : kDimL) : kOff);
+        else
+            set(3, content || s == TrackState::kRecording ? kFaint : kOff);
         if (perf_) {
             // Performance: the eight effect pads, full while their effect runs.
             const uint8_t on = v.perf.load();
@@ -849,7 +914,9 @@ void App::render(uint32_t now) {
         for (int t = 0; t < kTracks; ++t) drawLane(t, now);
     drawFKeys();
     // Pop-up knobs: F7 held (input gain), an effect pad held in performance mode.
-    if (f7Held_) {
+    if (grainPanel()) {
+        drawGrainPanel();
+    } else if (f7Held_) {
         char v[12], title[32];
         const uint8_t vol = engine_.volume(selected_);
         std::snprintf(v, sizeof v, "%u", unsigned(vol));
@@ -1100,9 +1167,15 @@ void App::drawFKeys() {
         bool hot = false;
         uint32_t hotCol = 0;   // a lit key's own colour (0: the page's)
         if (modeBar_) {
+            const int m = kModeBarKeys[modePage_ & 1][i];
             title[i] = "";
-            std::snprintf(val[i], sizeof val[i], "%s", kModes[i].name);
-            hot = int(mode) == i;
+            std::snprintf(val[i], sizeof val[i], "%s",
+                          m >= 0 ? kModes[m].name : (m == kModeMore ? (modePage_ ? "< Back" : "More >") : ""));
+            hot = m >= 0 && int(mode) == m;
+        } else if (grainPanel() && i < kGrainKnobs) {   // F5 held: F1..F4 pick a grain knob
+            title[i] = kGrainKnobInfo[i].name;
+            grainText(i, val[i], sizeof val[i]);
+            hot = grainSel_ == i;
         } else if (fxPage_ >= 0 && fxBar_) {   // the effect types: the key under one picks it
             title[i] = "";
             std::snprintf(val[i], sizeof val[i], "%s", i < kFxTypeCount ? kFxTypes[i].name : "");
@@ -1112,11 +1185,12 @@ void App::drawFKeys() {
             if (i == 0) {
                 title[i] = "TYPE";
                 std::snprintf(val[i], sizeof val[i], "%s", ti.name);
-            } else if (i <= kFxKnobs) {
-                title[i] = ti.knob[i - 1].name ? ti.knob[i - 1].name : "";
-                if (ti.knob[i - 1].name) fxKnobText(fxPage_, i - 1, val[i], sizeof val[i]);
+            } else if (i <= kFxBank) {
+                const int kn = fxBankOf(fxPage_) * kFxBank + i - 1;
+                title[i] = ti.knob[kn].name ? ti.knob[kn].name : "";
+                if (ti.knob[kn].name) fxKnobText(fxPage_, kn, val[i], sizeof val[i]);
                 else val[i][0] = 0;
-                hot = fxSel_ == i - 1;
+                hot = fxSel_ == kn;
             } else if (i == 5) {
                 title[i] = "RETURN";
                 std::snprintf(val[i], sizeof val[i], "%u",
@@ -1372,10 +1446,12 @@ void App::mixerEncoder(int delta) {
 }
 
 void App::stepFxKnob(int slot, int knob, int delta) {
-    // List knobs (delay time) step one entry; 0..100 knobs two (Shift: one).
+    // List knobs (delay time) step one entry, and Clouds' pitch one semitone;
+    // 0..100 knobs two (Shift: one).
     const FxKnob& kn = fxTypeInfo(engine_.fxType(slot)).knob[knob];
     if (!kn.name) return;
-    int v = int(engine_.fxKnob(slot, knob)) + delta * (kn.list || shift_ ? 1 : 2);
+    const bool semis = engine_.fxType(slot) == FxType::kClouds && knob == 2;
+    int v = int(engine_.fxKnob(slot, knob)) + delta * (kn.list || semis || shift_ ? 1 : 2);
     v = v < 0 ? 0 : (v > kn.max ? kn.max : v);
     engine_.post(Engine::kFxKnob, uint8_t(slot), int16_t((knob << 8) | v));
 }
@@ -1385,6 +1461,8 @@ void App::fxKnobText(int slot, int knob, char* buf, size_t n) const {
     const uint8_t v = engine_.fxKnob(slot, knob);
     if (!kn.name) std::snprintf(buf, n, "-");
     else if (kn.list) std::snprintf(buf, n, "%s", kn.list[v <= kn.max ? v : 0]);
+    else if (engine_.fxType(slot) == FxType::kClouds && knob == 2)
+        std::snprintf(buf, n, "%+d st", int(v) - kCloudsPitchZero);
     else std::snprintf(buf, n, "%u", unsigned(v));
 }
 
@@ -2567,6 +2645,44 @@ void App::drawKnob(int cx, int cy, int r, float frac, float shown, uint32_t col,
     }
 }
 
+bool App::grainPanel() const {
+    if (!f5Held_ || engine_.mode(selected_) != PlayMode::kGranular) return false;
+    return f5Used_ || p_.clock->millis() - f5DownMs_ >= 250;   // a tap does not flash it
+}
+
+void App::grainText(int knob, char* buf, size_t n) const {
+    const uint8_t v = engine_.grainParam(selected_, knob);
+    switch (knob) {
+        case 0: std::snprintf(buf, n, "%u%%", unsigned(v)); break;
+        case 1: std::snprintf(buf, n, "%d ms", int(std::lround(20.0f * std::pow(25.0f, float(v) / 100.0f)))); break;
+        case 2: std::snprintf(buf, n, "%.1fx", double(1.0f + 7.0f * float(v) * float(v) / 10000.0f)); break;
+        default: std::snprintf(buf, n, "%+d st", int(v) - kGrainPitchZero); break;
+    }
+}
+
+void App::drawGrainPanel() {
+    // F5 held on a Granular track: its four grain knobs on a plate over the lanes.
+    const uint32_t tc = kTrackColor[selected_];
+    color(0x000000);
+    alpha(110);
+    fillRect(132, 84, 668, 376, 22);
+    alpha(255);
+    panel(140, 90, 660, 360, 16, 0x2A2A2A);
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "Track %d granular", selected_ + 1);
+    color(tc);
+    text(400, 114, kFontBig, Disp::kOptCenter, buf);
+    for (int i = 0; i < kGrainKnobs; ++i) {
+        const GrainKnob& gk = kGrainKnobInfo[i];
+        const float fr = float(engine_.grainParam(selected_, i)) / float(gk.max);
+        grainShown_[i] += (fr - grainShown_[i]) * 0.35f;
+        grainText(i, buf, sizeof buf);
+        drawKnob(205 + i * 130, 236, 44, fr, grainShown_[i], tc, grainSel_ == i, 0.0f, gk.name, buf);
+    }
+    color(kDim);
+    text(400, 336, kFontSmall, Disp::kOptCenter, "F1-F4: knob   Encoder: value   Release F5: done");
+}
+
 void App::drawPopupKnob(const char* title, const char* value, float frac, float& shown, uint32_t col, float meter) {
     // A big knob over the middle of the screen while its control is held.
     shown += (frac - shown) * 0.35f;
@@ -2639,9 +2755,14 @@ void App::fxKey(uint8_t id) {
     auto exists = [&](int k) { return k == kFxKnobs || (k >= 0 && k < kFxKnobs && ti.knob[k].name); };
     switch (id) {
         case b::F1: fxBar_ = true; break;
-        case b::F2: case b::F3: case b::F4: case b::F5:
-            if (exists(id - b::F2)) fxSel_ = id - b::F2;
+        case b::F2: case b::F3: case b::F4: case b::F5: {   // Shift: the second bank
+            const int kn = (shift_ ? kFxBank : 0) + id - b::F2;
+            if (exists(kn)) {
+                fxSel_ = kn;
+                fxBank_ = kn / kFxBank;
+            }
             break;
+        }
         case b::F6: fxSel_ = kFxKnobs; break;
         case b::F7: fxPage_ = 1 - fxPage_; break;
         case b::F8: goHome(); break;
@@ -2661,6 +2782,13 @@ void App::fxKey(uint8_t id) {
             break;
         default: break;
     }
+    if (fxSel_ < kFxKnobs) fxBank_ = fxSel_ / kFxBank;
+}
+
+int App::fxBankOf(int slot) const {
+    const FxTypeInfo& ti = fxTypeInfo(engine_.fxType(slot));
+    const int b = fxSel_ < kFxKnobs ? fxSel_ / kFxBank : fxBank_;
+    return b && ti.knob[kFxBank].name ? 1 : 0;   // a type without a second bank shows the first
 }
 
 void App::fxEncoder(int delta) {
@@ -2707,12 +2835,14 @@ void App::drawFxPage(uint32_t now) {
         color(cur ? kInk : kDim);
         text(52, 252 + i * 34, kFontSmall, Disp::kOptCenter, kFxTypes[i].name);
     }
-    for (int k = 0; k < kFxKnobs; ++k) {
+    const int bank = fxBankOf(slot);
+    for (int i = 0; i < kFxBank; ++i) {
+        const int k = bank * kFxBank + i;
         if (!ti.knob[k].name) continue;
         const float fr = fxKnobFrac(slot, k);
         knobShown_[slot][k] += (fr - knobShown_[slot][k]) * 0.3f;   // the knobs glide
         fxKnobText(slot, k, buf, sizeof buf);
-        drawKnob((k + 1) * kKeyW + kKeyW / 2, 326, 34, fr, knobShown_[slot][k], sc, fxSel_ == k, 0.0f,
+        drawKnob((i + 1) * kKeyW + kKeyW / 2, 326, 34, fr, knobShown_[slot][k], sc, fxSel_ == k, 0.0f,
                  ti.knob[k].name, buf);
     }
     const uint8_t ret = engine_.mix(slot ? MixParam::kReturn2 : MixParam::kReturn1);
@@ -2721,9 +2851,19 @@ void App::drawFxPage(uint32_t now) {
     drawKnob(5 * kKeyW + kKeyW / 2, 326, 34, float(ret) / 100.0f, knobShown_[slot][kFxKnobs], sc,
              fxSel_ == kFxKnobs, retMeter_[slot] * 1.5f, "Return", buf);
     color(0x4A5563);
-    text(700, 300, kFontSmall, Disp::kOptCenter, "Encoder: knob");
-    text(700, 320, kFontSmall, Disp::kOptCenter, "Shift: fine");
-    text(700, 340, kFontSmall, Disp::kOptCenter, "Sends: mixer");
+    if (ti.knob[kFxBank].name) {   // two banks
+        std::snprintf(buf, sizeof buf, "Knobs %d of 2", bank + 1);
+        color(kDim);
+        text(700, 280, kFontSmall, Disp::kOptCenter, buf);
+        color(0x4A5563);
+        text(700, 300, kFontSmall, Disp::kOptCenter, bank ? "F2-F5: first" : "Shift+F2-F5:");
+        text(700, 320, kFontSmall, Disp::kOptCenter, bank ? "Shift: fine" : "the others");
+        text(700, 340, kFontSmall, Disp::kOptCenter, "Sends: mixer");
+    } else {
+        text(700, 300, kFontSmall, Disp::kOptCenter, "Encoder: knob");
+        text(700, 320, kFontSmall, Disp::kOptCenter, "Shift: fine");
+        text(700, 340, kFontSmall, Disp::kOptCenter, "Sends: mixer");
+    }
 }
 
 void App::drawFxVisual(int slot, uint32_t now) {
@@ -2845,6 +2985,40 @@ void App::drawFxVisual(int slot, uint32_t now) {
             std::snprintf(buf, sizeof buf, "rate %d.%02d Hz", int(rate), int(rate * 100.0f) % 100);
             color(kDim);
             text(x1 - 4, y1 - 2, kFontSmall, Disp::kOptRightX, buf);
+            break;
+        }
+        case FxType::kClouds: {
+            // The 4.1 s record buffer, newest on the right: each grain a bar
+            // where it reads, as tall as its envelope now, as wide as it is.
+            const CloudsFx& c = engine_.fxClouds(slot);
+            clouds::GrainVisual gv[CloudsFx::kMaxGrains];
+            const int ng = c.grains(gv, CloudsFx::kMaxGrains);
+            const float head = float(c.writeHead()) / float(CloudsFx::kFrames);
+            color(0x1C1C1C);
+            hline(x0, x1, mid, 16);
+            for (int i = 1; i < 4; ++i) vline(x0 + (x1 - x0) * i / 4, y0 + 8, y1 - 8, 16);   // one second apart
+            for (int i = 0; i < ng; ++i) {
+                float age = head - gv[i].position;
+                if (age < 0.0f) age += 1.0f;
+                const int gx = x1 - int(age * float(x1 - x0));
+                const float env = 1.0f - std::fabs(2.0f * gv[i].phase - 1.0f);
+                const int gw = 2 + int(gv[i].size * float(x1 - x0));
+                const int gh = 4 + int(env * float(h));
+                const int py = mid - int((gv[i].pan - 0.5f) * 40.0f);   // left grains higher
+                color(sc);
+                alpha(uint8_t(80 + 150 * env));
+                fillRect(gx - gw / 2, py - gh / 2, gx + gw / 2 + 1, py + gh / 2, 2);
+            }
+            alpha(255);
+            color(c.frozen() ? kInk : kDim);
+            vline(x1, y0 + 4, y1 - 4, 24);   // the write head (still when frozen)
+            std::snprintf(buf, sizeof buf, "%d grain%s", ng, ng == 1 ? "" : "s");
+            color(kDim);
+            text(x0 + 4, y0 + 2, kFontSmall, 0, buf);
+            if (c.frozen()) {
+                color(kInk);
+                text(x1 - 8, y0 + 2, kFontSmall, Disp::kOptRightX, "FROZEN");
+            }
             break;
         }
         default: break;

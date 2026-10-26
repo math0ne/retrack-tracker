@@ -69,7 +69,7 @@ while it is muted.
 | F2 PLAY | Stop: the track goes silent and back to its start. Play: it starts again from its start on the next bar line (press again to cancel) |
 | F3 MUTE | Mute on/off |
 | F4 TEMPO | Tap: metronome on/off (the label is bright while it is on). Hold + encoder: tempo, 1 bpm a step (a knob shows while held). Shift + hold + encoder: click level. Delete clears tracks |
-| F5 MODE | Opens the mode bar: the eight labels become the playback modes and the key under one picks it. Any other key closes it. |
+| F5 MODE | Tap: the mode bar, two pages of playback modes; the key under one picks it, F5 in the bar turns the page (it opens on the page with the track's mode). Any other key closes it. Hold on a Granular track: its grain knobs (F1–F4 pick one, the encoder turns it) |
 | F6 INPUT | Tap: the Input page (the cell shows the source and the input level). Hold + encoder: input gain (a knob with the input level shows while held) |
 | F7 VOLUME | The selected track's volume, with its output level in the cell. Hold + encoder: a volume knob (the encoder alone sets it too) |
 | F8 | Free |
@@ -182,7 +182,20 @@ position instead of jumping.
 | Double | Tape style: double tempo, an octave up | no |
 | Half time | Time-stretched: half tempo, same pitch (two cross-faded 46 ms grains) | no |
 | Octave up | Pitch-shifted: same tempo, an octave up (grains) | no |
-| Octave dn | Pitch-shifted: same tempo, an octave down (grains) | no |
+| Octave dn | Pitch-shifted: same tempo, an octave down (grains); page 2 of the bar | no |
+| Granular | Clouds grains read around the playhead, so the loop keeps its time; page 2 | no |
+
+Page 1 of the mode bar: F1 Forward, F2 Reverse, F3 Ping-pong, F4 Half speed,
+F5 More, F6 Double, F7 Half time, F8 Octave up. Page 2: F1 Octave dn,
+F2 Granular, F5 Back.
+
+**Granular** plays the loop through up to eight Clouds grains (Mutable
+Instruments' grain and window code), each centred on where the loop is now.
+Hold **F5** on a Granular track for its four knobs: **Spread** (0 %: at the
+playhead … 100 %: anywhere in the loop), **Size** (20–500 ms), **Density**
+(1–8 grains overlapping) and **Pitch** (±24 semitones). With the track's Tempo
+option on Tape, a tempo change moves the grains' pitch too; on Stretch it
+stays. Projects save the knobs.
 
 Overdub needs speed 1 so it can write where it reads; in the other modes REC
 shows a hint instead.
@@ -219,8 +232,9 @@ the bar lines (numbered) and the beat lines where they fall in that take.
 it to use it only while held. Each lane's waveform shows eight effect cells,
 laid out like pad columns 5–12 of that track's row. Hold a pad to play its
 effect on that track; Shift + pad latches it (a dot in the cell) until pressed
-again. Leaving performance mode turns everything off. Pad columns 1–4 keep
-record / play / mute / clear.
+again. Leaving performance mode turns everything off. Pad columns 1–3 keep
+record / play / mute; column 4 is **Freeze** for a Clouds slot (row 1 FX 1,
+row 2 FX 2; lit while frozen) instead of clear.
 
 Each effect has one knob: **hold its pad and turn the encoder** (a big knob
 shows while held). The knobs are shared by the four tracks; each cell shows its
@@ -268,7 +282,7 @@ the loop start.
 ### Mixer and send effects
 
 Two send effect slots, FX 1 (a delay to start with) and FX 2 (a reverb). Every
-track has a post-fader send to each. Either slot can hold any of five effects:
+track has a post-fader send to each. Either slot can hold any of six effects:
 
 | Effect | Knobs |
 |---|---|
@@ -277,11 +291,13 @@ track has a post-fader send to each. Either slot can hold any of five effects:
 | Reverb | Size (decay 0.3–9 s), Tone (dark … bright), Width |
 | Chorus | Rate (0.1–5 Hz), Depth, Width |
 | Flanger | Rate (0.05–2 Hz), Depth, Feedback, Manual (0.5–8 ms) |
+| Clouds | Mutable Instruments' granular processor on a 4.1 s record buffer (32 kHz, up to 24 grains). Knobs 1: Position (how far back the grains read), Size, Pitch (±24 semitones), Density (Clouds' deadband at noon; up from there grains come at random, down from there evenly). Knobs 2 (**Shift + F2–F5**): Texture (window shape; past 75 % a diffuser), Feedback, Spread (stereo), Freeze (the buffer stops recording; also pad 4 in performance mode) |
 
 **FX1 / FX2** open that slot's page: a live picture of the effect on top (the
 echo taps on the beat grid, the reverb's decay, the LFOs moving) and its knobs
 below, each over its screen key. **F1 TYPE** opens the type bar (the labels
-become the five effects; the key under one picks it). **F2–F5** pick a knob,
+become the six effects; the key under one picks it). **F2–F5** pick a knob
+(Clouds: Shift + F2–F5 the second four),
 **F6** the return, **F7** the other slot, **F8** home; Left/Right move between
 knobs and the encoder turns the selected one. Changing the type silences the
 slot for about 0.2 s while its delay line is cleared.

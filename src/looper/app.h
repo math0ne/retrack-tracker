@@ -153,6 +153,8 @@ private:
     void arc(int cx, int cy, float r, float a0, float a1, int segs);   // a LINE_STRIP arc, radians
     int fxPage_ = -1;             // slot shown, -1 = none
     bool fxBar_ = false;          // F1: the labels show the effect types
+    int fxBank_ = 0;              // the knob bank on F2..F5 (Shift + F2..F5: the second)
+    int fxBankOf(int slot) const; // the bank shown: the selected knob's, or the last one
     int fxSel_ = 0;               // selected knob, kFxKnobs = return
     float knobShown_[kFxSlots][kFxPageKnobs] = {};   // eased towards the values: the knobs glide
 
@@ -210,6 +212,16 @@ private:
     int selected_ = 0;
     bool shift_ = false;
     bool modeBar_ = false;       // F5 pressed: the F-key labels show the playback modes
+    int modePage_ = 0;           // the bar's page (F5 in the bar turns it)
+    // F5 on the home page: tap = the mode bar; held on a Granular track, a
+    // panel of its four grain knobs (F1..F4 pick one, the encoder turns it).
+    bool f5Held_ = false, f5Used_ = false;
+    uint32_t f5DownMs_ = 0;
+    int grainSel_ = 1;
+    float grainShown_[kGrainKnobs] = {};
+    bool grainPanel() const;     // the panel is up
+    void drawGrainPanel();
+    void grainText(int knob, char* buf, size_t n) const;
     bool mixer_ = false;         // mixer page shown
     int strip_ = 0, row_ = 2;    // mixer selection
     bool options_ = false;       // track options page shown
