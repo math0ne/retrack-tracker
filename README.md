@@ -57,7 +57,7 @@ eight screen keys, each centred over its key as on the stock Tracker.
 | Screen key | Action (selected track for F1–F5) |
 |---|---|
 | F1 REC | Record / finish / overdub / stop overdub |
-| F2 PLAY | Play / stop the track |
+| F2 PLAY | Stop: the track goes silent and back to its start. Play: it starts again from its start on the next bar line (WAIT; press again to cancel) |
 | F3 MUTE | Mute on/off |
 | F4 CLEAR | Clear the track; with Shift, all tracks |
 | F5 MODE | Opens the mode bar: the eight labels become the playback modes and the key under one picks it. Any other key closes it. |
@@ -68,12 +68,12 @@ eight screen keys, each centred over its key as on the stock Tracker.
 | Other control | Action |
 |---|---|
 | Pad column 1 | Record / overdub (empty → record → play ↔ overdub) |
-| Pad column 2 | Play / stop the track |
+| Pad column 2 | Stop / play the track, as F2 |
 | Pad column 3 | Mute |
 | Pad column 4 | Clear |
 | Pad columns 5–12 | Jump to that eighth of the loop, keeping the phase (stays in time) |
 | Rec | Record / overdub the selected track |
-| Play | Transport start / stop (restarts from bar 1); Shift + Play: metronome on / off |
+| Play | Transport: everything stops, or starts from bar 1 (what was playing plays, stopped tracks stay stopped); Shift + Play: metronome on / off |
 | Delete | Clear the selected track; Shift + Delete clears all |
 | Up / Down, any pad | Select track |
 | Encoder | Selected track volume; Shift + encoder = input gain |
@@ -85,6 +85,18 @@ eight screen keys, each centred over its key as on the stock Tracker.
 | S.Edit | Loop editor for the selected track |
 | Help | Show / hide the CPU, frame-rate and display-list readout; Shift + Help: stress preset |
 | Power (hold 1.5 s) | Switch off |
+
+### Stop, mute and starting things
+
+- **Mute** keeps a track running in time, silently: unmute and it carries on
+  where the loop is.
+- **Stop** puts a track back to its start. **Play** starts it from there on the
+  next bar line, so it comes in on the beat; **Rec** on a stopped track does the
+  same and overdubs from that bar.
+- **Starting one thing starts only that thing.** With the transport stopped,
+  recording a track, or pressing a track's Play, starts the bar clock for that
+  track alone; loops that were playing go to stopped, ready to start on a bar.
+  The **Play** key starts or stops everything together.
 
 ### Playback modes
 

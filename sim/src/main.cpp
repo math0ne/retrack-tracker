@@ -22,7 +22,7 @@
 //   expect_silent      fail unless the output peak since the last reset < 0.001, then reset
 //   expect_ch left|right MIN|silent   the same for one channel (no reset)
 //   expect_len TRACK SEC          track (1..4) loop length, within 10 ms
-//   expect_state TRACK NAME       EMPTY, COUNT, ARMED, REC, PLAY, DUB or STOP
+//   expect_state TRACK NAME       EMPTY, COUNT, ARMED, REC, PLAY, DUB, STOP or QUEUED
 //   opt TRACK|all NAME VALUE      set an option (stop, length, start, input, after, tempo,
 //                                 beats, metronome, click, threshold) as the options page does
 //   expect_fx SLOT TYPE [K V]     FX slot (1..2) holds TYPE (and knob K, 1..4, is V)
@@ -316,14 +316,14 @@ struct Headless {
                 ok = ok && pass;
             } else if (cmd == "expect_state") {
                 // expect_state TRACK EMPTY|COUNT|REC|PLAY|DUB|STOP
-                static const char* const kNames[] = {"CLEAR", "EMPTY", "COUNT", "ARMED", "REC", "PLAY", "DUB", "STOP"};
+                static const char* const kNames[] = {"CLEAR", "EMPTY", "COUNT", "ARMED", "REC", "PLAY", "DUB", "STOP", "QUEUED"};
                 std::string want;
                 in >> want;
                 const int t = std::atoi(arg.c_str()) - 1;
                 const int s = t >= 0 && t < looper::kTracks ? int(m.app.engine().view(t).state.load()) : 0;
-                const bool pass = s >= 0 && s < 8 && want == kNames[s];
+                const bool pass = s >= 0 && s < 9 && want == kNames[s];
                 std::printf("%s:%d: expect_state %s %s %s (%s)\n", path.c_str(), lineNo, arg.c_str(), want.c_str(),
-                            pass ? "PASS" : "FAIL", s >= 0 && s < 8 ? kNames[s] : "?");
+                            pass ? "PASS" : "FAIL", s >= 0 && s < 9 ? kNames[s] : "?");
                 ok = ok && pass;
             } else if (cmd == "opt") {
                 // opt TRACK|all NAME VALUE: a track option, as the options page sets it

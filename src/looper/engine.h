@@ -32,7 +32,8 @@ constexpr uint32_t kSampleRate = 44100;
 constexpr uint32_t kGrainFrames = 2048;      // granular modes: 46 ms grains, 50 % overlap
 
 enum class TrackState : uint8_t {
-    kClearing, kEmpty, kCountIn, kArmed, kRecording, kPlaying, kOverdubbing, kStopped
+    kClearing, kEmpty, kCountIn, kArmed, kRecording, kPlaying, kOverdubbing, kStopped,
+    kQueued,   // stopped, starts from its beginning on the next bar line
 };
 
 // Per-track recording options (Engine::kOpt). They stay when the track is cleared.
@@ -260,6 +261,7 @@ private:
         Perf perf;
         uint32_t start = 0;          // buffer index of loop frame 0 (trim moves it)
         bool busy = false;           // an edit job is moving the audio
+        bool launchDub = false;      // queued: overdub from the launch (Rec on a stopped track)
         struct {
             bool has = false;
             uint32_t start = 0, len = 0, anchor = 0;
@@ -294,6 +296,11 @@ private:
     uint32_t capOf(int t) const { return trk_[t].mono ? 2 * mem_[t].capacity : mem_[t].capacity; }
     void setOpt(OptParam p, int track, int value);
     void setPerf(int t, PerfFx fx, bool on);
+    // Stop / launch: a stopped track starts again from its beginning on the
+    // next bar line. Starting the clock for one track leaves the others stopped.
+    void queueLaunch(int t, bool dub);
+    void launch(Track& k);
+    void startClockAlone(int t);
     void startRepeat(Track& k, PerfFx r);
     void beginTake(int t, uint32_t tf, const int16_t* pre, uint32_t preFrames);   // sound start
     void clearTrack(int t);

@@ -70,6 +70,7 @@ const char* stateName(TrackState s) {
         case TrackState::kPlaying: return "PLAY";
         case TrackState::kOverdubbing: return "DUB";
         case TrackState::kStopped: return "STOP";
+        case TrackState::kQueued: return "WAIT";
     }
     return "";
 }
@@ -215,7 +216,7 @@ void App::hint(int t, const char* msg, uint32_t now) {
 void App::record(int t) {
     const TrackState s = TrackState(engine_.view(t).state.load());
     const ModeInfo& mi = modeInfo(engine_.mode(t));
-    if ((s == TrackState::kPlaying || s == TrackState::kStopped) && !mi.canDub) {
+    if (s == TrackState::kPlaying && !mi.canDub) {
         hint(t, "Overdub needs Forward, Reverse or Ping-pong", p_.clock->millis());
         return;
     }
@@ -531,7 +532,9 @@ void App::updateLeds(uint32_t now) {
         else if (s == TrackState::kCountIn) rec = beat && (v.startIn.load() % beat) > beat / 2 ? kFull : kFaint;
         else if (s == TrackState::kArmed) rec = slow ? kMid : kFaint;   // waiting for sound
         set(0, rec);
-        set(1, s == TrackState::kPlaying || s == TrackState::kOverdubbing ? kMid : (content ? kFaint : kOff));
+        // PLAY: lit while playing, blinking while waiting for its bar line.
+        set(1, s == TrackState::kPlaying || s == TrackState::kOverdubbing ? kMid
+               : s == TrackState::kQueued ? (fast ? kFull : kFaint) : (content ? kFaint : kOff));
         set(2, muted ? kFull : (content ? kFaint : kOff));
         set(3, content || s == TrackState::kRecording ? kFaint : kOff);
         if (perf_) {
@@ -813,7 +816,8 @@ void App::drawLane(int t, uint32_t now) {
         case TrackState::kPlaying: pc = scale(tc, 0.85f); ink = kBg; break;
         case TrackState::kStopped: pc = 0x3A4452; ink = kInk; break;
         case TrackState::kCountIn:
-        case TrackState::kArmed: pc = scale(kAmber, 0.3f + 0.3f * pulse(now, 1200)); ink = kInk; break;
+        case TrackState::kArmed:
+        case TrackState::kQueued: pc = scale(kAmber, 0.3f + 0.3f * pulse(now, 1200)); ink = kInk; break;
         default: break;
     }
     color(pc);
@@ -910,7 +914,7 @@ void App::drawLane(int t, uint32_t now) {
         int px = wx + int(uint64_t(kWaveW) * (pos % span) / span);
         if (s == TrackState::kRecording) px = wx + int(uint64_t(kWaveW) * written / span);
         const uint32_t ramg = kWaveRamG + uint32_t(t) * kWaveBytes;
-        const float dim = muted || s == TrackState::kStopped ? 0.35f : 1.0f;
+        const float dim = muted || s == TrackState::kStopped || s == TrackState::kQueued ? 0.35f : 1.0f;
         const bool rev = mode == PlayMode::kReverse && s != TrackState::kRecording;
         const float leftK = rev ? 0.45f * dim : dim, rightK = rev ? dim : 0.45f * dim;
         if (px > wx) {
@@ -934,6 +938,10 @@ void App::drawLane(int t, uint32_t now) {
         } else {
             text(wx1 - 6, wy + 2, kFontSmall, Disp::kOptRightX, "L");
             text(wx1 - 6, wy1 - 16, kFontSmall, Disp::kOptRightX, "R");
+        }
+        if (s == TrackState::kQueued) {   // waiting for its bar line
+            color(kAmber);
+            text(wx1 - 24, wy + 2, kFontSmall, Disp::kOptRightX, "starts on the next bar");
         }
         // A pending stop: how many beats are left in the take.
         const uint32_t stopIn = v.stopIn.load();
@@ -1054,7 +1062,8 @@ void App::drawFKeys() {
                     title[i] = "PLAY";
                     std::snprintf(val[i], sizeof val[i], "%s",
                                   s == TrackState::kPlaying || s == TrackState::kOverdubbing ? "Stop"
-                                  : s == TrackState::kStopped ? "Play" : "-");
+                                  : s == TrackState::kStopped ? "Play"
+                                  : s == TrackState::kQueued ? "Cancel" : "-");
                     break;
                 case 2:
                     title[i] = "MUTE";

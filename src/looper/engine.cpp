@@ -259,10 +259,7 @@ void Engine::startRecording(int t) {
         k.state = TrackState::kArmed;
         return;
     }
-    if (first || !running_) {
-        t_ = 0;
-        running_ = true;
-    }
+    if (first || !running_) startClockAlone(t);   // the other loops stay stopped
     const uint32_t bar = barLen(), beat = beatLen();
     k.stopAt = o.lenBeats ? uint32_t(o.lenBeats) * beat : 0;
     if (o.start == StartMode::kCountIn) {
@@ -410,11 +407,14 @@ void Engine::apply(const Msg& m) {
                 case TrackState::kArmed:
                 case TrackState::kRecording: requestStop(t); break;
                 case TrackState::kPlaying:
-                case TrackState::kStopped:
                     if (!modeInfo(k.mode).canDub) break;   // the app tells the user why
+                    if (!running_) startClockAlone(t);
                     k.state = TrackState::kOverdubbing;
-                    if (!running_) running_ = true;
                     break;
+                case TrackState::kStopped:   // start from the top on the next bar, overdubbing
+                    if (modeInfo(k.mode).canDub) queueLaunch(t, true);
+                    break;
+                case TrackState::kQueued: k.launchDub = modeInfo(k.mode).canDub; break;
                 case TrackState::kOverdubbing: k.state = TrackState::kPlaying; break;
                 case TrackState::kClearing: break;
             }
@@ -425,11 +425,11 @@ void Engine::apply(const Msg& m) {
                 case TrackState::kArmed:
                 case TrackState::kRecording: requestStop(t); break;
                 case TrackState::kPlaying:
-                case TrackState::kOverdubbing: k.state = TrackState::kStopped; break;
-                case TrackState::kStopped:
-                    k.state = TrackState::kPlaying;
-                    if (!running_) running_ = true;
+                case TrackState::kOverdubbing:   // stop: back to its start (shown there)
+                    k.state = TrackState::kStopped;
                     break;
+                case TrackState::kStopped: queueLaunch(t, false); break;
+                case TrackState::kQueued: k.state = TrackState::kStopped; break;   // cancel
                 default: break;
             }
             break;
@@ -545,8 +545,15 @@ void Engine::apply(const Msg& m) {
                         finishNow(o);
                 running_ = false;
             } else if (L_) {
+                // Everything from bar 1: what was playing plays, what was queued
+                // starts now, stopped tracks stay stopped.
                 t_ = 0;
                 running_ = true;
+                for (Track& x : trk_)
+                    if (x.state == TrackState::kQueued) {
+                        x.anchor = 0;
+                        launch(x);
+                    }
             }
             break;
         case kClearAll:
@@ -611,6 +618,41 @@ void Engine::startRepeat(Track& k, PerfFx r) {
     p.repT0 = t_;
     p.repIn = uint32_t((pos - s + int64_t(k.len)) % int64_t(k.len)) % slice;
     p.repFx = uint8_t(r);
+}
+
+void Engine::startClockAlone(int t) {
+    // The bar clock starts for track t only: loops that were playing or
+    // waiting go to stopped, to be started on a bar like any stopped track.
+    for (int o = 0; o < kTracks; ++o) {
+        Track& x = trk_[o];
+        if (o != t && (x.state == TrackState::kPlaying || x.state == TrackState::kOverdubbing ||
+                       x.state == TrackState::kQueued))
+            x.state = TrackState::kStopped;
+    }
+    t_ = 0;
+    running_ = true;
+}
+
+void Engine::launch(Track& k) {
+    k.offset16 = 0;
+    k.state = k.launchDub ? TrackState::kOverdubbing : TrackState::kPlaying;
+    restartGrains(k, uint64_t(posOf(k)) << 16);
+}
+
+void Engine::queueLaunch(int t, bool dub) {
+    Track& k = trk_[t];
+    k.launchDub = dub && modeInfo(k.mode).canDub;
+    if (!running_) {   // nothing running: this track starts the clock, from its top
+        startClockAlone(t);
+        k.anchor = 0;
+        launch(k);
+        return;
+    }
+    // From its beginning on the next bar line (now, when exactly on one).
+    const uint32_t bar = barLen();
+    k.anchor = bar ? ((t_ + bar - 1) / bar) * bar : t_;
+    k.offset16 = 0;
+    k.state = TrackState::kQueued;
 }
 
 void Engine::setPerf(int t, PerfFx fx, bool on) {
@@ -688,6 +730,9 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
         qTail_.store(tail, std::memory_order_release);
     }
     if (job_.state.load(std::memory_order_acquire) == 2) finishJob();
+    if (running_)
+        for (Track& k : trk_)   // queued tracks start on their bar line
+            if (k.state == TrackState::kQueued && k.anchor <= t_) launch(k);
     for (int t = 0; t < kTracks; ++t)
         if (trk_[t].state == TrackState::kClearing && zeroTodo_[t].load(std::memory_order_acquire) == 0) {
             trk_[t].state = TrackState::kEmpty;
@@ -734,9 +779,10 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                 std::memcpy(pre, preRoll_ + 2 * f, fromRing * 2 * sizeof(int16_t));
                 std::memcpy(pre + 2 * fromRing, in, f * 2 * sizeof(int16_t));
                 if (L_ == 0 || !running_) {
-                    // No loop running: the bar clock starts at the pre-roll.
+                    // No loop running: the bar clock starts at the pre-roll; the
+                    // other loops stay stopped.
+                    startClockAlone(t);
                     t_ = kPreRollFrames - f;
-                    running_ = true;
                 }
                 beginTake(t, t_ + f, pre, kPreRollFrames);
                 fStart = f;
@@ -1077,7 +1123,9 @@ void Engine::publish() {
         v.mode.store(uint8_t(k.mode), std::memory_order_relaxed);
         v.len.store(k.len, std::memory_order_relaxed);
         v.written.store(k.state == TrackState::kRecording ? k.written : k.len, std::memory_order_relaxed);
-        v.pos.store(k.state == TrackState::kRecording ? k.written : posOf(k), std::memory_order_relaxed);
+        // Stopped and queued tracks show their start: that is where they begin again.
+        const bool parked = k.state == TrackState::kStopped || k.state == TrackState::kQueued;
+        v.pos.store(k.state == TrackState::kRecording ? k.written : (parked ? 0 : posOf(k)), std::memory_order_relaxed);
         v.mono.store(k.mono, std::memory_order_relaxed);
         v.perf.store(k.perf.mask, std::memory_order_relaxed);
         v.start.store(k.start, std::memory_order_relaxed);

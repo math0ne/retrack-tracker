@@ -1,0 +1,72 @@
+# Stop resets a track to its start; Play starts it from there on the next bar.
+# Starting the clock for one track leaves the others stopped.
+# Track 1: a steady tone, left for the first second of a 2 s loop, right for
+# the second, so the channel tells where the loop is playing.
+wait 300
+opt all start 0
+tone_shape steady
+tone 330
+tone_ch left
+tap 0
+wait 1000
+tone_ch right
+wait 1000
+tap 0
+# Track 2: one bar of tone on both sides (it keeps the clock running).
+tone_ch both
+tap 12
+wait 2000
+tap 12
+wait 2100
+tone off
+expect_state 2 PLAY
+
+# Stop track 1 (pad column 2): silent.
+tap 1
+wait 50
+expect_state 1 STOP
+tap 14
+wait 100
+reset_levels
+wait 500
+expect_silent
+tap 14
+
+# Play it: it waits for the next bar line, then plays.
+tap 1
+wait 30
+expect_state 1 QUEUED
+shot ../build/sim/check/launch_queued.png
+wait 2100
+expect_state 1 PLAY
+
+# Transport stop, then Play on track 1 alone: the clock starts with it, from its
+# top (the left half first), and track 2 stays stopped.
+press PLAY
+wait 50
+tap 1
+wait 30
+expect_state 1 STOP
+tap 1
+wait 30
+expect_state 1 PLAY
+expect_state 2 STOP
+reset_levels
+wait 800
+expect_ch left 0.2
+expect_ch right silent
+
+# Recording with the transport stopped: only the new take runs.
+press PLAY
+wait 50
+tone 330
+tap 24
+wait 30
+expect_state 3 REC
+expect_state 1 STOP
+expect_state 2 STOP
+wait 1000
+tap 24
+tone off
+wait 1100
+shot ../build/sim/check/launch_solo_record.png
