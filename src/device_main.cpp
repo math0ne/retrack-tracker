@@ -2,10 +2,14 @@
 // main.cpp (unchanged from OpenTracker) brings the board up, keeps the
 // ot_restore.txt escape hatch, and calls otAppMain once the SDRAM tested OK;
 // if this returns, the hardware selftest runs instead.
+#include <cstdio>
+
 #include "hal/audio_sgtl5000.h"
 #include "hal/board.h"
+#include "hal/diag.h"
 #include "hal/ft81x.h"
 #include "hal/hal.h"
+#include "hal/i2c_bus.h"
 #include "hal/telemetry.h"
 #include "looper/app.h"
 
@@ -32,6 +36,20 @@ bool cpuLoad(uint32_t& avg, uint32_t& max) {
 
 uint32_t dlBytes() { return ot::hal::display().lastDlBytes(); }
 
+// Telemetry to the USB serial diag log, only while a terminal is open (DTR),
+// with the I2C error counts (keys, pads, pad LEDs, codec) appended.
+void logLine(const char* line) {
+    if (!ot::hal::diagTerminalOpen()) return;
+    char buf[256];
+    std::snprintf(buf, sizeof buf, "%s | i2c err %lu/%lu nak %lu/%lu | display faults %lu", line,
+                  static_cast<unsigned long>(ot::hal::i2c0().errorCount()),
+                  static_cast<unsigned long>(ot::hal::i2c2().errorCount()),
+                  static_cast<unsigned long>(ot::hal::i2c0().nakCount()),
+                  static_cast<unsigned long>(ot::hal::i2c2().nakCount()),
+                  static_cast<unsigned long>(ot::hal::display().faults()));
+    ot::hal::diagLog(buf);
+}
+
 void powerOff() { ot::hal::powerOff(); }
 
 }  // namespace
@@ -55,6 +73,7 @@ void otAppMain(ot::hal::HalSet& hal) {
     p.powerOff = &powerOff;
     p.cpuLoad = &cpuLoad;
     p.dlBytes = &dlBytes;
+    p.log = &logLine;
     p.loopMem = sd;
     p.loopMemBytes = kLoopBytes;
     p.fxMem = sd + kLoopBytes;

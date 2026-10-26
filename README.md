@@ -187,6 +187,9 @@ on the track options page (on bar by default).
 
 ## Install on a Tracker
 
+First run on hardware: follow `docs/DEVICE_TEST.md` (way back, serial
+telemetry, what to measure).
+
 Same as OpenTracker: copy the `.ptf` to `/Firmware` on the SD card and use
 the stock firmware updater. Keep `PolyendTracker_1.9.2.ptf` on the card as
 the way back: write its name into `/Firmware/ot_restore.txt` and power-cycle

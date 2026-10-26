@@ -1,6 +1,7 @@
 // Send effects: a stereo delay synced to the loop and a stereo FDN reverb.
-// Both run inside Engine::render (audio thread) on 128-frame float blocks and
-// keep their lines in memory handed in at init (SDRAM on the device).
+// Both run inside Engine::render (audio thread) on 128-frame float blocks. The
+// delay line is handed in at init (SDRAM on the device); the reverb keeps its
+// lines in internal SRAM.
 #pragma once
 
 #include <cstdint>
@@ -39,7 +40,7 @@ public:
     static constexpr uint32_t kFloats = 17000;            // all lines and diffusers
     static constexpr uint32_t kBytes = kFloats * sizeof(float);
 
-    void init(float* mem);
+    void init();                             // lines in a static SRAM array (fx.cpp)
     void set(uint8_t size, uint8_t tone);    // 0..100 each
     void process(const float* inL, const float* inR, float* outL, float* outR, uint32_t n);
     void clear();

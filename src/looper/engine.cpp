@@ -57,9 +57,26 @@ inline int16_t fold(InputCh ch, int16_t l, int16_t r) {
 
 }  // namespace
 
+void Engine::Osc::start(float hz) {
+    const float w = 6.2831853f * hz / float(kSampleRate);
+    s = 0.0f;
+    c = 1.0f;
+    ds = std::sin(w);
+    dc = std::cos(w);
+}
+
+void Engine::Osc::renorm() {
+    const float m = s * s + c * c;
+    if (m > 0.0f) {
+        const float r = 1.0f / std::sqrt(m);
+        s *= r;
+        c *= r;
+    }
+}
+
 void Engine::init(const TrackMemory mem[kTracks], uint8_t* fxMem) {
     delay_.init(reinterpret_cast<int16_t*>(fxMem));
-    reverb_.init(reinterpret_cast<float*>(fxMem + Delay::kBytes));
+    reverb_.init();   // its lines live in internal SRAM (fx.cpp)
     for (int s = 0; s < kFxSlots; ++s) retPeak_[s].store(0);
     for (uint32_t i = 0; i < kWinSize; ++i) {
         const float s = std::sin(3.14159265f * float(i) / float(kWinSize));
@@ -463,7 +480,7 @@ void Engine::setPerf(int t, PerfFx fx, bool on) {
             p.tapePos = 0.0f;
             p.tapeRate = 1.0f;
             break;
-        case PerfFx::kVibrato: p.vibT0 = t_; break;
+        case PerfFx::kVibrato: p.vib.start(5.5f); break;
         case PerfFx::kSweepDown: p.lpT0 = t_; break;
         case PerfFx::kSweepUp: p.hpT0 = t_; break;
         default: break;
@@ -689,7 +706,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                     }
                     if (vib) {
                         // 5.5 Hz, +-30 frames: about +-40 cents.
-                        const float o = 30.0f * std::sin(6.2831853f * 5.5f * float(t_ + f - pf.vibT0) / float(kSampleRate));
+                        const float o = 30.0f * pf.vib.next();
                         float pos = float(ip) + fp + o;
                         if (pos < 0.0f) pos += float(k.len);
                         if (pos >= float(k.len)) pos -= float(k.len);
@@ -774,6 +791,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             }
             k.gain = target;
             wrote = dub;
+            if (vib) pf.vib.renorm();
         }
         if (wrote) view_[t].peakVersion.fetch_add(1, std::memory_order_relaxed);
         view_[t].level.store(level, std::memory_order_relaxed);
@@ -790,17 +808,18 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             const uint32_t tf = t_ + f;
             if (beat && tf % beat == 0) {
                 clickAge_ = 0;
-                clickHz_ = tf % bar == 0 ? 1600.0f : 1000.0f;
+                clickOsc_.start(tf % bar == 0 ? 1600.0f : 1000.0f);
                 clickAmp_ = 1.0f;
             }
             if (clickAge_ < kSampleRate / 20) {   // 50 ms, ~10 ms decay
-                const float v = std::sin(6.2831853f * clickHz_ * float(clickAge_) / float(kSampleRate)) * clickAmp_ * lvl;
+                const float v = clickOsc_.next() * clickAmp_ * lvl;
                 clickAmp_ *= 0.9977f;
                 ++clickAge_;
                 mixL[f] += v;
                 mixR[f] += v;
             }
         }
+        clickOsc_.renorm();
     } else {
         clickAge_ = 0xFFFFFFFFu;
     }

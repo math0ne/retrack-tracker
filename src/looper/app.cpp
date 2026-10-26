@@ -123,6 +123,7 @@ void App::audioFill(int16_t* out, uint32_t frames, void* ctx) {
 }
 
 void App::loop() {
+    const uint32_t t0 = p_.clock->micros();
     if (p_.service) p_.service();
     ot::InputEvent ev;
     while (p_.input->poll(ev)) onInput(ev);
@@ -138,15 +139,46 @@ void App::loop() {
         lastLedMs_ = now;
         updateLeds(now);
     }
-    if (p_.cpuLoad && now - lastCpuMs_ >= 1000) {
+    if (now - lastCpuMs_ >= 1000) {
         lastCpuMs_ = now;
-        haveCpu_ = p_.cpuLoad(cpuAvg_, cpuMax_);
+        if (p_.cpuLoad) haveCpu_ = p_.cpuLoad(cpuAvg_, cpuMax_);
+        telemetry();
     }
     if (now - lastFrameMs_ >= kFrameMs && d_->frameReady()) {
         lastFrameMs_ = now;
         updateWaves(now);
         render(now);
     }
+    // The longest pass is the worst wait a pad press can see before it is read.
+    const uint32_t dt = p_.clock->micros() - t0;
+    if (dt > loopMaxUs_) loopMaxUs_ = dt;
+    ++loopsInWindow_;
+}
+
+void App::telemetry() {
+    // One line a second: audio interrupt load (of the 2.9 ms block), the longest
+    // main-loop pass, frame rate, display list, SPI uploads, track states.
+    if (p_.log) {
+        static const char kState[] = "-ECRPDS";   // clearing, empty, count-in, rec, play, dub, stop
+        char st[kTracks + 1];
+        for (int t = 0; t < kTracks; ++t) st[t] = kState[engine_.view(t).state.load() % 7];
+        st[kTracks] = 0;
+        const uint32_t dl = p_.dlBytes ? p_.dlBytes() : lastWords_ * 4;
+        char line[200];
+        std::snprintf(line, sizeof line,
+                      "looper: cpu avg %lu.%lu%% max %lu.%lu%% | loop max %lu us (%lu/s) | %lu fps | dl %lu B | "
+                      "spi %lu KB/s, %lu waves/s | tracks %s perf %02x%02x%02x%02x",
+                      static_cast<unsigned long>(cpuAvg_ / 10), static_cast<unsigned long>(cpuAvg_ % 10),
+                      static_cast<unsigned long>(cpuMax_ / 10), static_cast<unsigned long>(cpuMax_ % 10),
+                      static_cast<unsigned long>(loopMaxUs_), static_cast<unsigned long>(loopsInWindow_),
+                      static_cast<unsigned long>(fps_), static_cast<unsigned long>(dl),
+                      static_cast<unsigned long>(lastUploadBytes_ / 1024), static_cast<unsigned long>(lastWaveUploads_),
+                      st, unsigned(engine_.view(0).perf.load()), unsigned(engine_.view(1).perf.load()),
+                      unsigned(engine_.view(2).perf.load()), unsigned(engine_.view(3).perf.load()));
+        p_.log(line);
+    }
+    loopMaxUs_ = 0;
+    loopsInWindow_ = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -272,9 +304,36 @@ void App::onInput(const ot::InputEvent& ev) {
             break;
         case b::Up: selected_ = (selected_ + kTracks - 1) % kTracks; break;
         case b::Down: selected_ = (selected_ + 1) % kTracks; break;
-        case b::Help: stats_ = !stats_; break;
+        case b::Help:
+            if (shift_) stressPreset();
+            else stats_ = !stats_;
+            break;
         default: break;
     }
+}
+
+void App::stressPreset() {
+    // Shift + Help: the heaviest audio load the app can make, for measuring the
+    // ceiling on the device. Every track with a loop goes to a grain mode (two
+    // interpolated grains per sample) with both filters latched and full sends;
+    // metronome and the readout on. Tap Perform twice to drop the effects.
+    static const PlayMode kStressMode[kTracks] = {PlayMode::kStretch, PlayMode::kOctaveUp, PlayMode::kOctaveDown,
+                                                  PlayMode::kStretch};
+    for (int t = 0; t < kTracks; ++t) {
+        if (!engine_.view(t).len.load()) continue;
+        engine_.post(Engine::kMode, uint8_t(t), int16_t(kStressMode[t]));
+        static const PerfFx kStressFx[] = {PerfFx::kLowPass, PerfFx::kHighPass};
+        for (PerfFx fx : kStressFx) {
+            perfLatch_[t] |= uint8_t(1u << int(fx));
+            engine_.post(Engine::kPerf, uint8_t(t), int16_t((int(fx) << 8) | 1));
+        }
+        engine_.post(Engine::kMix, uint8_t(t), int16_t((int(MixParam::kSend1) << 8) | 100));
+        engine_.post(Engine::kMix, uint8_t(t), int16_t((int(MixParam::kSend2) << 8) | 100));
+    }
+    engine_.post(Engine::kOpt, 0, int16_t((int(OptParam::kMetronome) << 8) | 1));
+    engine_.post(Engine::kMonitor, 0, 1);
+    stats_ = true;
+    hint(selected_, "Stress: grains, both filters, full sends, click", p_.clock->millis());
 }
 
 void App::closePerf() {
@@ -407,11 +466,16 @@ void App::renderWave(int t, uint32_t span) {
     }
     d_->writeRamG(kWaveRamG + uint32_t(t) * kWaveBytes, px, kWaveBytes);
     uploadBytes_ += kWaveBytes;
+    ++waveUploads_;
 }
 
 void App::updateWaves(uint32_t now) {
+    // Each upload is a blocking SPI write (58 KB, ~16 ms at 30 MHz), so at most
+    // one lane per frame, the lanes taking turns: several lanes recording at
+    // once cannot stall the main loop (pads, LEDs) for longer than one upload.
     const uint32_t bar = engine_.barFrames();
-    for (int t = 0; t < kTracks; ++t) {
+    for (int i = 0; i < kTracks; ++i) {
+        const int t = (waveNext_ + i) % kTracks;
         const TrackView& v = engine_.view(t);
         const TrackState s = TrackState(v.state.load());
         if (s == TrackState::kEmpty || s == TrackState::kClearing || s == TrackState::kCountIn) {
@@ -438,6 +502,8 @@ void App::updateWaves(uint32_t now) {
         waveSpan_[t] = span;
         waveDrawnMs_[t] = now;
         waveValid_[t] = true;
+        waveNext_ = (t + 1) % kTracks;
+        return;
     }
 }
 
@@ -538,6 +604,8 @@ void App::render(uint32_t now) {
         framesInWindow_ = 0;
         fpsWindowMs_ = now;
         lastUploadBytes_ = uploadBytes_;
+        lastWaveUploads_ = waveUploads_;
+        waveUploads_ = 0;
         uploadBytes_ = 0;
     }
     // Meter ballistics: instant attack, ~300 ms release at 60 fps.

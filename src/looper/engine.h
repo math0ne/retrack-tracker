@@ -112,8 +112,10 @@ enum class MixParam : uint8_t {
     kMaster,         // master level 0..100
 };
 
-// Effect memory the app hands to Engine::init (SDRAM on the device).
-constexpr uint32_t kFxMemBytes = Delay::kBytes + Reverb::kBytes;
+// Effect memory the app hands to Engine::init (SDRAM on the device): the delay
+// line, read in order. The reverb's lines, read at eight places per sample,
+// are internal SRAM (fx.cpp): the SDRAM is uncached behind a 16-bit bus.
+constexpr uint32_t kFxMemBytes = Delay::kBytes;
 
 struct TrackMemory {
     int16_t* frames = nullptr;   // interleaved stereo
@@ -188,6 +190,19 @@ private:
         uint64_t pos16 = 0;          // read position, 16.16 frames
         uint32_t age = 0;            // output frames since the grain started
     };
+    // Sine by rotation: four multiply-adds per sample instead of a sinf() call
+    // in the audio interrupt. renorm() once a block stops the amplitude drifting.
+    struct Osc {
+        float s = 0.0f, c = 1.0f, ds = 0.0f, dc = 1.0f;
+        void start(float hz);
+        float next() {
+            const float v = s, ns = s * dc + c * ds;
+            c = c * dc - s * ds;
+            s = ns;
+            return v;
+        }
+        void renorm();
+    };
     // Zavalishin state-variable filter, one per channel.
     struct Svf {
         float ic1[2] = {0, 0}, ic2[2] = {0, 0};
@@ -202,7 +217,7 @@ private:
         float tapePos = 0.0f;        // tape stop: read position (frames) and speed 1 -> 0
         uint32_t tapeBase = 0;
         float tapeRate = 1.0f;
-        uint32_t vibT0 = 0;
+        Osc vib;                     // vibrato LFO
         uint32_t lpT0 = 0, hpT0 = 0; // sweep starts
         float lpWet = 0.0f, hpWet = 0.0f;
         Svf lp, hp;
@@ -272,7 +287,8 @@ private:
     bool metro_ = false;
     uint8_t click_ = 60;
     uint32_t clickAge_ = 0xFFFFFFFFu;   // frames since the last click started
-    float clickHz_ = 1000.0f, clickAmp_ = 0.0f;
+    float clickAmp_ = 0.0f;
+    Osc clickOsc_;
     std::atomic<uint32_t> bar_{0};
 
     // mixer and send effects (kept across track clears)

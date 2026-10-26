@@ -70,9 +70,12 @@ void Delay::process(const float* inL, const float* inR, float* outL, float* outR
 // ---------------------------------------------------------------------------
 // Reverb
 
-void Reverb::init(float* mem) {
-    mem_ = mem;
-    float* p = mem;
+// Internal SRAM (.bss), not the uncached SDRAM: 12 random reads and writes per sample.
+static float gReverbLines[Reverb::kFloats];
+
+void Reverb::init() {
+    mem_ = gReverbLines;
+    float* p = mem_;
     for (int i = 0; i < kLines; ++i) {
         line_[i] = Line{p, kLineLen[i], 0};
         p += kLineLen[i];

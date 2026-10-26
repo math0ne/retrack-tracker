@@ -13,6 +13,7 @@
 //   Delete       clear the selected track (Shift: all)   Up/Down  select track
 //   Encoder      selected track volume (Shift: input gain)
 //   Help         toggle the load / frame-rate readout
+//   Shift+Help   stress preset: the heaviest audio load, for measuring on the device
 //   Master       mixer page on/off
 //   I.Param      track options page on/off
 //   Perform      performance mode: tap to latch it on (tap again for off), or
@@ -134,6 +135,8 @@ private:
     uint32_t waveSpan_[kTracks] = {};
     uint32_t waveDrawnMs_[kTracks] = {};
     bool waveValid_[kTracks] = {};
+    int waveNext_ = 0;           // lane that gets the next upload turn
+    uint32_t waveUploads_ = 0, lastWaveUploads_ = 0;   // per second, for the telemetry
 
     float inMeter_[2] = {}, trackMeter_[kTracks] = {}, retMeter_[kFxSlots] = {}, outMeter_[2] = {};
 
@@ -143,6 +146,9 @@ private:
     uint32_t words_ = 0, lastWords_ = 0, uploadBytes_ = 0, lastUploadBytes_ = 0;
     uint32_t cpuAvg_ = 0, cpuMax_ = 0, lastCpuMs_ = 0;
     bool haveCpu_ = false;
+    uint32_t loopMaxUs_ = 0, loopsInWindow_ = 0;   // main-loop pass times over the telemetry second
+    void telemetry();
+    void stressPreset();
 };
 
 }  // namespace looper

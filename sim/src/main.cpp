@@ -58,6 +58,7 @@ struct Options {
     int scale = 1;
     long quitAfterMs = -1;
     std::string toneCh = "both";
+    bool telemetry = false;   // print the app's once-a-second telemetry line
     std::string script, wav, shot;
 };
 
@@ -69,6 +70,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         if (a == "--line-in") o.lineIn = true;
         else if (a == "--tone" && (v = next())) o.tone = float(std::atof(v));
         else if (a == "--tone-ch" && (v = next())) o.toneCh = v;
+        else if (a == "--telemetry") o.telemetry = true;
         else if (a == "--scale" && (v = next())) o.scale = std::atoi(v) < 1 ? 1 : std::atoi(v);
         else if (a == "--quit-after" && (v = next())) o.quitAfterMs = std::atol(v);
         else if (a == "--script" && (v = next())) o.script = v;
@@ -185,6 +187,7 @@ struct Machine {
         p.scratch = scratch.data();
         p.scratchBytes = uint32_t(scratch.size());
         p.powerOff = [] { std::exit(0); };
+        if (o.telemetry) p.log = [](const char* line) { std::printf("%s\n", line); };
         if (!app.init(p)) {
             std::fprintf(stderr, "looper init failed\n");
             return false;

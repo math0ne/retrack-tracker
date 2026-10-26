@@ -1,0 +1,33 @@
+# Stress preset (Shift + Help): every track with a loop goes to a grain mode
+# with both filters latched and full sends, metronome on. Device measurement
+# aid; here it only checks the preset lands.
+wait 300
+tone_shape steady
+tone 440
+tap 0
+wait 2000
+tap 0
+tap 12
+wait 2000
+tap 12
+tap 24
+wait 2000
+tap 24
+tap 36
+wait 2000
+tap 36
+wait 2100
+tone off
+expect_state 4 PLAY
+hold SHIFT
+press HELP
+release SHIFT
+wait 300
+expect_perf 1 3 on
+expect_perf 1 4 on
+expect_perf 4 3 on
+expect_perf 4 4 on
+reset_levels
+wait 1000
+expect_audio 0.01
+shot ../build/sim/check/stress.png

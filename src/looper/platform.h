@@ -28,6 +28,8 @@ struct Platform {
     bool (*cpuLoad)(uint32_t& avgPermille, uint32_t& maxPermille) = nullptr;
     // Bytes of the last display list the display controller ran (device only).
     uint32_t (*dlBytes)() = nullptr;
+    // One telemetry line a second (USB serial on the device); nullptr = none.
+    void (*log)(const char* line) = nullptr;
 
     // Loop memory (external SDRAM on the device), effect memory, and a staging buffer for
     // waveform bitmaps on their way to the display's RAM_G.
