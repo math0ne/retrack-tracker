@@ -21,6 +21,11 @@
 //   expect_audio MIN   fail unless the output peak since the last reset >= MIN (0..1), then reset
 //   expect_silent      fail unless the output peak since the last reset < 0.001, then reset
 //   expect_ch left|right MIN|silent   the same for one channel (no reset)
+//   expect_len TRACK SEC          track (1..4) loop length, within 10 ms
+//   expect_state TRACK NAME       EMPTY, COUNT, REC, PLAY, DUB or STOP
+//   tone_shape steady|bursts      a continuous sine, or the default bursts
+//   expect_below MAX              fail unless the output peak since the last reset < MAX, then reset
+//   expect_perf TRACK FX on|off   performance effect FX (1..8, pad columns 5..12) running
 //   shot PATH          PNG of the front panel; screen PATH = the 800x480 screen only
 #include <SDL.h>
 
@@ -84,6 +89,7 @@ struct ToneIn {
     enum Channels : uint8_t { kBoth, kLeft, kRight };
     float hz = 0.0f;
     Channels ch = kBoth;
+    bool steady = false;   // a continuous sine instead of bursts
     uint64_t n = 0;
     int16_t buf[128 * 2] = {};
     const int16_t* block() {
@@ -91,7 +97,7 @@ struct ToneIn {
         for (int i = 0; i < 128; ++i, ++n) {
             const double t = double(n) / 44100.0;
             const double ph = std::fmod(t, 0.5);
-            const double env = ph > 0.25 ? 0.0 : (1.0 - ph / 0.25);
+            const double env = steady ? 1.0 : (ph > 0.25 ? 0.0 : (1.0 - ph / 0.25));
             const int16_t v = int16_t(14000.0 * env * std::sin(2.0 * 3.14159265 * hz * t));
             buf[2 * i] = ch == kRight ? 0 : v;
             buf[2 * i + 1] = ch == kLeft ? 0 : v;
@@ -140,6 +146,7 @@ struct Machine {
     ToneIn tone;
     ot::IAudioOut* audio = nullptr;
     std::vector<uint8_t> loopMem, scratch;
+    std::vector<float> fxMem;   // float elements: 4-byte aligned
     looper::App app;
 
     bool start(const Options& o, bool headless) {
@@ -162,9 +169,12 @@ struct Machine {
             p.lineIn = [](void* c) { return static_cast<ToneIn*>(c)->block(); };
             p.lineInCtx = &tone;
         }
-        // Same sizes as the device: 16 MB SDRAM minus the 64 KB staging buffer.
-        loopMem.assign(16u * 1024u * 1024u - 64u * 1024u, 0xA5);   // garbage, like SDRAM after power-up
+        // Same sizes as the device: 16 MB SDRAM minus the effect lines and the 64 KB staging buffer.
+        const uint32_t fxBytes = (looper::kFxMemBytes + 15u) & ~15u;
+        loopMem.assign(16u * 1024u * 1024u - 64u * 1024u - fxBytes, 0xA5);   // garbage, like SDRAM after power-up
+        fxMem.assign(fxBytes / sizeof(float), 1.0f);
         scratch.assign(64u * 1024u, 0);
+        p.fxMem = reinterpret_cast<uint8_t*>(fxMem.data());
         p.display = &display;
         p.audio = audio;
         p.input = &input;
@@ -285,6 +295,47 @@ struct Headless {
                 const bool pass = lim == "silent" ? pk < 0.001f : pk >= float(std::atof(lim.c_str()));
                 std::printf("%s:%d: expect_ch %s %s %s (peak %.3f)\n", path.c_str(), lineNo, arg.c_str(), lim.c_str(),
                             pass ? "PASS" : "FAIL", pk);
+                ok = ok && pass;
+            } else if (cmd == "expect_len") {
+                // expect_len TRACK SECONDS: the loop length, to within 10 ms
+                std::string sec;
+                in >> sec;
+                const int t = std::atoi(arg.c_str()) - 1;
+                const double got = t >= 0 && t < looper::kTracks
+                                       ? double(m.app.engine().view(t).len.load()) / 44100.0 : -1.0;
+                const bool pass = std::fabs(got - std::atof(sec.c_str())) < 0.01;
+                std::printf("%s:%d: expect_len %s %s %s (%.3f s)\n", path.c_str(), lineNo, arg.c_str(), sec.c_str(),
+                            pass ? "PASS" : "FAIL", got);
+                ok = ok && pass;
+            } else if (cmd == "expect_state") {
+                // expect_state TRACK EMPTY|COUNT|REC|PLAY|DUB|STOP
+                static const char* const kNames[] = {"CLEAR", "EMPTY", "COUNT", "REC", "PLAY", "DUB", "STOP"};
+                std::string want;
+                in >> want;
+                const int t = std::atoi(arg.c_str()) - 1;
+                const int s = t >= 0 && t < looper::kTracks ? int(m.app.engine().view(t).state.load()) : 0;
+                const bool pass = s >= 0 && s < 7 && want == kNames[s];
+                std::printf("%s:%d: expect_state %s %s %s (%s)\n", path.c_str(), lineNo, arg.c_str(), want.c_str(),
+                            pass ? "PASS" : "FAIL", s >= 0 && s < 7 ? kNames[s] : "?");
+                ok = ok && pass;
+            } else if (cmd == "tone_shape") m.tone.steady = arg == "steady";
+            else if (cmd == "expect_below") {
+                const float pk = m.manualAudio.peakLevel();
+                const bool pass = pk < float(std::atof(arg.c_str()));
+                std::printf("%s:%d: expect_below %s %s (peak %.3f)\n", path.c_str(), lineNo, arg.c_str(),
+                            pass ? "PASS" : "FAIL", pk);
+                ok = ok && pass;
+                resetLevels();
+            } else if (cmd == "expect_perf") {
+                // expect_perf TRACK FX on|off: FX 1..8 as on the pads (columns 5..12)
+                std::string fx, want;
+                in >> fx >> want;
+                const int t = std::atoi(arg.c_str()) - 1, e = std::atoi(fx.c_str()) - 1;
+                const uint8_t mask = t >= 0 && t < looper::kTracks ? m.app.engine().view(t).perf.load() : 0;
+                const bool isOn = e >= 0 && e < 8 && ((mask >> e) & 1);
+                const bool pass = (want == "on") == isOn;
+                std::printf("%s:%d: expect_perf %s %s %s %s (mask 0x%02x)\n", path.c_str(), lineNo, arg.c_str(),
+                            fx.c_str(), want.c_str(), pass ? "PASS" : "FAIL", unsigned(mask));
                 ok = ok && pass;
             } else if (cmd == "reset_levels") resetLevels();
             else if (cmd == "shot" || cmd == "screen") panelShot(m, arg, cmd == "screen");

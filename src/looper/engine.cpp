@@ -39,9 +39,28 @@ inline void notePeak(uint8_t* peaks, uint32_t i, int16_t l, int16_t r) {
     if (pr > c[1]) c[1] = pr;
 }
 
+// Mono tracks: one peak byte per cell (the cell array holds twice as many cells).
+inline void notePeakMono(uint8_t* peaks, uint32_t i, int16_t v) {
+    uint8_t* c = peaks + i / kPeakFrames;
+    if (i % kPeakFrames == 0) c[0] = 0;
+    const uint8_t p = peak8(v, 0);
+    if (p > c[0]) c[0] = p;
+}
+
+inline int16_t fold(InputCh ch, int16_t l, int16_t r) {
+    switch (ch) {
+        case InputCh::kMonoL: return l;
+        case InputCh::kMonoR: return r;
+        default: return int16_t((int32_t(l) + int32_t(r)) / 2);
+    }
+}
+
 }  // namespace
 
-void Engine::init(const TrackMemory mem[kTracks]) {
+void Engine::init(const TrackMemory mem[kTracks], uint8_t* fxMem) {
+    delay_.init(reinterpret_cast<int16_t*>(fxMem));
+    reverb_.init(reinterpret_cast<float*>(fxMem + Delay::kBytes));
+    for (int s = 0; s < kFxSlots; ++s) retPeak_[s].store(0);
     for (uint32_t i = 0; i < kWinSize; ++i) {
         const float s = std::sin(3.14159265f * float(i) / float(kWinSize));
         gWin[i] = s * s;
@@ -141,61 +160,127 @@ void Engine::setMode(int t, PlayMode mode) {
     if (k.state == TrackState::kOverdubbing && !modeInfo(mode).canDub) k.state = TrackState::kPlaying;
 }
 
-void Engine::startRecording(int t) {
-    Track& k = trk_[t];
-    if (L_ == 0) {
-        // A second track pressed while the master is still recording closes
-        // the master first, so there is only ever one master take.
-        for (int o = 0; o < kTracks; ++o)
-            if (o != t && trk_[o].state == TrackState::kRecording) finishRecording(o);
-    }
-    if (L_ == 0) {
-        t_ = 0;
-        running_ = true;
-        k.anchor = 0;
-    } else {
-        if (!running_) {
-            t_ = 0;
-            running_ = true;
-        }
-        k.anchor = (t_ / L_) * L_;   // bar start; the frames before t_ stay silent (buffer is zeroed)
-    }
-    k.recStart = t_;
-    k.len = 0;
-    k.offset16 = 0;
-    k.written = t_ - k.anchor;
-    k.state = TrackState::kRecording;
+uint32_t Engine::barLen() const {
+    // The master loop's bar once there is one; before that, the tempo's.
+    if (L_) return L_;
+    return uint32_t(uint64_t(kSampleRate) * 60u * beats_ / (bpm_ ? bpm_ : 120));
 }
 
-void Engine::finishRecording(int t) {
+void Engine::startRecording(int t) {
     Track& k = trk_[t];
+    const TrackOpts& o = opts_[t];
+    if (L_ == 0) {
+        // A second track pressed while the first take is still going closes
+        // that take first, so the bar is set once.
+        for (int x = 0; x < kTracks; ++x)
+            if (x != t && trk_[x].state == TrackState::kRecording) finishNow(x);
+            else if (x != t && trk_[x].state == TrackState::kCountIn) clearTrack(x);
+    }
+    const bool first = L_ == 0;
+    if (first || !running_) {
+        t_ = 0;
+        running_ = true;
+    }
+    const uint32_t bar = barLen(), beat = beatLen();
+    k.mono = o.input != InputCh::kStereo;
+    k.input = o.input;
+    k.len = 0;
+    k.offset16 = 0;
+    k.stopAt = o.lenBeats ? uint32_t(o.lenBeats) * beat : 0;
+    if (o.countIn) {
+        // One bar of click, then record from the bar line. With loops already
+        // running, the next bar line at least half a bar away.
+        uint32_t start = first ? bar : ((t_ + bar - 1) / bar) * bar;
+        if (!first && start - t_ < bar / 2) start += bar;
+        k.anchor = start;
+        k.written = 0;
+        k.state = TrackState::kCountIn;
+    } else {
+        // Recording starts now; the buffer index 0 sits on the bar (or beat)
+        // line before the press so the take stays on the grid. Free takes
+        // (with no fixed length) are not on the grid: they start where they start.
+        uint32_t unit = o.stop == StopQuant::kBar && !o.lenBeats ? bar : beat;
+        if (o.stop == StopQuant::kFree && !o.lenBeats) unit = 0;
+        k.anchor = unit ? (t_ / unit) * unit : t_;
+        k.written = t_ - k.anchor;   // the frames before the press stay silent (buffer is zeroed)
+        k.state = TrackState::kRecording;
+    }
+    k.recStart = t_;
+}
+
+void Engine::requestStop(int t) {
+    Track& k = trk_[t];
+    if (k.state == TrackState::kCountIn) {   // pressed again during the count-in: cancel
+        clearTrack(t);
+        return;
+    }
+    const TrackOpts& o = opts_[t];
+    const uint32_t n = k.written;
+    if (o.stop == StopQuant::kFree) {
+        finishRecording(t, n);
+        return;
+    }
+    const uint32_t unit = o.stop == StopQuant::kBeat ? beatLen() : barLen();
+    const uint32_t below = n / unit * unit;
+    // Just past a line (within an eighth of a unit): a late press, stop on that line.
+    if (below && n - below <= unit / kSegments) {
+        finishRecording(t, below);
+        return;
+    }
+    k.stopAt = below + unit;   // keep recording to the next line
+}
+
+void Engine::finishNow(int t) {
+    Track& k = trk_[t];
+    if (k.state == TrackState::kCountIn) {
+        clearTrack(t);
+        return;
+    }
+    const TrackOpts& o = opts_[t];
+    const uint32_t n = k.written;
+    if (o.stop == StopQuant::kFree && !o.lenBeats) {
+        finishRecording(t, n);
+        return;
+    }
+    const uint32_t unit = o.stop == StopQuant::kBar && !o.lenBeats ? barLen() : beatLen();
+    uint32_t len = (n + unit - 1) / unit * unit;   // the rest of the unit stays silent
+    if (len > capOf(t)) len = capOf(t) / unit * unit;
+    finishRecording(t, len ? len : n);
+}
+
+void Engine::finishRecording(int t, uint32_t len) {
+    Track& k = trk_[t];
+    const TrackOpts& o = opts_[t];
     const uint32_t n = k.written;
     if (L_ == 0) {
-        if (n < kMinMasterFrames) {
+        if (len < kMinMasterFrames) {
             clearTrack(t);
             return;
         }
-        L_ = n;
-        k.len = n;
-    } else {
-        // Whole bars; a take that ends less than an eighth of a bar past a bar
-        // line was meant to stop on it (late press), so it rounds down.
-        uint32_t bars = n / L_;
-        if (bars == 0 || n % L_ > L_ / kSegments) ++bars;
-        uint32_t len = bars * L_;
-        if (len > mem_[t].capacity) len = (mem_[t].capacity / L_) * L_;
-        k.len = len;
+        // A free first take is one bar long and sets the tempo; on bar, on beat
+        // or fixed-length first takes keep the tempo's bar.
+        L_ = (o.stop == StopQuant::kFree && !o.lenBeats) ? len : barLen();
     }
+    if (len > capOf(t)) len = capOf(t);
+    k.len = len;
+    k.stopAt = 0;
     // Frames past len (a late press) were written too: the next clear zeroes them.
-    k.written = n > k.len ? n : k.len;
-    k.state = TrackState::kPlaying;
+    k.written = n > len ? n : len;
+    switch (o.after) {
+        case AfterRec::kPlay: k.state = TrackState::kPlaying; break;
+        case AfterRec::kOverdub:
+            k.state = modeInfo(k.mode).canDub ? TrackState::kOverdubbing : TrackState::kPlaying;
+            break;
+        case AfterRec::kStop: k.state = TrackState::kStopped; break;
+    }
     restartGrains(k, uint64_t(posOf(k)) << 16);
 }
 
 void Engine::clearTrack(int t) {
     Track& k = trk_[t];
     const uint8_t vol = k.volume;
-    const uint32_t dirty = k.written;
+    // Zeroing counts stereo frames (4 bytes); a mono track's frames are 2 bytes.
+    const uint32_t dirty = k.mono ? (k.written + 1) / 2 : k.written;
     k = Track{};
     k.volume = vol;
     k.written = dirty;
@@ -219,7 +304,8 @@ void Engine::apply(const Msg& m) {
         case kRecord:
             switch (k.state) {
                 case TrackState::kEmpty: startRecording(t); break;
-                case TrackState::kRecording: finishRecording(t); break;
+                case TrackState::kCountIn:
+                case TrackState::kRecording: requestStop(t); break;
                 case TrackState::kPlaying:
                 case TrackState::kStopped:
                     if (!modeInfo(k.mode).canDub) break;   // the app tells the user why
@@ -232,7 +318,8 @@ void Engine::apply(const Msg& m) {
             break;
         case kPlayStop:
             switch (k.state) {
-                case TrackState::kRecording: finishRecording(t); break;
+                case TrackState::kCountIn:
+                case TrackState::kRecording: requestStop(t); break;
                 case TrackState::kPlaying:
                 case TrackState::kOverdubbing: k.state = TrackState::kStopped; break;
                 case TrackState::kStopped:
@@ -263,11 +350,25 @@ void Engine::apply(const Msg& m) {
             }
             break;
         case kMode: setMode(t, PlayMode(m.arg >= 0 && m.arg < kModeCount ? m.arg : 0)); break;
+        case kMix: setMix(MixParam((uint16_t(m.arg) >> 8) & 0xFF), t, int(m.arg & 0xFF)); break;
+        case kOpt: setOpt(OptParam((uint16_t(m.arg) >> 8) & 0xFF), t, int(m.arg & 0xFF)); break;
+        case kPerf: {
+            const int fx = (uint16_t(m.arg) >> 8) & 0xFF;
+            if (fx < kPerfFxCount) setPerf(t, PerfFx(fx), (m.arg & 1) != 0);
+            break;
+        }
+        case kPerfOff:
+            for (Track& x : trk_) {
+                x.perf.mask = 0;
+                x.perf.repFx = 0xFF;
+            }
+            break;
         case kVolume: k.volume = uint8_t(m.arg < 0 ? 0 : (m.arg > 100 ? 100 : m.arg)); break;
         case kTransport:
             if (running_) {
                 for (int o = 0; o < kTracks; ++o)
-                    if (trk_[o].state == TrackState::kRecording) finishRecording(o);
+                    if (trk_[o].state == TrackState::kRecording || trk_[o].state == TrackState::kCountIn)
+                        finishNow(o);
                 running_ = false;
             } else if (L_) {
                 t_ = 0;
@@ -280,6 +381,130 @@ void Engine::apply(const Msg& m) {
         case kMonitor: monitor_ = m.arg != 0; break;
         case kFeedback: feedback_ = uint8_t(m.arg < 0 ? 0 : (m.arg > 100 ? 100 : m.arg)); break;
     }
+}
+
+void Engine::setMix(MixParam p, int t, int v) {
+    auto pct = [](int x, int hi) { return uint8_t(x < 0 ? 0 : (x > hi ? hi : x)); };
+    switch (p) {
+        case MixParam::kLevel: trk_[t].volume = pct(v, 100); break;
+        case MixParam::kSend1: send_[t][0] = pct(v, 100); break;
+        case MixParam::kSend2: send_[t][1] = pct(v, 100); break;
+        case MixParam::kReturn1: return_[0] = pct(v, 100); break;
+        case MixParam::kReturn2: return_[1] = pct(v, 100); break;
+        case MixParam::kDelayTime: delayDiv_ = pct(v, kDelayDivCount - 1); break;
+        case MixParam::kDelayFeedback: delayFb_ = pct(v, 95); break;
+        case MixParam::kReverbSize: reverbSize_ = pct(v, 100); break;
+        case MixParam::kReverbTone: reverbTone_ = pct(v, 100); break;
+        case MixParam::kMaster: masterLevel_ = pct(v, 100); break;
+    }
+}
+
+void Engine::setOpt(OptParam p, int t, int v) {
+    auto lim = [](int x, int lo, int hi) { return uint8_t(x < lo ? lo : (x > hi ? hi : x)); };
+    TrackOpts& o = opts_[t];
+    const bool empty = trk_[t].state == TrackState::kEmpty || trk_[t].state == TrackState::kClearing;
+    switch (p) {
+        case OptParam::kStop: o.stop = StopQuant(lim(v, 0, 2)); break;
+        case OptParam::kLength: o.lenBeats = lim(v, 0, kMaxLenBeats); break;
+        case OptParam::kCountIn: o.countIn = v != 0; break;
+        case OptParam::kInput:   // the buffer layout changes: only while the track is empty
+            if (empty) o.input = InputCh(lim(v, 0, 3));
+            break;
+        case OptParam::kAfter: o.after = AfterRec(lim(v, 0, 2)); break;
+        case OptParam::kTempo:   // the tempo sets the bar only until there is a loop
+            if (L_ == 0) bpm_ = lim(v, 40, 240);
+            break;
+        case OptParam::kBeats: beats_ = lim(v, 1, 12); break;
+        case OptParam::kMetronome: metro_ = v != 0; break;
+        case OptParam::kClick: click_ = lim(v, 0, 100); break;
+    }
+}
+
+void Engine::setPerf(int t, PerfFx fx, bool on) {
+    Track& k = trk_[t];
+    Perf& p = k.perf;
+    const uint8_t bit = uint8_t(1u << int(fx));
+    const uint8_t repBits = uint8_t((1u << int(PerfFx::kRepeat8)) | (1u << int(PerfFx::kRepeat16)));
+    // Repeat slice: on the track's beat grid, around the position playing now.
+    auto startRepeat = [&](PerfFx r) {
+        uint32_t slice = beatLen() / (r == PerfFx::kRepeat8 ? 2u : 4u);
+        if (slice < 64) slice = 64;
+        if (slice > k.len) slice = k.len;
+        const uint32_t bar = barLen();
+        const int64_t origin = bar ? int64_t((bar - k.anchor % bar) % bar) : 0;   // a bar line in the buffer
+        const int64_t pos = posOf(k);
+        int64_t d = pos - origin;
+        int64_t s = (d >= 0 ? d / slice : -((-d + slice - 1) / slice)) * int64_t(slice) + origin;
+        s %= int64_t(k.len);
+        if (s < 0) s += k.len;
+        p.repStart = uint32_t(s);
+        p.repSlice = slice;
+        p.repT0 = t_;
+        p.repIn = uint32_t((pos - s + int64_t(k.len)) % int64_t(k.len)) % slice;
+        p.repFx = uint8_t(r);
+    };
+    if (!on) {
+        p.mask &= uint8_t(~bit);
+        if ((bit & repBits) && p.repFx == uint8_t(fx)) {
+            // The other repeat may still be held: it takes over from here.
+            if (p.mask & repBits)
+                startRepeat((p.mask & (1u << int(PerfFx::kRepeat8))) ? PerfFx::kRepeat8 : PerfFx::kRepeat16);
+            else p.repFx = 0xFF;
+        }
+        return;
+    }
+    if (!k.len || (p.mask & bit)) return;   // only a track with a loop
+    p.mask |= bit;
+    switch (fx) {
+        case PerfFx::kRepeat8:
+        case PerfFx::kRepeat16: startRepeat(fx); break;
+        case PerfFx::kTapeStop:
+            p.tapeBase = posOf(k);
+            p.tapePos = 0.0f;
+            p.tapeRate = 1.0f;
+            break;
+        case PerfFx::kVibrato: p.vibT0 = t_; break;
+        case PerfFx::kSweepDown: p.lpT0 = t_; break;
+        case PerfFx::kSweepUp: p.hpT0 = t_; break;
+        default: break;
+    }
+}
+
+uint8_t Engine::opt(OptParam p, int t) const {
+    const TrackOpts& o = opts_[t];
+    switch (p) {
+        case OptParam::kStop: return uint8_t(o.stop);
+        case OptParam::kLength: return o.lenBeats;
+        case OptParam::kCountIn: return o.countIn;
+        case OptParam::kInput: return uint8_t(o.input);
+        case OptParam::kAfter: return uint8_t(o.after);
+        case OptParam::kTempo: {
+            // With a loop the tempo follows its bar.
+            if (!L_) return bpm_;
+            const uint32_t b = uint32_t(uint64_t(kSampleRate) * 60u * beats_ / L_);
+            return uint8_t(b > 255 ? 255 : b);
+        }
+        case OptParam::kBeats: return beats_;
+        case OptParam::kMetronome: return metro_;
+        case OptParam::kClick: return click_;
+    }
+    return 0;
+}
+
+uint8_t Engine::mix(MixParam p, int t) const {
+    switch (p) {
+        case MixParam::kLevel: return trk_[t].volume;
+        case MixParam::kSend1: return send_[t][0];
+        case MixParam::kSend2: return send_[t][1];
+        case MixParam::kReturn1: return return_[0];
+        case MixParam::kReturn2: return return_[1];
+        case MixParam::kDelayTime: return delayDiv_;
+        case MixParam::kDelayFeedback: return delayFb_;
+        case MixParam::kReverbSize: return reverbSize_;
+        case MixParam::kReverbTone: return reverbTone_;
+        case MixParam::kMaster: return masterLevel_;
+    }
+    return 0;
 }
 
 void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
@@ -299,6 +524,10 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
     std::memset(out, 0, size_t(frames) * 2 * sizeof(int16_t));
     float mixL[128], mixR[128];
     const uint32_t n = frames > 128 ? 128 : frames;
+    float (&busL)[kFxSlots][128] = busL_;   // send buses (post-fader), members: off the ISR stack
+    float (&busR)[kFxSlots][128] = busR_;
+    std::memset(busL_, 0, sizeof busL_);
+    std::memset(busR_, 0, sizeof busR_);
     uint8_t inPk[2] = {0, 0};
     for (uint32_t f = 0; f < n; ++f) {
         const int16_t l = in ? in[2 * f] : 0, r = in ? in[2 * f + 1] : 0;
@@ -315,55 +544,191 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
         const TrackMemory& m = mem_[t];
         uint8_t level = 0;
         bool wrote = false;
-        if (k.state == TrackState::kRecording && running_) {
-            uint32_t i = k.written;
-            bool full = false;
-            for (uint32_t f = 0; f < n; ++f, ++i) {
-                if (i >= m.capacity) {
-                    full = true;
+        if ((k.state == TrackState::kRecording || k.state == TrackState::kCountIn) && running_) {
+            const uint32_t cap = capOf(t);
+            bool done = false;
+            for (uint32_t f = 0; f < n; ++f) {
+                if (k.state == TrackState::kCountIn) {   // starts on its bar line, to the frame
+                    if (t_ + f < k.anchor) continue;
+                    k.state = TrackState::kRecording;
+                    k.written = 0;
+                }
+                const uint32_t i = k.written;
+                if (i >= cap || (k.stopAt && i >= k.stopAt)) {
+                    done = true;
                     break;
                 }
                 const int16_t l = in ? in[2 * f] : 0, r = in ? in[2 * f + 1] : 0;
-                m.frames[2 * i] = l;
-                m.frames[2 * i + 1] = r;
-                notePeak(m.peaks, i, l, r);
+                if (k.mono) {
+                    const int16_t v = fold(k.input, l, r);
+                    m.frames[i] = v;
+                    notePeakMono(m.peaks, i, v);
+                } else {
+                    m.frames[2 * i] = l;
+                    m.frames[2 * i + 1] = r;
+                    notePeak(m.peaks, i, l, r);
+                }
+                k.written = i + 1;
             }
-            k.written = i;
-            wrote = true;
-            if (full) finishRecording(t);
+            if (k.state == TrackState::kRecording) {
+                if (k.stopAt && k.written >= k.stopAt) finishRecording(t, k.stopAt);
+                else if (done || k.written >= cap) finishNow(t);
+                wrote = true;
+            }
         } else if (running_ && k.len &&
                    (k.state == TrackState::kPlaying || k.state == TrackState::kOverdubbing ||
                     k.state == TrackState::kStopped)) {
             const ModeInfo& mi = modeInfo(k.mode);
-            const bool dub = k.state == TrackState::kOverdubbing && mi.canDub;
+            Perf& pf = k.perf;
+            auto has = [&](PerfFx x) { return (pf.mask >> int(x)) & 1u; };
+            const bool rep = (has(PerfFx::kRepeat8) || has(PerfFx::kRepeat16)) && pf.repFx != 0xFF && pf.repSlice;
+            const bool tape = has(PerfFx::kTapeStop), vib = has(PerfFx::kVibrato);
+            const bool posFx = rep || tape || vib;
+            // Overdub writes where it reads: not while a performance effect moves the read position.
+            const bool dub = k.state == TrackState::kOverdubbing && mi.canDub && !posFx;
             const float target = (k.state == TrackState::kStopped || k.muted) ? 0.0f : float(k.volume) / 100.0f;
+
+            // Filters: a cut holds its cutoff; a sweep moves across one bar while held.
+            const float bar = float(barLen());
+            const bool lpOn = has(PerfFx::kLowPass) || has(PerfFx::kSweepDown);
+            const bool hpOn = has(PerfFx::kHighPass) || has(PerfFx::kSweepUp);
+            float lpFc = 20000.0f, hpFc = 20.0f;
+            if (has(PerfFx::kSweepDown)) {
+                const float pr = bar > 0 ? std::fmin(1.0f, float(t_ - pf.lpT0) / bar) : 1.0f;
+                lpFc = 18000.0f * std::pow(200.0f / 18000.0f, pr);
+            }
+            if (has(PerfFx::kLowPass)) lpFc = std::fmin(lpFc, 450.0f);
+            if (has(PerfFx::kSweepUp)) {
+                const float pr = bar > 0 ? std::fmin(1.0f, float(t_ - pf.hpT0) / bar) : 1.0f;
+                hpFc = 20.0f * std::pow(4000.0f / 20.0f, pr);
+            }
+            if (has(PerfFx::kHighPass)) hpFc = std::fmax(hpFc, 1800.0f);
+            // Wet amounts ramp over a block (no clicks on press / release).
+            const float lpW0 = pf.lpWet, hpW0 = pf.hpWet;
+            pf.lpWet = lpOn ? 1.0f : 0.0f;
+            pf.hpWet = hpOn ? 1.0f : 0.0f;
+            const bool lpRun = lpOn || lpW0 > 0.0f, hpRun = hpOn || hpW0 > 0.0f;
+            const float lpWs = (pf.lpWet - lpW0) / float(n), hpWs = (pf.hpWet - hpW0) / float(n);
+            float lpW = lpW0, hpW = hpW0;
+            struct Coef {
+                float a1, a2, a3, k;
+            };
+            auto coef = [](float fc) {
+                const float gg = std::tan(3.14159265f * std::fmin(fc, 20000.0f) / float(kSampleRate));
+                const float kk = 0.8f;   // a little resonance
+                Coef c;
+                c.k = kk;
+                c.a1 = 1.0f / (1.0f + gg * (gg + kk));
+                c.a2 = gg * c.a1;
+                c.a3 = gg * c.a2;
+                return c;
+            };
+            const Coef lpc = coef(lpFc), hpc = coef(hpFc);
+            // One channel of an SVF; returns low-pass or high-pass.
+            auto svf = [](Svf& s, int ch, const Coef& c, float x, bool high) {
+                const float v3 = x - s.ic2[ch];
+                const float v1 = c.a1 * s.ic1[ch] + c.a2 * v3;
+                const float v2 = s.ic2[ch] + c.a2 * s.ic1[ch] + c.a3 * v3;
+                s.ic1[ch] = 2.0f * v1 - s.ic1[ch];
+                s.ic2[ch] = 2.0f * v2 - s.ic2[ch];
+                return high ? x - c.k * v1 - v2 : v2;
+            };
+            const uint32_t tapeFrames = beatLen() * 2u;   // stops over two beats
+            const float tapeStep = 1.0f / float(tapeFrames ? tapeFrames : 1u);
+            const float speed = float(mi.time16) / 65536.0f;
             const float step = (target - k.gain) / float(n);
             float g = k.gain;
+            float sg[kFxSlots], sstep[kFxSlots];
+            for (int s = 0; s < kFxSlots; ++s) {
+                const float st = float(send_[t][s]) / 100.0f;
+                sg[s] = sendGain_[t][s];
+                sstep[s] = (st - sg[s]) / float(n);
+                sendGain_[t][s] = st;
+            }
             const uint64_t P = period16(k), L16 = uint64_t(k.len) << 16;
             uint64_t ph = phase16(k);
+            // Frame i as left/right; a mono buffer gives the same sample to both.
+            const bool mono = k.mono;
+            auto lr = [&](uint32_t i, int16_t& a, int16_t& b) {
+                if (mono) a = b = m.frames[i];
+                else {
+                    a = m.frames[2 * i];
+                    b = m.frames[2 * i + 1];
+                }
+            };
+            auto interp = [&](uint32_t i, uint32_t j, float fr, float& l, float& r) {
+                int16_t al, ar, bl, br;
+                lr(i, al, ar);
+                lr(j, bl, br);
+                l = lerp(al, bl, fr);
+                r = lerp(ar, br, fr);
+            };
             for (uint32_t f = 0; f < n; ++f) {
                 float sl = 0.0f, sr = 0.0f;
+                if (posFx) {
+                    // Performance read position: repeat slice, tape stop or the normal
+                    // one, then vibrato on top; always interpolated.
+                    uint32_t ip;
+                    float fp = 0.0f, env = 1.0f;
+                    if (rep) {
+                        const uint32_t e = (t_ + f - pf.repT0 + pf.repIn) % pf.repSlice;
+                        ip = (pf.repStart + e) % k.len;
+                        // 64-frame fades at the slice edges keep the repeats click-free.
+                        const float a = float(e) / 64.0f, z = float(pf.repSlice - e) / 64.0f;
+                        env = std::fmin(1.0f, std::fmin(a, z));
+                    } else if (tape) {
+                        pf.tapeRate = std::fmax(0.0f, pf.tapeRate - tapeStep);
+                        pf.tapePos += pf.tapeRate * speed;
+                        const uint32_t whole = uint32_t(pf.tapePos);
+                        ip = (pf.tapeBase + whole) % k.len;
+                        fp = pf.tapePos - float(whole);
+                        env = pf.tapeRate;   // fades out as it slows
+                    } else {
+                        ip = posOfPhase(k, ph);
+                        if (mi.reader != ModeInfo::kDirect) fp = float(uint32_t(ph & 0xFFFFu)) * (1.0f / 65536.0f);
+                    }
+                    if (vib) {
+                        // 5.5 Hz, +-30 frames: about +-40 cents.
+                        const float o = 30.0f * std::sin(6.2831853f * 5.5f * float(t_ + f - pf.vibT0) / float(kSampleRate));
+                        float pos = float(ip) + fp + o;
+                        if (pos < 0.0f) pos += float(k.len);
+                        if (pos >= float(k.len)) pos -= float(k.len);
+                        ip = uint32_t(pos);
+                        if (ip >= k.len) ip = k.len - 1;
+                        fp = pos - float(ip);
+                    }
+                    const uint32_t j = ip + 1 < k.len ? ip + 1 : 0;
+                    interp(ip, j, fp, sl, sr);
+                    sl *= env;
+                    sr *= env;
+                } else
                 switch (mi.reader) {
                     case ModeInfo::kDirect: {   // speed 1: forward, reverse, ping-pong; overdub writes here
                         const uint32_t i = posOfPhase(k, ph);
-                        const int16_t a = m.frames[2 * i], b = m.frames[2 * i + 1];
+                        int16_t a, b;
+                        lr(i, a, b);
                         sl = a;
                         sr = b;
                         if (dub) {
                             const int16_t l = in ? in[2 * f] : 0, r = in ? in[2 * f + 1] : 0;
-                            const int16_t nl = sat16(float(a) * fb + float(l));
-                            const int16_t nr = sat16(float(b) * fb + float(r));
-                            m.frames[2 * i] = nl;
-                            m.frames[2 * i + 1] = nr;
-                            notePeak(m.peaks, i, nl, nr);
+                            if (mono) {
+                                const int16_t nv = sat16(float(a) * fb + float(fold(k.input, l, r)));
+                                m.frames[i] = nv;
+                                notePeakMono(m.peaks, i, nv);
+                            } else {
+                                const int16_t nl = sat16(float(a) * fb + float(l));
+                                const int16_t nr = sat16(float(b) * fb + float(r));
+                                m.frames[2 * i] = nl;
+                                m.frames[2 * i + 1] = nr;
+                                notePeak(m.peaks, i, nl, nr);
+                            }
                         }
                         break;
                     }
                     case ModeInfo::kTape: {     // varispeed: pitch follows speed
                         const uint32_t i = uint32_t(ph >> 16), j = i + 1 < k.len ? i + 1 : 0;
                         const float fr = float(uint32_t(ph & 0xFFFFu)) * (1.0f / 65536.0f);
-                        sl = lerp(m.frames[2 * i], m.frames[2 * j], fr);
-                        sr = lerp(m.frames[2 * i + 1], m.frames[2 * j + 1], fr);
+                        interp(i, j, fr, sl, sr);
                         break;
                     }
                     case ModeInfo::kGrains: {   // tempo from the phase, pitch from the grain read rate
@@ -372,8 +737,10 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                             const float w = gWin[gr.age * kWinSize / kGrainFrames];
                             const uint32_t i = uint32_t(gr.pos16 >> 16), j = i + 1 < k.len ? i + 1 : 0;
                             const float fr = float(uint32_t(gr.pos16 & 0xFFFFu)) * (1.0f / 65536.0f);
-                            sl += w * lerp(m.frames[2 * i], m.frames[2 * j], fr);
-                            sr += w * lerp(m.frames[2 * i + 1], m.frames[2 * j + 1], fr);
+                            float gl, gr2;
+                            interp(i, j, fr, gl, gr2);
+                            sl += w * gl;
+                            sr += w * gr2;
                             gr.pos16 += mi.pitch16;
                             if (gr.pos16 >= L16) gr.pos16 -= L16;
                             ++gr.age;
@@ -381,12 +748,27 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                         break;
                     }
                 }
+                if (lpRun) {
+                    lpW += lpWs;
+                    sl += (svf(pf.lp, 0, lpc, sl, false) - sl) * lpW;
+                    sr += (svf(pf.lp, 1, lpc, sr, false) - sr) * lpW;
+                }
+                if (hpRun) {
+                    hpW += hpWs;
+                    sl += (svf(pf.hp, 0, hpc, sl, true) - sl) * hpW;
+                    sr += (svf(pf.hp, 1, hpc, sr, true) - sr) * hpW;
+                }
                 ph += mi.time16;
                 if (ph >= P) ph -= P;
                 g += step;
                 const float ol = sl * g, orr = sr * g;
                 mixL[f] += ol;
                 mixR[f] += orr;
+                for (int s = 0; s < kFxSlots; ++s) {
+                    sg[s] += sstep[s];
+                    busL[s][f] += ol * sg[s];
+                    busR[s][f] += orr * sg[s];
+                }
                 const uint8_t p = peak8(int(ol), int(orr));
                 if (p > level) level = p;
             }
@@ -397,10 +779,71 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
         view_[t].level.store(level, std::memory_order_relaxed);
     }
 
+    // Metronome: always (when on) or during any track's count-in. Accent on the
+    // bar line. Dry, after the sends, so the effects never hear it.
+    bool counting = false;
+    for (const Track& k : trk_) counting = counting || k.state == TrackState::kCountIn;
+    if (running_ && (metro_ || counting) && click_) {
+        const uint32_t bar = barLen(), beat = beatLen();
+        const float lvl = float(click_) / 100.0f * 9000.0f;
+        for (uint32_t f = 0; f < n; ++f) {
+            const uint32_t tf = t_ + f;
+            if (beat && tf % beat == 0) {
+                clickAge_ = 0;
+                clickHz_ = tf % bar == 0 ? 1600.0f : 1000.0f;
+                clickAmp_ = 1.0f;
+            }
+            if (clickAge_ < kSampleRate / 20) {   // 50 ms, ~10 ms decay
+                const float v = std::sin(6.2831853f * clickHz_ * float(clickAge_) / float(kSampleRate)) * clickAmp_ * lvl;
+                clickAmp_ *= 0.9977f;
+                ++clickAge_;
+                mixL[f] += v;
+                mixR[f] += v;
+            }
+        }
+    } else {
+        clickAge_ = 0xFFFFFFFFu;
+    }
+
+    // Send effects run every block (tails ring out while the transport is stopped).
+    {
+        const uint32_t base = barLen();
+        const DelayDiv& dv = kDelayDivs[delayDiv_ < kDelayDivCount ? delayDiv_ : 0];
+        uint32_t dt = uint32_t(uint64_t(base) * dv.num / dv.den);
+        while (dt > Delay::kMaxFrames - 4) dt /= 2;
+        delay_.setTime(dt);
+        delay_.setFeedback(float(delayFb_) / 100.0f);
+        reverb_.set(reverbSize_, reverbTone_);
+        float wetL[128], wetR[128];
+        for (int s = 0; s < kFxSlots; ++s) {
+            if (s == 0) delay_.process(busL[0], busR[0], wetL, wetR, n);
+            else reverb_.process(busL[1], busR[1], wetL, wetR, n);
+            const float rt = float(return_[s]) / 100.0f;
+            float rg = returnGain_[s];
+            const float rstep = (rt - rg) / float(n);
+            returnGain_[s] = rt;
+            uint8_t pk = 0;
+            for (uint32_t f = 0; f < n; ++f) {
+                rg += rstep;
+                const float l = wetL[f] * rg, r = wetR[f] * rg;
+                mixL[f] += l;
+                mixR[f] += r;
+                const uint8_t p = peak8(int(sat16(l)), int(sat16(r)));
+                if (p > pk) pk = p;
+            }
+            retPeak_[s].store(pk, std::memory_order_relaxed);
+        }
+    }
+
     uint8_t outPk[2] = {0, 0};
+    const float mt = float(masterLevel_) / 100.0f;
+    float mg = masterGain_;
+    const float mstep = (mt - mg) / float(n);
+    masterGain_ = mt;
     for (uint32_t f = 0; f < n; ++f) {
-        out[2 * f] = sat16(mixL[f]);
-        out[2 * f + 1] = sat16(mixR[f]);
+        mg += mstep;
+        out[2 * f] = sat16(mixL[f] * mg);
+        out[2 * f + 1] = sat16(mixR[f] * mg);
         const uint8_t pl = peak8(out[2 * f], 0), pr = peak8(out[2 * f + 1], 0);
         if (pl > outPk[0]) outPk[0] = pl;
         if (pr > outPk[1]) outPk[1] = pr;
@@ -423,7 +866,18 @@ void Engine::publish() {
         v.len.store(k.len, std::memory_order_relaxed);
         v.written.store(k.state == TrackState::kRecording ? k.written : k.len, std::memory_order_relaxed);
         v.pos.store(k.state == TrackState::kRecording ? k.written : posOf(k), std::memory_order_relaxed);
+        v.mono.store(k.mono, std::memory_order_relaxed);
+        v.perf.store(k.perf.mask, std::memory_order_relaxed);
+        v.startIn.store(k.state == TrackState::kCountIn && k.anchor > t_ ? k.anchor - t_ : 0,
+                        std::memory_order_relaxed);
+        v.stopIn.store(k.state == TrackState::kRecording && k.stopAt > k.written ? k.stopAt - k.written : 0,
+                       std::memory_order_relaxed);
+        // Buffer index 0 is at global frame `anchor`: the first bar line is where
+        // the global grid crosses the buffer.
+        const uint32_t bar = barLen();
+        v.barOffset.store(bar ? (bar - k.anchor % bar) % bar : 0, std::memory_order_relaxed);
     }
+    bar_.store(barLen(), std::memory_order_relaxed);
     master_.store(L_, std::memory_order_relaxed);
     tPub_.store(t_, std::memory_order_relaxed);
     runPub_.store(running_, std::memory_order_relaxed);

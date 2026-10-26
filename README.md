@@ -78,6 +78,7 @@ eight screen keys, each centred over its key as on the stock Tracker.
 | Up / Down, any pad | Select track |
 | Encoder | Selected track volume; Shift + encoder = input gain |
 | Help | Show / hide the CPU, frame-rate and display-list readout |
+| Master | Mixer page on / off |
 | Power (hold 1.5 s) | Switch off |
 
 ### Playback modes
@@ -100,12 +101,89 @@ position instead of jumping.
 Overdub needs speed 1 so it can write where it reads; in the other modes REC
 shows a hint instead.
 
+### Track options and tempo
+
+The **I.Param** key opens the track options page: a column per track over
+F1–F4 and the tempo column over F5 (same navigation as the mixer, F8 back).
+
+| Option (per track) | Values |
+|---|---|
+| Stop | **Free**: the take ends when you press. **On bar** / **On beat**: it records on to the next bar / beat line (a press less than an eighth of a unit late stops on the line it just passed). Default On bar. |
+| Length | Off, or a fixed length: recording stops by itself. Encoder in bars, Shift + encoder in beats. |
+| Count-in | One bar of click, then the take starts on the bar line. With loops running it waits for the next bar line at least half a bar away. Press again to cancel. |
+| Input | Stereo, Mono L, Mono R, Mono sum. Mono uses half the memory, so a track holds about 45 s. Only while the track is empty. |
+| After rec | Play, Overdub or Stop when the take ends. |
+
+| Tempo column | |
+|---|---|
+| Tempo | 40–240 bpm (default 120). It sets the bar until there is a loop; after that it shows the loop's tempo. |
+| Beats / bar | 1–12 (default 4): the click, on-beat stops and the beat lines. |
+| Metronome | Click on every beat while the transport runs (the count-in always clicks). |
+| Click | Click level. |
+
+A free first take still sets the bar to its own length, as before; an on-bar,
+on-beat or fixed-length first take keeps the tempo's bar. Every waveform shows
+the bar lines (numbered) and the beat lines where they fall in that take.
+
+### Performance mode
+
+**Perform**: tap it to latch performance mode on (tap again to leave), or hold
+it to use it only while held. Each lane's waveform shows eight effect cells,
+laid out like pad columns 5–12 of that track's row. Hold a pad to play its
+effect on that track; Shift + pad latches it (a dot in the cell) until pressed
+again. Leaving performance mode turns everything off. Pad columns 1–4 keep
+record / play / mute / clear.
+
+| Pad column | Effect |
+|---|---|
+| 5 Rpt 1/8 | Beat repeat: loops the eighth note it was pressed in, on the beat grid |
+| 6 Rpt 1/16 | The same with a sixteenth |
+| 7 Low-pass | Resonant low-pass cut at 450 Hz |
+| 8 High-pass | Resonant high-pass cut at 1.8 kHz |
+| 9 Sweep dn | Low-pass sweeping 18 kHz → 200 Hz over one bar while held |
+| 10 Sweep up | High-pass sweeping 20 Hz → 4 kHz over one bar while held |
+| 11 Vibrato | 5.5 Hz, about ±40 cents |
+| 12 Tape stop | Slows to a stop over two beats |
+
+The repeats, vibrato and tape stop move the read position while the loop's
+phase keeps running underneath, so releasing them lands back in time. Overdub
+pauses while one of those is held. Effects stack (a low-pass and a high-pass
+together make a band-pass). Sends take the effected sound.
+
+The pads are single-colour (brightness only), so the pad grid shows state as
+brightness and blinking: REC fast blink while recording, slow blink while
+overdubbing, a flash per beat in the count-in; PLAY lit while playing; MUTE
+full when muted; columns 5–12 the playhead's eighth, or in performance mode
+the running effects.
+
+### Mixer and send effects
+
+Two send effects: **FX 1 Delay** (stereo, time synced to the master loop,
+low-passed feedback, the time glides like tape when changed) and **FX 2
+Reverb** (8-line feedback delay network). Every track has a post-fader send to
+each.
+
+The **Master** key opens the mixer page: seven strips, each over its screen
+key, plus F8 to go back.
+
+| Strip (key) | Top row | Middle row | Fader |
+|---|---|---|---|
+| Track 1–4 (F1–F4) | Send to delay | Send to reverb | Track level |
+| Delay (F5) | Time: 1/32 … 3/4 of the loop | Feedback 0–95 % | Return level |
+| Reverb (F6) | Size (decay 0.3–9 s) | Tone (dark … bright) | Return level |
+| Master (F7) | – | – | Master level |
+
+F1–F7 or Left/Right pick a strip, Up/Down a row (the row stays when you change
+strip), the encoder sets the value, Shift + encoder in single steps. Faders
+show their level meter; the master shows left and right. Sends start at 0,
+returns at 80, track levels at 80, master at 100. Mixer settings stay when a
+track is cleared.
+
 Tracks are stereo. Each lane draws the left channel above its centre line and
 the right channel below it.
 
-The first recording sets the master length. Later takes start in phase with
-it and are rounded to whole bars (a release less than an eighth of a bar late
-rounds down).
+Every take starts in phase with the bar grid; how it ends is the Stop option
+on the track options page (on bar by default).
 
 ## Install on a Tracker
 
@@ -116,7 +194,8 @@ the way back: write its name into `/Firmware/ot_restore.txt` and power-cycle
 
 ## Limits found so far
 
-- **Memory:** 16 MB SDRAM = about 23.7 s of stereo audio per track, with no
+- **Memory:** 16 MB SDRAM = about 22.8 s of stereo audio per track (after the
+  ~0.6 MB of delay and reverb lines), with no
   undo. Mono storage or a shared pool would roughly double that; longer loops
   need SD streaming (the SD → SDRAM DMA path is still unverified in the HAL).
 - **Display list:** the FT81x runs at most 2048 words (8 KB) per frame. This

@@ -1,0 +1,75 @@
+# Track options: quantised stop, free stop, count-in with a fixed length, mono input.
+# Tempo 120 bpm, 4 beats: a bar is 2.0 s until the first loop sets it.
+wait 300
+
+# Track 1, stop "On bar" (the default): stopping 0.5 s into bar 2 records on to its end.
+tap 0
+wait 2500
+tap 0
+expect_state 1 REC
+wait 100
+shot ../build/sim/check/options_pending_stop.png
+wait 1500
+expect_state 1 PLAY
+expect_len 1 4.0
+
+# Track 2, stop "Free": the take is exactly as long as played.
+press INSTRPARAMS
+press F2
+enc -1
+wait 100
+shot ../build/sim/check/options_page.png
+press F8
+tap 12
+wait 1300
+tap 12
+expect_len 2 1.32
+
+# Track 3: fixed length 1 bar, with a count-in. The others are muted, so the
+# count-in click is the only sound.
+press INSTRPARAMS
+press F3
+press DOWN
+enc 1
+press DOWN
+enc 1
+press F8
+tap 2
+tap 14
+tone off
+tap 24
+expect_state 3 COUNT
+wait 100
+shot ../build/sim/check/options_count_in.png
+reset_levels
+wait 600
+expect_audio 0.05
+wait 5500
+expect_state 3 PLAY
+expect_len 3 2.0
+
+# Track 4, input "Mono L": a left-only tone plays back on both sides.
+press INSTRPARAMS
+press F4
+press DOWN
+enc 1
+press F8
+tone 330
+tone_ch left
+tap 36
+wait 2000
+tap 36
+wait 4500
+tone off
+tap 26
+reset_levels
+wait 4100
+expect_ch left 0.2
+expect_ch right 0.2
+expect_state 4 PLAY
+
+tap 2
+tap 14
+tap 26
+wait 300
+shot ../build/sim/check/options_lanes.png

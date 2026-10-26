@@ -1,0 +1,74 @@
+# Send effects through the mixer page. The tails are heard after the transport
+# stops: tracks go silent, the effects ring on.
+wait 300
+tap 0
+wait 2000
+tap 0
+tone off
+wait 200
+
+# All sends at 0: stopping leaves nothing behind.
+press PLAY
+wait 300
+reset_levels
+wait 500
+expect_silent
+press PLAY
+
+# Mixer: track 1 strip (F1), up two rows to its delay send, all the way up.
+press MASTER
+press F1
+press UP
+press UP
+enc 60
+wait 1500
+shot ../build/sim/check/fx_mixer_delay_send.png
+press PLAY
+wait 50
+reset_levels
+wait 600
+expect_audio 0.05
+
+# Delay return down (F5 strip; the row carries over from the last strip, so
+# down two rows to the fader): the tail is gone.
+press PLAY
+press F5
+press DOWN
+press DOWN
+enc -60
+wait 1500
+press PLAY
+wait 50
+reset_levels
+wait 600
+expect_silent
+
+# Reverb: track 1 send to reverb up (F1, up one row from the fader), return stays at 80.
+press PLAY
+press F1
+press UP
+enc 60
+press F6
+press UP
+press UP
+enc 20
+wait 1500
+press PLAY
+wait 50
+reset_levels
+wait 600
+expect_audio 0.02
+shot ../build/sim/check/fx_mixer_reverb.png
+
+# Master down: silence while playing.
+press PLAY
+press F7
+enc -60
+wait 300
+reset_levels
+wait 1000
+expect_silent
+enc 60
+press F8
+wait 300
+shot ../build/sim/check/fx_back_to_loops.png

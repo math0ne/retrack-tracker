@@ -29,10 +29,11 @@ struct Platform {
     // Bytes of the last display list the display controller ran (device only).
     uint32_t (*dlBytes)() = nullptr;
 
-    // Loop memory (external SDRAM on the device) and a staging buffer for
+    // Loop memory (external SDRAM on the device), effect memory, and a staging buffer for
     // waveform bitmaps on their way to the display's RAM_G.
     uint8_t* loopMem = nullptr;
     uint32_t loopMemBytes = 0;
+    uint8_t* fxMem = nullptr;        // looper::kFxMemBytes (delay and reverb lines), 4-byte aligned
     uint8_t* scratch = nullptr;
     uint32_t scratchBytes = 0;
 };

@@ -20,15 +20,45 @@
 #include <atomic>
 #include <cstdint>
 
+#include "looper/fx.h"
+
 namespace looper {
 
 constexpr int kTracks = 4;
+constexpr int kFxSlots = 2;                  // FX 1 delay, FX 2 reverb, fed by per-track sends
 constexpr int kSegments = 8;                 // pad columns 4..11 jump between eighths
 constexpr uint32_t kPeakFrames = 256;        // frames per waveform peak cell
 constexpr uint32_t kSampleRate = 44100;
 constexpr uint32_t kGrainFrames = 2048;      // granular modes: 46 ms grains, 50 % overlap
 
-enum class TrackState : uint8_t { kClearing, kEmpty, kRecording, kPlaying, kOverdubbing, kStopped };
+enum class TrackState : uint8_t { kClearing, kEmpty, kCountIn, kRecording, kPlaying, kOverdubbing, kStopped };
+
+// Per-track recording options (Engine::kOpt). They stay when the track is cleared.
+enum class StopQuant : uint8_t { kFree, kBar, kBeat };   // where a stop press ends the take
+enum class InputCh : uint8_t { kStereo, kMonoL, kMonoR, kMonoSum };
+enum class AfterRec : uint8_t { kPlay, kOverdub, kStop };
+struct TrackOpts {
+    StopQuant stop = StopQuant::kBar;
+    uint8_t lenBeats = 0;        // fixed length in beats, 0 = off (stop by hand)
+    bool countIn = false;        // one bar of click, then record from the bar line
+    InputCh input = InputCh::kStereo;
+    AfterRec after = AfterRec::kPlay;
+};
+enum class OptParam : uint8_t {
+    kStop, kLength, kCountIn, kInput, kAfter,   // per track
+    kTempo, kBeats, kMetronome, kClick,         // global: BPM 40..240, beats per bar 1..12, click on/off, level
+};
+constexpr uint8_t kMaxLenBeats = 64;
+
+// Performance effects (Engine::kPerf), per track, held from the pad grid.
+// Repeats, tape stop and vibrato move the read position; the phase underneath
+// keeps running, so releasing one lands back in time.
+enum class PerfFx : uint8_t {
+    kRepeat8, kRepeat16, kLowPass, kHighPass, kSweepDown, kSweepUp, kVibrato, kTapeStop, kCount
+};
+constexpr int kPerfFxCount = int(PerfFx::kCount);
+constexpr const char* kPerfFxName[kPerfFxCount] = {"Rpt 1/8",  "Rpt 1/16", "Low-pass", "High-pass",
+                                                   "Sweep dn", "Sweep up", "Vibrato",  "Tape stop"};
 
 enum class PlayMode : uint8_t {
     kForward, kReverse, kPingPong, kHalfSpeed, kDoubleSpeed, kStretch, kOctaveUp, kOctaveDown, kCount
@@ -58,6 +88,33 @@ constexpr ModeInfo kModes[kModeCount] = {
 };
 inline const ModeInfo& modeInfo(PlayMode m) { return kModes[int(m) < kModeCount ? int(m) : 0]; }
 
+// Delay time as a fraction of the master loop (2 s before there is one). A time
+// longer than the delay line is halved until it fits, so it stays on the grid.
+struct DelayDiv {
+    const char* name;
+    uint8_t num, den;
+};
+constexpr DelayDiv kDelayDivs[] = {{"1/32", 1, 32}, {"1/16", 1, 16}, {"1/8", 1, 8}, {"3/16", 3, 16},
+                                   {"1/4", 1, 4},   {"3/8", 3, 8},   {"1/2", 1, 2}, {"3/4", 3, 4}};
+constexpr int kDelayDivCount = int(sizeof kDelayDivs / sizeof kDelayDivs[0]);
+
+// Mixer parameters (Engine::kMix). Track parameters use the command's track field.
+enum class MixParam : uint8_t {
+    kLevel,          // track level 0..100 (same as kVolume)
+    kSend1,          // track -> FX 1 (delay), post-fader, 0..100
+    kSend2,          // track -> FX 2 (reverb)
+    kReturn1,        // FX 1 return level 0..100
+    kReturn2,
+    kDelayTime,      // index into kDelayDivs
+    kDelayFeedback,  // 0..95
+    kReverbSize,     // 0..100
+    kReverbTone,     // 0..100
+    kMaster,         // master level 0..100
+};
+
+// Effect memory the app hands to Engine::init (SDRAM on the device).
+constexpr uint32_t kFxMemBytes = Delay::kBytes + Reverb::kBytes;
+
 struct TrackMemory {
     int16_t* frames = nullptr;   // interleaved stereo
     uint32_t capacity = 0;       // frames
@@ -74,6 +131,11 @@ struct TrackView {
     std::atomic<uint32_t> pos{0};        // play index of the last block
     std::atomic<uint32_t> peakVersion{0};
     std::atomic<uint8_t> level{0};       // output peak of the last block, 0..255
+    std::atomic<bool> mono{false};       // buffer holds one channel (one peak byte per cell)
+    std::atomic<uint32_t> startIn{0};    // count-in: frames until recording starts
+    std::atomic<uint32_t> stopIn{0};     // recording: frames until the pending stop (0 = none)
+    std::atomic<uint32_t> barOffset{0};  // buffer index of the first bar line (takes that start off a bar)
+    std::atomic<uint8_t> perf{0};        // active PerfFx bits
 };
 
 class Engine {
@@ -90,9 +152,14 @@ public:
         kMonitor,      // arg = 0/1 input monitoring
         kFeedback,     // arg = 0..100 overdub feedback
         kMode,         // arg = PlayMode; the read position carries on from where it was
+        kMix,          // arg = (MixParam << 8) | value
+        kOpt,          // arg = (OptParam << 8) | value
+        kPerf,         // arg = (PerfFx << 8) | on (0/1)
+        kPerfOff,      // every performance effect off on every track
     };
 
-    void init(const TrackMemory mem[kTracks]);
+    // fxMem: kFxMemBytes, 4-byte aligned.
+    void init(const TrackMemory mem[kTracks], uint8_t* fxMem);
     void post(Cmd c, uint8_t track = 0, int16_t arg = 0);   // main loop only
     void service();                                          // main loop: zero cleared buffers
     void render(int16_t* out, const int16_t* in, uint32_t frames);   // audio thread
@@ -108,11 +175,37 @@ public:
     uint8_t feedback() const { return feedback_; }
     uint8_t inputLevel(int ch) const { return inPeak_[ch].load(std::memory_order_relaxed); }
     uint8_t outputLevel(int ch) const { return outPeak_[ch].load(std::memory_order_relaxed); }
+    // Mixer (audio-thread values; one byte each, so the main loop reads them as they are).
+    uint8_t mix(MixParam p, int track = 0) const;
+    uint8_t returnLevel(int slot) const { return retPeak_[slot].load(std::memory_order_relaxed); }
+    uint8_t opt(OptParam p, int track = 0) const;
+    // Bar length in frames: the master loop's bar once there is one, else from the tempo.
+    uint32_t barFrames() const { return bar_.load(std::memory_order_relaxed); }
+    uint8_t beatsPerBar() const { return beats_; }
 
 private:
     struct Grain {
         uint64_t pos16 = 0;          // read position, 16.16 frames
         uint32_t age = 0;            // output frames since the grain started
+    };
+    // Zavalishin state-variable filter, one per channel.
+    struct Svf {
+        float ic1[2] = {0, 0}, ic2[2] = {0, 0};
+    };
+    struct Perf {
+        uint8_t mask = 0;            // PerfFx bits
+        uint32_t repStart = 0;       // repeat: slice start (buffer frames)
+        uint32_t repSlice = 0;       //   slice length
+        uint32_t repT0 = 0;          //   global frame of the press
+        uint32_t repIn = 0;          //   position inside the slice at the press
+        uint8_t repFx = 0xFF;        //   which repeat set the slice
+        float tapePos = 0.0f;        // tape stop: read position (frames) and speed 1 -> 0
+        uint32_t tapeBase = 0;
+        float tapeRate = 1.0f;
+        uint32_t vibT0 = 0;
+        uint32_t lpT0 = 0, hpT0 = 0; // sweep starts
+        float lpWet = 0.0f, hpWet = 0.0f;
+        Svf lp, hp;
     };
     struct Track {
         TrackState state = TrackState::kClearing;
@@ -125,7 +218,11 @@ private:
         uint64_t offset16 = 0;       // phase offset (jumps, mode changes), 16.16
         uint32_t written = 0;        // high-water mark of frames touched since the last clear
         uint32_t recStart = 0;       // global frame of the recording start
+        uint32_t stopAt = 0;         // recording ends when written reaches this (0 = by hand)
+        bool mono = false;           // set from the options when recording starts
+        InputCh input = InputCh::kStereo;
         Grain grain[2];
+        Perf perf;
     };
     struct Msg {
         uint8_t cmd, track;
@@ -134,7 +231,14 @@ private:
 
     void apply(const Msg& m);
     void startRecording(int t);
-    void finishRecording(int t);
+    void requestStop(int t);                 // a press: quantised stop, or now when free
+    void finishNow(int t);                   // transport stop, memory full: whole units, padded
+    void finishRecording(int t, uint32_t len);
+    uint32_t barLen() const;
+    uint32_t beatLen() const { return barLen() / beats_; }
+    uint32_t capOf(int t) const { return trk_[t].mono ? 2 * mem_[t].capacity : mem_[t].capacity; }
+    void setOpt(OptParam p, int track, int value);
+    void setPerf(int t, PerfFx fx, bool on);
     void clearTrack(int t);
     void setMode(int t, PlayMode mode);
     uint64_t period16(const Track& k) const;
@@ -161,6 +265,31 @@ private:
     bool running_ = false;
     bool monitor_ = true;
     uint8_t feedback_ = 100;
+
+    // recording options, tempo and metronome (kept across track clears)
+    TrackOpts opts_[kTracks];
+    uint8_t bpm_ = 120, beats_ = 4;
+    bool metro_ = false;
+    uint8_t click_ = 60;
+    uint32_t clickAge_ = 0xFFFFFFFFu;   // frames since the last click started
+    float clickHz_ = 1000.0f, clickAmp_ = 0.0f;
+    std::atomic<uint32_t> bar_{0};
+
+    // mixer and send effects (kept across track clears)
+    void setMix(MixParam p, int track, int value);
+    uint8_t send_[kTracks][kFxSlots] = {};
+    uint8_t return_[kFxSlots] = {80, 80};
+    uint8_t delayDiv_ = 2;           // 1/8
+    uint8_t delayFb_ = 40;
+    uint8_t reverbSize_ = 60, reverbTone_ = 50;
+    uint8_t masterLevel_ = 100;
+    float sendGain_[kTracks][kFxSlots] = {};   // smoothed
+    float returnGain_[kFxSlots] = {0.8f, 0.8f};
+    float masterGain_ = 1.0f;
+    Delay delay_;
+    Reverb reverb_;
+    float busL_[kFxSlots][128], busR_[kFxSlots][128];
+    std::atomic<uint8_t> retPeak_[kFxSlots];
 
     // main loop zeroing (kClearing tracks)
     std::atomic<uint32_t> zeroTodo_[kTracks];
