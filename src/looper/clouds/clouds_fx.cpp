@@ -107,6 +107,14 @@ void CloudsFx::process(const float* inL, const float* inR, float* outL, float* o
         p.granular.overlap = 0.0f;
         p.granular.use_deterministic_seed = true;
     }
+    // Clouds aims for 40 x overlap^3 grains; with kMaxGrains of them, scale
+    // the overlap so a knob setting asks for as many grains as Clouds' would
+    // (24), and the full knob for all of them.
+    {
+        float o3 = p.granular.overlap * p.granular.overlap * p.granular.overlap * (24.0f / float(kMaxGrains));
+        if (o3 > 1.0f) o3 = 1.0f;
+        p.granular.overlap = std::cbrt(o3);
+    }
     p.granular.window_shape = texture_ < 0.75f ? texture_ * 1.333f : 1.0f;
     p.granular.stereo_spread = spread_;
     player_.Play(buf_, int32_t(kFrames), int32_t(head_), p, grainOut_, size_t(m));
@@ -130,8 +138,12 @@ void CloudsFx::process(const float* inL, const float* inR, float* outL, float* o
         if (i > m - 1) i = m - 1 < 0 ? 0 : m - 1;
         const float t = upPos_ - float(i);
         const int j = i + 1 <= m ? i + 1 : i;
-        outL[f] = (outL_[i] + (outL_[j] - outL_[i]) * t) * 32768.0f;
-        outR[f] = (outR_[i] + (outR_[j] - outR_[i]) * t) * 32768.0f;
+        // -3 dB through a soft limiter: overlapping grains add up to well over
+        // the input level, and the send bus must not clip.
+        const float l = (outL_[i] + (outL_[j] - outL_[i]) * t) * 0.7f;
+        const float r = (outR_[i] + (outR_[j] - outR_[i]) * t) * 0.7f;
+        outL[f] = stmlib::SoftClip(l) * 32768.0f;
+        outR[f] = stmlib::SoftClip(r) * 32768.0f;
         upPos_ += kDown;
     }
     upPos_ -= float(m);

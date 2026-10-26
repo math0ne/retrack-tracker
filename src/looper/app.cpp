@@ -3088,9 +3088,12 @@ void App::fxKey(uint8_t id) {
 }
 
 int App::fxBankOf(int slot) const {
+    // Shift held shows the second bank (Shift + F2..F5 pick from it);
+    // otherwise the selected knob's bank.
     const FxTypeInfo& ti = fxTypeInfo(engine_.fxType(slot));
-    const int b = fxSel_ < kFxKnobs ? fxSel_ / kFxBank : fxBank_;
-    return b && ti.knob[kFxBank].name ? 1 : 0;   // a type without a second bank shows the first
+    if (!ti.knob[kFxBank].name) return 0;   // a type without a second bank
+    if (shift_) return 1;
+    return fxSel_ < kFxKnobs ? fxSel_ / kFxBank : fxBank_;
 }
 
 void App::fxEncoder(int delta) {
@@ -3127,16 +3130,7 @@ void App::drawFxPage(uint32_t now) {
     fillRect(12, 42, 788, 214, 10);
     drawFxVisual(slot, now);
 
-    // The type list over F1, the knobs over F2..F5, the return over F6.
-    for (int i = 0; i < kFxTypeCount; ++i) {
-        const bool cur = int(type) == i;
-        if (cur) {
-            color(scale(sc, 0.35f));
-            fillRect(8, 238 + i * 34, 96, 266 + i * 34, 6);
-        }
-        color(cur ? kInk : kDim);
-        text(52, 252 + i * 34, kFontSmall, Disp::kOptCenter, kFxTypes[i].name);
-    }
+    // The knobs over F2..F5, the return over F6 (F1 opens the type bar).
     const int bank = fxBankOf(slot);
     for (int i = 0; i < kFxBank; ++i) {
         const int k = bank * kFxBank + i;
@@ -3158,8 +3152,8 @@ void App::drawFxPage(uint32_t now) {
         color(kDim);
         text(700, 280, kFontSmall, Disp::kOptCenter, buf);
         color(0x4A5563);
-        text(700, 300, kFontSmall, Disp::kOptCenter, bank ? "F2-F5: first" : "Shift+F2-F5:");
-        text(700, 320, kFontSmall, Disp::kOptCenter, bank ? "Shift: fine" : "the others");
+        text(700, 300, kFontSmall, Disp::kOptCenter, "Hold Shift:");
+        text(700, 320, kFontSmall, Disp::kOptCenter, bank ? "these four" : "the other four");
         text(700, 340, kFontSmall, Disp::kOptCenter, "Sends: mixer");
     } else {
         text(700, 300, kFontSmall, Disp::kOptCenter, "Encoder: knob");

@@ -109,6 +109,8 @@ enc 12
 wait 30
 expect_fx 2 Clouds 3 36
 hold SHIFT
+wait 30
+shot ../build/sim/check/granular_clouds_shift.png
 press F5
 release SHIFT
 wait 30

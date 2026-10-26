@@ -74,3 +74,21 @@ enc 60
 press F8
 wait 300
 shot ../build/sim/check/fx_back_to_loops.png
+
+# Sends are pre-fader: track 1 at volume 0 still feeds FX 1, muted it does not.
+press MASTER
+press F1
+enc -50
+wait 30
+expect_opt 1 volume 0
+press NOTE
+reset_levels
+wait 1500
+expect_audio 0.02
+# (the effects ring out first: a long reverb takes a while)
+tap 2
+wait 10000
+reset_levels
+wait 500
+expect_below 0.005
+tap 2

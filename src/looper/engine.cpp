@@ -1094,7 +1094,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
     std::memset(out, 0, size_t(frames) * 2 * sizeof(int16_t));
     float mixL[128], mixR[128];
     const uint32_t n = frames > 128 ? 128 : frames;
-    float (&busL)[kFxSlots][128] = busL_;   // send buses (post-fader), members: off the ISR stack
+    float (&busL)[kFxSlots][128] = busL_;   // send buses (pre-fader), members: off the ISR stack
     float (&busR)[kFxSlots][128] = busR_;
     std::memset(busL_, 0, sizeof busL_);
     std::memset(busR_, 0, sizeof busR_);
@@ -1340,6 +1340,11 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             const bool keep = vari && opts_[t].stretch && mi.reader != ModeInfo::kCloud;
             const float step = (target - k.gain) / float(n);
             float g = k.gain;
+            // The sends are pre-fader: the track's volume does not move them,
+            // but mute, stop and the stop fade do.
+            const float gateT = (k.state == TrackState::kStopped || k.muted) ? 0.0f : fadeEnd;
+            const float gstep = (gateT - k.gate) / float(n);
+            float gt = k.gate;
             float sg[kFxSlots], sstep[kFxSlots];
             for (int s = 0; s < kFxSlots; ++s) {
                 const float st = float(send_[t][s]) / 100.0f;
@@ -1508,18 +1513,21 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                 ph += step16;
                 if (ph >= P) ph -= P;
                 g += step;
+                gt += gstep;
                 const float ol = sl * g, orr = sr * g;
                 mixL[f] += ol;
                 mixR[f] += orr;
+                const float pl = sl * gt, pr = sr * gt;   // pre-fader
                 for (int s = 0; s < kFxSlots; ++s) {
                     sg[s] += sstep[s];
-                    busL[s][f] += ol * sg[s];
-                    busR[s][f] += orr * sg[s];
+                    busL[s][f] += pl * sg[s];
+                    busR[s][f] += pr * sg[s];
                 }
                 const uint8_t p = peak8(int(ol), int(orr));
                 if (p > level) level = p;
             }
             k.gain = target;
+            k.gate = gateT;
             if (k.fadeOut) {   // the fade is over: stopped, back to its start
                 k.fadeOut = k.fadeOut > n ? k.fadeOut - n : 0;
                 if (!k.fadeOut) {

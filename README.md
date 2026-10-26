@@ -333,7 +333,8 @@ the loop start.
 ### Mixer and send effects
 
 Two send effect slots, FX 1 (a delay to start with) and FX 2 (a reverb). Every
-track has a post-fader send to each. Either slot can hold any of six effects:
+track has a pre-fader send to each (the track's volume does not change it;
+mute and stop do). Either slot can hold any of six effects:
 
 | Effect | Knobs |
 |---|---|
@@ -345,8 +346,9 @@ track has a post-fader send to each. Either slot can hold any of six effects:
 | Clouds | Mutable Instruments' granular processor on a 4.1 s record buffer (32 kHz, up to 24 grains). Knobs 1: Position (how far back the grains read), Size, Pitch (±24 semitones), Density (Clouds' deadband at noon; up from there grains come at random, down from there evenly). Knobs 2 (**Shift + F2–F5**): Texture (window shape; past 75 % a diffuser), Feedback, Spread (stereo), Freeze (the buffer stops recording; also pad 4 in performance mode) |
 
 **FX1 / FX2** open that slot's page: a live picture of the effect on top (the
-echo taps on the beat grid, the reverb's decay, the LFOs moving) and its knobs
-below, each over its screen key. **F1 TYPE** opens the type bar (the labels
+echo taps on the beat grid, the reverb's decay, the LFOs moving, Clouds'
+grains) and its knobs below, each over its screen key; holding Shift shows
+Clouds' second four. **F1 TYPE** opens the type bar (the labels
 become the six effects; the key under one picks it). **F2–F5** pick a knob
 (Clouds: Shift + F2–F5 the second four),
 **F6** the return, **F7** the other slot, **F8** home; Left/Right move between

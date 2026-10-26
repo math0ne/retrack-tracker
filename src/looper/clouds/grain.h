@@ -140,10 +140,14 @@ public:
                 l0 = r0 = buffer[sample_index] / 32768.0f;
                 l1 = r1 = buffer[next] / 32768.0f;
             } else {
-                l0 = buffer[sample_index * 2] / 32768.0f;
-                r0 = buffer[sample_index * 2 + 1] / 32768.0f;
-                l1 = buffer[next * 2] / 32768.0f;
-                r1 = buffer[next * 2 + 1] / 32768.0f;
+                // A stereo frame is one 32-bit word (left low, little-endian):
+                // half the reads of the uncached SDRAM.
+                const uint32_t* w = reinterpret_cast<const uint32_t*>(buffer);
+                const uint32_t a = w[sample_index], b = w[next];
+                l0 = int16_t(a & 0xFFFFu) / 32768.0f;
+                r0 = int16_t(a >> 16) / 32768.0f;
+                l1 = int16_t(b & 0xFFFFu) / 32768.0f;
+                r1 = int16_t(b >> 16) / 32768.0f;
             }
 
             float l = l0 + (l1 - l0) * frac;

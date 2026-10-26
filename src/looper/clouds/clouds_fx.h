@@ -17,7 +17,7 @@ class CloudsFx {
 public:
     static constexpr uint32_t kRate = 32000;
     static constexpr uint32_t kFrames = 131072;   // stereo int16: 512 KB, the size of an FX slot's line
-    static constexpr int kMaxGrains = 24;         // of Clouds' 40: each grain reads the uncached SDRAM
+    static constexpr int kMaxGrains = 12;         // of Clouds' 40: each grain reads the uncached SDRAM
     static constexpr int kBlockMax = 128;
 
     void init(int16_t* buffer);   // kFrames * 2 int16, zeroed by the caller
@@ -41,7 +41,7 @@ private:
     clouds::Diffuser diffuser_;
     float diffMem_[2048];
 
-    float position_ = 0.5f, size_ = 0.4f, pitch_ = 0.0f, density_ = 0.8f;
+    float position_ = 0.2f, size_ = 0.4f, pitch_ = 0.0f, density_ = 0.8f;
     float texture_ = 0.4f, feedback_ = 0.2f, spread_ = 0.5f;
     bool freeze_ = false;
 

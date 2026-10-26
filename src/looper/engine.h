@@ -155,7 +155,7 @@ inline const ModeInfo& modeInfo(PlayMode m) { return kModes[int(m) < kModeCount 
 // Mixer parameters (Engine::kMix). Track parameters use the command's track field.
 enum class MixParam : uint8_t {
     kLevel,          // track level 0..100 (same as kVolume)
-    kSend1,          // track -> FX 1, post-fader, 0..100
+    kSend1,          // track -> FX 1, pre-fader (but muted with the track), 0..100
     kSend2,          // track -> FX 2
     kReturn1,        // FX 1 return level 0..100
     kReturn2,
@@ -306,6 +306,7 @@ private:
         bool muted = false;
         uint8_t volume = 80;
         float gain = 0.0f;           // smoothed (mute / volume ramps)
+        float gate = 0.0f;           // smoothed mute / stop / stop fade, no volume: the pre-fader sends
         uint32_t anchor = 0;         // global frame where phase 0 starts (multiple of L)
         uint32_t len = 0;
         uint64_t offset16 = 0;       // phase offset (jumps, mode changes), 16.16
