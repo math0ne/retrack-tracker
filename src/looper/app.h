@@ -179,6 +179,8 @@ private:
     int inCol_ = 0, inRow_ = 0;
     // F6 on the home page: tap = the Input page, hold + encoder = input gain
     bool f6Held_ = false, f6Turned_ = false;
+    uint32_t f6DownMs_ = 0, f4DownMs_ = 0;   // a hold this long or longer is not a tap
+    static constexpr uint32_t kTapMs = 400;
     float gainShown_ = 0.5f;
     void inputKey(uint8_t id);
     void inputEncoder(int delta);

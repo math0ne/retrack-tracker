@@ -357,9 +357,10 @@ void App::onInput(const ot::InputEvent& ev) {
         if (down) {
             f6Held_ = true;
             f6Turned_ = false;
+            f6DownMs_ = ev.timeMs;
         } else if (f6Held_) {
             f6Held_ = false;
-            if (!f6Turned_) {
+            if (!f6Turned_ && ev.timeMs - f6DownMs_ < kTapMs) {   // a tap, not a hold
                 inPage_ = true;
                 inCol_ = inRow_ = 0;
             }
@@ -371,9 +372,10 @@ void App::onInput(const ot::InputEvent& ev) {
         if (down) {
             f4Held_ = true;
             f4Turned_ = false;
+            f4DownMs_ = ev.timeMs;
         } else if (f4Held_) {
             f4Held_ = false;
-            if (!f4Turned_) {
+            if (!f4Turned_ && ev.timeMs - f4DownMs_ < kTapMs) {   // a tap, not a hold
                 const bool on = !engine_.opt(OptParam::kMetronome);
                 engine_.post(Engine::kOpt, 0, int16_t((int(OptParam::kMetronome) << 8) | (on ? 1 : 0)));
             }

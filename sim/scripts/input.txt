@@ -16,6 +16,22 @@ enc 5
 release F6
 wait 30
 expect_opt 1 gain 50
+# A long hold without turning is not a tap: the page stays shut, so F2 is
+# still the home page's Play key (track 1 empty: nothing happens) and the
+# monitor stays on.
+hold F6
+wait 600
+release F6
+wait 30
+press F2
+wait 30
+expect_opt 1 monitor 1
+# Same for F4: a long hold leaves the metronome as it was.
+hold F4
+wait 600
+release F4
+wait 30
+expect_opt 1 metronome 0
 
 press F6
 wait 50
