@@ -35,6 +35,22 @@ Things the simulator could not check, because it maps them its own way:
       pitch and level. Headphones are set to 0.7.
 - [ ] Pad lights: REC blinks while recording, PLAY lit while playing.
 
+- [ ] Loop points: a sustained sound looped over a bar has no click at the
+      loop point; a take started mid-bar does not click at its start.
+- [ ] Undo: overdub, Shift + F5, the overdub is gone; Shift + F6 brings it back.
+
+## MIDI (if you have something to plug in)
+
+- [ ] **Clock out** (Config > MIDI > Clock: Send): a drum machine or DAW on
+      DIN and on USB follows the tempo and Start / Stop; the tempo changes
+      with F4 (tape speed). Listen for jitter on DIN (the ticks leave from the
+      audio interrupt) and USB (the main loop: up to a frame late).
+- [ ] **Clock in** (Follow): start a drum machine; the looper starts with it
+      and the tempo settles within a beat or two; after a minute the bars are
+      still together. Note how long it takes and whether the pitch wobbles.
+- [ ] **Controls**: Learn Rec / dub to a footswitch (DIN or USB), record and
+      overdub with it.
+
 ## 2. Performance
 
 Press **Help** for the on-screen readout, and keep the serial terminal open.

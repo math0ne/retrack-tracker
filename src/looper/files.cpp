@@ -97,10 +97,21 @@ bool Files::loadConfig(Config& c) {
     IStorage& fs = *p_->storage;
     const IStorage::Handle h = fs.open(kConfigPath, IStorage::kRead);
     if (h < 0) return false;
-    uint8_t b[14];
-    const bool ok = fs.read(h, b, sizeof b) == int32_t(sizeof b) && !std::memcmp(b, "LCFG", 4) && get32(b + 4) == 1;
+    // Version 1: 14 bytes; version 2 adds the MIDI clock and controls.
+    uint8_t b[15 + 2 * kMidiActions] = {};
+    const int32_t got = fs.read(h, b, sizeof b);
+    const uint32_t ver = got >= 8 ? get32(b + 4) : 0;
+    const bool ok = got >= 14 && !std::memcmp(b, "LCFG", 4) &&
+                    ((ver == 1 && got == 14) || (ver == 2 && got == int32_t(sizeof b)));
     fs.close(h);
     if (!ok) return false;
+    if (ver >= 2) {
+        c.midiClock = b[14] > 2 ? 0 : b[14];
+        for (int a = 0; a < kMidiActions; ++a) {
+            c.midiMap[a].type = b[15 + 2 * a] > 2 ? 0 : b[15 + 2 * a];
+            c.midiMap[a].num = b[16 + 2 * a] & 0x7F;
+        }
+    }
     c.brightness = b[8] > 2 ? 2 : b[8];
     c.pads = b[9] < 10 ? 10 : (b[9] > 100 ? 100 : b[9]);
     c.phones = b[10] > 100 ? 100 : b[10];
@@ -116,9 +127,14 @@ bool Files::saveConfig(const Config& c) {
     fs.mkdir(kRoot);
     const IStorage::Handle h = fs.open(kConfigPath, IStorage::kWrite);
     if (h < 0) return false;
-    uint8_t b[14];
+    uint8_t b[15 + 2 * kMidiActions];
     std::memcpy(b, "LCFG", 4);
-    put32(b + 4, 1);
+    put32(b + 4, 2);
+    b[14] = c.midiClock;
+    for (int a = 0; a < kMidiActions; ++a) {
+        b[15 + 2 * a] = c.midiMap[a].type;
+        b[16 + 2 * a] = c.midiMap[a].num;
+    }
     b[8] = c.brightness;
     b[9] = c.pads;
     b[10] = c.phones;
@@ -176,7 +192,9 @@ void Files::snapshot(ProjectFile& pf) const {
     const Engine& e = *engine_;
     std::memset(&pf, 0, sizeof pf);
     std::memcpy(pf.magic, "LPRJ", 4);
-    pf.version = 2;
+    pf.version = 3;
+    pf.stopFade = e.opt(OptParam::kStopFade);
+    pf.monitorFx = e.opt(OptParam::kMonitorFx);
     pf.bar = e.masterLen();
     pf.bpm = e.opt(OptParam::kTempo);
     pf.beats = e.beatsPerBar();
@@ -235,6 +253,10 @@ void Files::postSettings(const ProjectFile& pf, bool tracks) {
         opt(0, OptParam::kMetronome, pf.metronome);
         opt(0, OptParam::kClick, pf.click);
         opt(0, OptParam::kThreshold, pf.threshold);
+        if (pf.version >= 3) {
+            opt(0, OptParam::kStopFade, pf.stopFade);
+            opt(0, OptParam::kMonitorFx, pf.monitorFx);
+        }
         e.post(Engine::kMonitor, 0, pf.monitor);
         e.post(Engine::kFeedback, 0, pf.feedback);
         mix(0, MixParam::kMaster, pf.master);
@@ -359,7 +381,8 @@ bool Files::load(int number) {
     const int32_t got = h >= 0 ? fs.read(h, &pf_, sizeof pf_) : -1;
     const bool ok = !std::memcmp(pf_.magic, "LPRJ", 4) &&
                     ((pf_.version == 1 && got == int32_t(kProjectV1Bytes)) ||
-                     (pf_.version == 2 && got == int32_t(sizeof pf_)));
+                     (pf_.version == 2 && got == int32_t(kProjectV2Bytes)) ||
+                     (pf_.version == 3 && got == int32_t(sizeof pf_)));
     if (h >= 0) fs.close(h);
     if (!ok) {
         fail("Not a looper project");

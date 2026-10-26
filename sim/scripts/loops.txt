@@ -1,0 +1,208 @@
+# Loop features: the loop-point crossfade, stop fade, monitor through the FX, replace, multiply, undo / redo, the Shift layer.
+wait 300
+opt all start 0
+# Monitor off (Input page, F2), so only the loops reach the output.
+press F6
+wait 30
+press F2
+press F8
+wait 30
+
+# 330 Hz does not fit a whole number of times in the loops below, so without
+# the crossfade every loop point is a jump in the wave. A steady 330 Hz sine
+# at this level moves at most ~0.03 a frame.
+tone_shape steady
+tone 330
+
+# Track 1: free stop (the take ends on the press, the tail is recorded after).
+opt 1 stop 0
+tap 0
+wait 1237
+tap 0
+wait 300
+tone off
+expect_state 1 PLAY
+tap 2
+# Track 2 (on bar): the take runs to the bar line, the tail is recorded on the way.
+tone 330
+tap 12
+wait 600
+tap 12
+wait 1600
+tone off
+expect_state 2 PLAY
+# Track 1 alone: several loop points.
+tap 2
+tap 14
+wait 50
+reset_levels
+wait 4000
+expect_smooth 0.06
+expect_audio 0.2
+# Track 2 alone.
+tap 2
+tap 14
+wait 50
+reset_levels
+wait 4000
+expect_smooth 0.06
+expect_audio 0.2
+
+# Stop fade: 1 bar. Track 2 (2 s bar) fades out over a bar, then stops.
+opt 1 stopfade 2
+expect_opt 1 stopfade 2
+press F2
+wait 200
+expect_state 2 PLAY
+reset_levels
+wait 1000
+expect_audio 0.05
+wait 1000
+expect_state 2 STOP
+reset_levels
+wait 300
+expect_below 0.01
+# Played again, a second Stop during the fade stops at once.
+press F2
+wait 2200
+expect_state 2 PLAY
+press F2
+wait 100
+press F2
+wait 100
+expect_state 2 STOP
+opt 1 stopfade 0
+
+# Monitor FX: with every loop silent and monitoring on, the input reaches the
+# delay (FX 1) only when Monitor FX sends it there. Track sends are 0.
+press F6
+wait 30
+press F2
+wait 30
+expect_opt 1 monitor 1
+press DOWN
+enc 1
+wait 30
+expect_opt 1 monitorfx 1
+shot ../build/sim/check/loops_monitor_fx.png
+press F8
+tone 330
+wait 500
+tone off
+wait 100
+reset_levels
+wait 200
+expect_audio 0.02
+# Off: after the tone stops nothing comes back.
+opt 1 monitorfx 0
+wait 3500
+tone 330
+wait 500
+tone off
+wait 100
+reset_levels
+wait 200
+expect_below 0.005
+
+# Replace: Shift + REC on track 1 (muted, playing) writes the input over it.
+# Monitor off again; a silent input replaces a bar of the tone with silence.
+press F6
+wait 30
+press F2
+press F8
+wait 30
+expect_opt 1 monitor 0
+tap 2
+wait 30
+expect_state 1 PLAY
+hold SHIFT
+wait 30
+shot ../build/sim/check/loops_replace_label.png
+tap 0
+release SHIFT
+wait 30
+expect_state 1 DUB
+wait 1300
+tap 0
+wait 30
+expect_state 1 PLAY
+# The loop is 1.24 s: all of it was replaced by silence.
+reset_levels
+wait 1300
+expect_below 0.01
+
+# Multiply (the take is 1.02 s: the taps add a little): Copy doubles track 3's loop (1 s -> 2 s), Shift + Copy halves it.
+opt 3 stop 0
+tone 330
+tap 24
+wait 1000
+tap 24
+wait 300
+tone off
+expect_len 3 1.02
+press COPY
+wait 500
+expect_len 3 2.04
+shot ../build/sim/check/loops_doubled.png
+expect_state 3 PLAY
+reset_levels
+wait 2000
+expect_audio 0.2
+hold SHIFT
+press COPY
+release SHIFT
+wait 50
+expect_len 3 1.02
+
+# Undo: track 3 (1.02 s of tone, playing) gets a replace with silence, then
+# Insert brings the tone back, Shift + Insert takes it away again (track 3 is selected).
+hold SHIFT
+tap 24
+release SHIFT
+wait 1200
+tap 24
+wait 100
+reset_levels
+wait 1100
+expect_below 0.01
+press INSERT
+wait 300
+reset_levels
+wait 1100
+expect_audio 0.2
+hold SHIFT
+press INSERT
+release SHIFT
+wait 300
+reset_levels
+wait 1100
+expect_below 0.01
+# Nothing more to redo; undo again restores it.
+press INSERT
+wait 300
+reset_levels
+wait 1100
+expect_audio 0.2
+
+# The Shift layer on the home page: Shift + F7 doubles, Shift + F8 halves,
+# Shift + F5 / F6 undo / redo, Shift + F3 solo.
+hold SHIFT
+wait 30
+shot ../build/sim/check/loops_shift_layer.png
+press F7
+release SHIFT
+wait 500
+expect_len 3 2.04
+hold SHIFT
+press F8
+release SHIFT
+wait 50
+expect_len 3 1.02
+# Solo track 3: track 1 muted (it is already), track 3 plays; again: unmuted.
+hold SHIFT
+press F3
+release SHIFT
+wait 50
+reset_levels
+wait 1100
+expect_audio 0.2

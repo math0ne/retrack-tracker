@@ -11,6 +11,7 @@
 #include "hal/ft81x.h"
 #include "hal/hal.h"
 #include "hal/i2c_bus.h"
+#include "hal/midi_ports.h"
 #include "hal/sd_storage.h"
 #include "hal/telemetry.h"
 #include "looper/app.h"
@@ -58,6 +59,13 @@ bool storageReady() { return ot::hal::bootReport().sdMounted && ot::hal::storage
 
 void setHeadphones(uint8_t level) { ot::hal::audio().setHeadphoneVolume(float(level > 100 ? 100 : level) / 100.0f); }
 
+// MIDI clock out on DIN from the audio thread: queued and pushed to the UART
+// at once (never blocks), so the ticks keep the audio's timing.
+void midiDinRealtime(uint8_t b) {
+    ot::hal::midi().send(ot::MidiPortId::kDin, &b, 1);
+    ot::hal::midi().serviceDin();
+}
+
 bool firmwareUpdate(const char* name) {
     if (!storageReady() || !ot::hal::isUpdateImageName(name)) return false;
     ot::hal::audio().setHeadphoneVolume(0.0f);   // no noise while the bootloader takes over
@@ -93,6 +101,8 @@ void otAppMain(ot::hal::HalSet& hal) {
     p.setHeadphones = &setHeadphones;
     p.version = OT_VERSION;
     p.firmwareUpdate = &firmwareUpdate;
+    p.midi = hal.midi;
+    p.midiDinRealtime = &midiDinRealtime;
     p.loopMem = sd;
     p.loopMemBytes = kLoopBytes;
     p.fxMem = sd + kLoopBytes;

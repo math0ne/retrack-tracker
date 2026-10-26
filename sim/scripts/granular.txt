@@ -156,8 +156,8 @@ expect_below 0.01
 press F2
 wait 100
 
-# Saved and loaded with the project (version 2: 160 bytes).
+# Saved and loaded with the project (version 3: 176 bytes).
 press FILE
 press F1
 wait 1500
-expect_file Looper/Projects/001/project.bin 160
+expect_file Looper/Projects/001/project.bin 176

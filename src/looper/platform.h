@@ -41,6 +41,11 @@ struct Platform {
     // it does not return when it works; false = refused (no such image, a name
     // the bootloader would not take, or the EEPROM flag cannot be set).
     bool (*firmwareUpdate)(const char* name) = nullptr;
+    // MIDI (DIN and USB); nullptr = none. midiDinRealtime sends one real-time
+    // byte (clock) on DIN straight away; the engine calls it from the audio
+    // thread, so it must not block.
+    ot::IMidiPort* midi = nullptr;
+    void (*midiDinRealtime)(uint8_t b) = nullptr;
 
     // Loop memory (external SDRAM on the device), effect memory, and a staging buffer for
     // waveform bitmaps on their way to the display's RAM_G.

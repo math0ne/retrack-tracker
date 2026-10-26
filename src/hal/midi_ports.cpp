@@ -108,15 +108,23 @@ bool MidiPorts::send(MidiPortId port, const uint8_t* data, uint32_t len) {
     return ok;
 }
 
-void MidiPorts::service() {
-    // DIN: only as much as the UART ring takes (never blocks).
+void MidiPorts::serviceDin() {
+    // DIN: only as much as the UART ring takes (never blocks). The audio ISR
+    // calls this too (MIDI clock out), so the queue tail moves with IRQs off.
     TxQueue& d = txq_[0];
+    uint32_t primask;
+    __asm__ volatile("mrs %0, primask\n cpsid i" : "=r"(primask)::"memory");
     uint32_t room = uint32_t(Serial5.availableForWrite());
     while (room && d.tail != d.head) {
         Serial5.write(d.buf[d.tail & (kTxQueue - 1)]);
         d.tail = d.tail + 1;
         room--;
     }
+    __asm__ volatile("msr primask, %0" ::"r"(primask) : "memory");
+}
+
+void MidiPorts::service() {
+    serviceDin();
     // USB: encode to event packets; discarded while the host is not configured.
     TxQueue& u = txq_[1];
     if (u.tail == u.head) return;

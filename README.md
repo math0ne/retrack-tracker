@@ -83,6 +83,7 @@ encoder sets it (Shift: fine steps); F6 or F8 closes it.
 | Gain | Codec input gain, with the live input level under it |
 | Track N channels | Stereo / Mono L / Mono R / Mono sum for the selected track (only while it is empty) |
 | Monitor | Hear the input through the outputs |
+| Monitor FX | Off / FX 1 / FX 2 / Both: hear the input through the effects too (full send); takes stay dry |
 | Overdub feedback | How much of the loop stays under each pass, 0–100 % |
 
 | Metronome card | |
@@ -95,14 +96,30 @@ encoder sets it (Shift: fine steps); F6 or F8 closes it.
 Quick keys on the page: F1 next source, F2 monitor on/off, F3 next channel
 mode, F4 metronome on/off, F5 feedback 100 / 90 / 75 / 50 %.
 
+**Shift layer.** Holding Shift on the home page relabels the eight keys:
+
+| Shift + | Action (selected track) |
+|---|---|
+| F1 REPLACE | Punch in: record over the loop instead of on top of it; again to stop |
+| F2 ALL | Play / stop all (the transport, as Play) |
+| F3 SOLO | Mute every other track; again: everything back |
+| F4 CLICK | Hold + encoder: click level |
+| F5 UNDO | Undo the last overdub or replace |
+| F6 REDO | Bring it back |
+| F7 DOUBLE | Multiply: the loop twice as long, a copy after it (overdub across both) |
+| F8 HALVE | Keep the first half |
+
 | Other control | Action |
 |---|---|
-| Pad column 1 | Record / overdub (empty → record → play ↔ overdub) |
+| Pad column 1 | Record / overdub (empty → record → play ↔ overdub); Shift + pad: replace |
 | Pad column 2 | Stop / play the track, as F2 |
 | Pad column 3 | Mute |
 | Pad column 4 | Clear |
 | Pad columns 5–12 | Jump to that eighth of the loop, keeping the phase (stays in time) |
-| Rec | Record / overdub the selected track |
+| Rec | Record / overdub the selected track; Shift + Rec: replace |
+| Copy | Double the selected loop (Shift: halve it) |
+| Insert | Undo the last overdub / replace (Shift: redo) |
+| Encoder push | Tap tempo: three taps or more (before a loop: the bar; after: the tape speed) |
 | Play | Transport: everything stops, or starts from bar 1 (what was playing plays, stopped tracks stay stopped); Shift + Play: metronome on / off |
 | Delete | Clear the selected track; Shift + Delete clears all |
 | Up / Down, any pad | Select track |
@@ -113,7 +130,7 @@ mode, F4 metronome on/off, F5 feedback 100 / 90 / 75 / 50 %.
 | Song | Track options page at the tempo column (BPM, metronome, click) |
 | FX1 / FX2 | That effect slot's page on / off |
 | S.Edit | Loop editor for the selected track |
-| Config | Settings page |
+| Config | Settings page (F1 firmware, F2 MIDI) |
 | File | Projects (save / load) and WAV export |
 | Help | Show / hide the CPU, frame-rate and display-list readout; Shift + Help: stress preset |
 | Power (hold 1.5 s) | Switch off |
@@ -154,6 +171,40 @@ the metronome and the feedback. Loading clears the tracks, reads the WAVs back
 bar 1. Exports go to a new folder `Looper/Export/NNN` each time. Saving and
 exporting run in the background in 16 KB steps, so the audio and the screen
 keep going.
+
+### Loop points, punches and undo
+
+- **Loop point**: a take records 5 ms past its end and blends that into its
+  first 5 ms, so the end runs on into the start with no click (the loop stays
+  exactly on the bar). A take that starts after silence in its loop (mid-bar)
+  fades in over 2 ms. Overdub and replace ramp in and out over 2 ms at the
+  punch points.
+- **Replace** (Shift + REC / pad 1 / F1) records over the loop; the REC key
+  lights brightest while it does.
+- **Undo / redo** (Shift + F5 / F6, or Insert / Shift + Insert) take back the
+  last overdub or replace and bring it back, as often as you like. The audio
+  under an overdub is kept at the end of the track's own memory, so undo works
+  for loops up to half the track's memory (about 11 s stereo, 22 s mono);
+  trims, cuts, erases and doubling clear it.
+- **Double / halve** (Shift + F7 / F8, Copy / Shift + Copy): doubling copies
+  the loop after itself (a moment's work in the background, it keeps
+  playing), so an overdub can go across both halves.
+- **Stop fade** (options page, Tempo column, last row): Stop fades the track
+  over 1 beat, 1 bar or 2 bars, then stops it; a second press stops at once.
+
+### MIDI
+
+**Config > F2 MIDI.** The **Clock** row: Off, **Send** (24 ticks a beat on the
+bar clock, so it follows the tape speed; Start and Stop with the transport; DIN
+and USB), or **Follow** (Start / Stop / Continue run the transport, the tempo
+follows the incoming clock: before a loop it sets the bar, after it the tape
+speed, with a slow correction that keeps the bars on the clock's).
+
+Below, eight actions to play from a footswitch or controller: Rec / dub,
+Play / stop, Undo, Redo, Replace, Next track, Prev track, Play all. Pick one,
+**F1 Learn**, press the pedal or key: any note (velocity > 0) or controller
+(value ≥ 64, what a footswitch sends) on any channel, DIN or USB. **F2**
+clears it. The bindings and the clock setting are saved with the settings.
 
 ### Stop, mute and starting things
 

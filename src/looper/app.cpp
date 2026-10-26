@@ -111,6 +111,8 @@ bool App::init(const Platform& p) {
     d_->bindFontSet(0);
     files_.init(&engine_, &p_);
     files_.loadConfig(cfg_);   // defaults when there is no card or no file yet
+    midi_.init(&p_, &engine_);
+    engine_.setRealtimeHook(p_.midiDinRealtime);
     applyConfig();
     p_.audio->setCallback(&App::audioFill, this);
     return p_.audio->start();
@@ -127,6 +129,19 @@ void App::loop() {
     if (p_.service) p_.service();
     ot::InputEvent ev;
     while (p_.input->poll(ev)) onInput(ev);
+    midi_.service(MidiClock(cfg_.midiClock), cfg_.midiMap, p_.clock->micros());
+    MidiAction ma;
+    while (midi_.nextAction(ma)) midiAction(ma);
+    {
+        MidiBinding nb;
+        int na;
+        if (midi_.learned(nb, na)) {   // Learn on the MIDI page: this note / controller now does that
+            for (MidiBinding& o : cfg_.midiMap)   // one action per message
+                if (o.type == nb.type && o.num == nb.num) o = MidiBinding{};
+            cfg_.midiMap[na] = nb;
+            markConfig();
+        }
+    }
     engine_.service();
     files_.service();   // one step of a save / load / export
 
@@ -214,14 +229,17 @@ void App::hint(int t, const char* msg, uint32_t now) {
     hintUntilMs_ = now + kHintMs;
 }
 
-void App::record(int t) {
+void App::record(int t, bool replace) {
     const TrackState s = TrackState(engine_.view(t).state.load());
     const ModeInfo& mi = modeInfo(engine_.mode(t));
     if (s == TrackState::kPlaying && !mi.canDub) {
         hint(t, "Overdub needs Forward, Reverse or Ping-pong", p_.clock->millis());
         return;
     }
-    engine_.post(Engine::kRecord, uint8_t(t));
+    // Shift: replace (punch-in) instead of overdub, on a track with a loop.
+    const bool repl = (shift_ || replace) &&
+                      (s == TrackState::kPlaying || s == TrackState::kStopped || s == TrackState::kQueued);
+    engine_.post(Engine::kRecord, uint8_t(t), int16_t(repl ? 1 : 0));
 }
 
 namespace {
@@ -254,6 +272,85 @@ void App::onFKey(int key) {
         // F4 (metronome / tempo), F5 (mode), F6 (input) and F7 (volume) are tap / hold keys: onInput
         default: break;
     }
+}
+
+void App::undoDub(bool redo) {
+    const TrackView& v = engine_.view(selected_);
+    const uint8_t u = v.dubUndo.load();
+    const uint32_t now = p_.clock->millis();
+    if (!v.len.load()) return;
+    if (redo ? u != 2 : u != 1) {
+        const uint32_t cap = engine_.memory(selected_).capacity * (v.mono.load() ? 2u : 1u);
+        hint(selected_, v.start.load() + 2 * v.len.load() > cap ? "Too long to undo (over half the memory)"
+                        : redo ? "Nothing to redo" : "Nothing to undo", now);
+        return;
+    }
+    engine_.post(Engine::kDubUndo, uint8_t(selected_), int16_t(redo ? 1 : 0));
+    hint(selected_, redo ? "Redo" : "Undo: the overdub is gone (redo brings it back)", now);
+}
+
+void App::multiply(bool halve) {
+    const TrackView& v = engine_.view(selected_);
+    const uint32_t len = v.len.load();
+    if (!len) return;
+    const uint32_t cap = engine_.memory(selected_).capacity * (v.mono.load() ? 2u : 1u);
+    if (!halve && v.start.load() + 2 * len > cap) {
+        hint(selected_, "Too long to double", p_.clock->millis());
+        return;
+    }
+    engine_.post(Engine::kMultiply, uint8_t(selected_), int16_t(halve ? 0 : 1));
+    hint(selected_, halve ? "Halved" : "Doubled: it plays twice, overdub the copy", p_.clock->millis());
+}
+
+void App::shiftFKey(int key) {
+    const uint32_t now = p_.clock->millis();
+    switch (key) {
+        case 0: record(selected_); break;   // Shift: replace
+        case 1:   // every track from bar 1, or all stopped (the transport)
+            engine_.post(Engine::kTransport);
+            break;
+        case 2: {   // solo the selected track; again: everything back
+            if (solo_ == selected_) {
+                for (int t = 0; t < kTracks; ++t) engine_.post(Engine::kSetMute, uint8_t(t), 0);
+                solo_ = -1;
+                hint(selected_, "Solo off", now);
+            } else {
+                for (int t = 0; t < kTracks; ++t) engine_.post(Engine::kSetMute, uint8_t(t), t == selected_ ? 0 : 1);
+                solo_ = selected_;
+                hint(selected_, "Solo", now);
+            }
+            break;
+        }
+        case 4: undoDub(false); break;
+        case 5: undoDub(true); break;
+        case 6: multiply(false); break;
+        case 7: multiply(true); break;
+        default: break;
+    }
+}
+
+void App::tapTempo(uint32_t ms) {
+    // Taps more than 2 s apart start over; from the third tap on, the tempo is
+    // the average of the last (up to four) intervals.
+    if (taps_ && ms - tapMs_[taps_ - 1] > 2000) taps_ = 0;
+    if (taps_ == 5) {
+        for (int i = 0; i < 4; ++i) tapMs_[i] = tapMs_[i + 1];
+        taps_ = 4;
+    }
+    tapMs_[taps_++] = ms;
+    if (taps_ < 3) {
+        hint(selected_, "Tap tempo: keep tapping", ms);
+        return;
+    }
+    const float avg = float(tapMs_[taps_ - 1] - tapMs_[0]) / float(taps_ - 1);
+    int lo, hi;
+    tempoRange(lo, hi);
+    int bpm = int(std::lround(60000.0f / (avg > 1.0f ? avg : 1.0f)));
+    bpm = bpm < lo ? lo : (bpm > hi ? hi : bpm);
+    engine_.post(Engine::kOpt, 0, int16_t((int(OptParam::kTempo) << 8) | bpm));
+    static char buf[32];
+    std::snprintf(buf, sizeof buf, "Tap tempo: %d bpm", bpm);
+    hint(selected_, buf, ms);
 }
 
 void App::tempoRange(int& lo, int& hi) const {
@@ -374,6 +471,14 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     const bool home = !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !modeBar_;
+    if (home && shift_ && b::isFKey(ev.id) && ev.id != b::F4 && !f5Held_ && !f6Held_ && !f7Held_) {
+        if (down) shiftFKey(ev.id - b::F1);
+        return;
+    }
+    if (ev.id == b::EncPush) {   // tap tempo, on any page
+        if (down) tapTempo(ev.timeMs);
+        return;
+    }
     // Home page F5: a tap opens the mode bar; held on a Granular track, the
     // grain knobs (F1..F4 pick one while it is held).
     if (ev.id == b::F5 && (home || f5Held_)) {
@@ -525,6 +630,8 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     switch (ev.id) {
+        case b::Insert: undoDub(shift_); break;     // undo the last overdub / replace (Shift: redo it)
+        case b::Copy: multiply(shift_); break;      // double the loop (Shift: halve it)
         case b::Rec: record(selected_); break;
         case b::Play:
             if (shift_) {   // Shift + Play: metronome on / off
@@ -587,7 +694,8 @@ void App::closePerf() {
 }
 
 void App::goHome() {
-    mixer_ = options_ = edit_ = config_ = file_ = fwPage_ = inPage_ = false;
+    mixer_ = options_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = false;
+    midi_.learn(-1);
     fxPage_ = -1;
     fxBar_ = modeBar_ = false;
     confirm_ = -1;
@@ -820,11 +928,10 @@ void App::panel(int x0, int y0, int x1, int y1, int radius, uint32_t fill) {
 }
 
 void App::well(int x0, int y0, int x1, int y1, int radius, uint32_t fill) {
-    // A recess: shadowed top edge, a faint lit edge along the bottom.
-    color(0x2E2E2E);
-    fillRect(x0, y0 + 1, x1, y1 + 1, radius);
+    // A recess: its top edge in shadow (two rects: pages like the options
+    // page draw dozens of these within the display-list budget).
     color(0x000000);
-    fillRect(x0, y0 - 1, x1, y1 - 1, radius);
+    fillRect(x0, y0 - 1, x1, y1, radius);
     color(fill);
     fillRect(x0, y0 + 1, x1, y1, radius);
 }
@@ -1172,6 +1279,48 @@ void App::drawFKeys() {
             std::snprintf(val[i], sizeof val[i], "%s",
                           m >= 0 ? kModes[m].name : (m == kModeMore ? (modePage_ ? "< Back" : "More >") : ""));
             hot = m >= 0 && int(mode) == m;
+        } else if (shift_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ &&
+                   !f5Held_ && !f6Held_ && !f7Held_) {
+            // The Shift layer of the home page.
+            const uint8_t u = v.dubUndo.load();
+            const bool loop = v.len.load() != 0;
+            const bool dubbable = loop && modeInfo(mode).canDub;
+            switch (i) {
+                case 0:
+                    title[i] = "REPLACE";
+                    std::snprintf(val[i], sizeof val[i], "%s",
+                                  s == TrackState::kOverdubbing ? "Stop" : (dubbable ? "Punch in" : "-"));
+                    break;
+                case 1:
+                    title[i] = "ALL";
+                    std::snprintf(val[i], sizeof val[i], "%s", engine_.running() ? "Stop all" : "Play all");
+                    break;
+                case 2:
+                    title[i] = "SOLO";
+                    std::snprintf(val[i], sizeof val[i], "%s", solo_ == selected_ ? "Off" : "Track");
+                    hot = solo_ == selected_;
+                    break;
+                case 3:
+                    title[i] = "CLICK";   // hold + encoder
+                    std::snprintf(val[i], sizeof val[i], "%u", unsigned(engine_.opt(OptParam::kClick)));
+                    break;
+                case 4:
+                    title[i] = "UNDO";
+                    std::snprintf(val[i], sizeof val[i], "%s", u == 1 ? "Overdub" : "-");
+                    break;
+                case 5:
+                    title[i] = "REDO";
+                    std::snprintf(val[i], sizeof val[i], "%s", u == 2 ? "Overdub" : "-");
+                    break;
+                case 6:
+                    title[i] = "DOUBLE";
+                    std::snprintf(val[i], sizeof val[i], "%s", loop ? "x2" : "-");
+                    break;
+                default:
+                    title[i] = "HALVE";
+                    std::snprintf(val[i], sizeof val[i], "%s", loop ? "1/2" : "-");
+                    break;
+            }
         } else if (grainPanel() && i < kGrainKnobs) {   // F5 held: F1..F4 pick a grain knob
             title[i] = kGrainKnobInfo[i].name;
             grainText(i, val[i], sizeof val[i]);
@@ -1227,9 +1376,20 @@ void App::drawFKeys() {
                 case 7: title[i] = "HOME"; std::snprintf(val[i], sizeof val[i], "Loops"); break;
                 default: title[i] = ""; val[i][0] = '\0'; break;
             }
-        } else if (config_) {   // F1 firmware, F8 home: Up / Down pick a setting, the encoder sets it
-            title[i] = i == 7 ? "HOME" : (i == 0 ? "FIRMWARE" : "");
-            std::snprintf(val[i], sizeof val[i], "%s", i == 7 ? "Loops" : (i == 0 ? "Update" : ""));
+        } else if (config_ && midiPage_) {   // F1 learn, F2 clear, F7 back, F8 home
+            const bool act = midiRow_ > 0;
+            static const char* const kT[8] = {"LEARN", "CLEAR", "", "", "", "", "BACK", "HOME"};
+            title[i] = kT[i];
+            const char* v = "";
+            if (i == 0) v = !act ? "-" : (midi_.learning() == midiRow_ - 1 ? "Waiting" : "Action");
+            else if (i == 1) v = act ? "Binding" : "-";
+            else if (i == 6) v = "Config";
+            else if (i == 7) v = "Loops";
+            std::snprintf(val[i], sizeof val[i], "%s", v);
+            hot = i == 0 && act && midi_.learning() == midiRow_ - 1;
+        } else if (config_) {   // F1 firmware, F2 MIDI, F8 home: Up / Down pick a setting, the encoder sets it
+            title[i] = i == 7 ? "HOME" : (i == 0 ? "FIRMWARE" : (i == 1 ? "MIDI" : ""));
+            std::snprintf(val[i], sizeof val[i], "%s", i == 7 ? "Loops" : (i == 0 ? "Update" : (i == 1 ? "Clock, map" : "")));
         } else if (file_) {   // projects and export
             const bool armed = confirm_ == i && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0;
             switch (i) {
@@ -1286,7 +1446,9 @@ void App::drawFKeys() {
             switch (i) {
                 case 0:   // lit while it records: red, overdub amber, waiting (count-in, sound) dim amber
                     if (s == TrackState::kRecording) hotCol = scale(kRed, 0.6f + 0.4f * pulse(now, 700));
-                    else if (s == TrackState::kOverdubbing) hotCol = scale(kAmber, 0.6f + 0.4f * pulse(now, 700));
+                    else if (s == TrackState::kOverdubbing)   // replace pulses like a take
+                        hotCol = v.replace.load() ? scale(kRed, 0.6f + 0.4f * pulse(now, 700))
+                                                  : scale(kAmber, 0.6f + 0.4f * pulse(now, 700));
                     else if (s == TrackState::kCountIn || s == TrackState::kArmed)
                         hotCol = scale(kAmber, 0.3f + 0.3f * pulse(now, 1200));
                     hot = hotCol != 0;
@@ -1295,7 +1457,9 @@ void App::drawFKeys() {
                                   s == TrackState::kEmpty ? "Record"
                                   : s == TrackState::kCountIn || s == TrackState::kArmed ? "Cancel"
                                   : s == TrackState::kRecording ? "Finish"
-                                  : s == TrackState::kOverdubbing ? "Stop dub"
+                                  : s == TrackState::kOverdubbing ? (v.replace.load() ? "Stop repl" : "Stop dub")
+                                  : shift_ && (s == TrackState::kPlaying || s == TrackState::kStopped) &&
+                                          modeInfo(mode).canDub ? "Replace"
                                   : s == TrackState::kClearing ? "-"
                                   : modeInfo(mode).canDub ? "Overdub" : "-");
                     break;
@@ -1372,8 +1536,9 @@ void App::drawFKeys() {
             color(m > 0.9f ? kRed : (m > 0.6f ? kAmber : 0x3DDC97));
             hline(x0, x0 + int((x1 - x0) * m), kKeyY1 - 5 + c * 2, 16);
         }
-        // The selected track's volume inside the VOLUME cell, its output level over it.
-        const int vx0 = 6 * kKeyW + 10, vx1 = 7 * kKeyW - 10, vy = kKeyY1 - 5;
+        // The selected track's volume inside the VOLUME cell, its output level over it
+        // (not under the Shift layer, where F7 is DOUBLE).
+        const int vx0 = 6 * kKeyW + 10, vx1 = shift_ ? vx0 : 7 * kKeyW - 10, vy = kKeyY1 - 5;
         const uint8_t vol = engine_.volume(selected_);
         color(kFaint);
         hline(vx0, vx1, vy, 16);
@@ -1674,14 +1839,14 @@ bool App::optParam(int col, int row, OptParam& p, int& track) const {
     track = col < kTracks ? col : 0;
     static const OptParam kTrackRows[kOptRows] = {OptParam::kStop,  OptParam::kLength, OptParam::kStart,
                                                   OptParam::kInput, OptParam::kAfter,  OptParam::kStretch};
-    static const OptParam kTempoRows[kOptRows - 1] = {OptParam::kTempo, OptParam::kBeats, OptParam::kMetronome,
-                                                      OptParam::kClick, OptParam::kThreshold};
+    static const OptParam kTempoRows[kOptRows] = {OptParam::kTempo, OptParam::kBeats, OptParam::kMetronome,
+                                                  OptParam::kClick, OptParam::kThreshold, OptParam::kStopFade};
     if (row < 0 || row >= kOptRows) return false;
     if (col < kTracks) {
         p = kTrackRows[row];
         return true;
     }
-    if (col == 4 && row < kOptRows - 1) {
+    if (col == 4) {
         p = kTempoRows[row];
         return true;
     }
@@ -1701,7 +1866,6 @@ void App::optKey(uint8_t id) {
     } else if (id == b::Left && optCol_ > 0) --optCol_;
     else if (id == b::Right && optCol_ < kOptCols - 1) ++optCol_;
     else if (id == b::Up && optRow_ > 0) --optRow_;
-    if (!optParam(optCol_, optRow_, p, t) && optRow_ > 0) optRow_ = kOptRows - 2;   // onto a shorter column
     else if (id == b::Down && optRow_ < kOptRows - 1 && optParam(optCol_, optRow_ + 1, p, t)) ++optRow_;
     while (optRow_ > 0 && !optParam(optCol_, optRow_, p, t)) --optRow_;   // the tempo column is shorter
     if (optCol_ < kTracks) selected_ = optCol_;
@@ -1719,6 +1883,8 @@ void App::optEncoder(int delta) {
         case OptParam::kInput: hi = 3; break;
         case OptParam::kAfter: hi = 2; break;
         case OptParam::kStretch: hi = 1; break;
+        case OptParam::kStopFade: hi = 3; break;
+        case OptParam::kMonitorFx: hi = 3; break;   // on the Input page, not here
         case OptParam::kTempo: tempoRange(lo, hi); break;
         case OptParam::kBeats: lo = 1; hi = 12; break;
         case OptParam::kMetronome: hi = 1; break;
@@ -1740,7 +1906,7 @@ void App::optEncoder(int delta) {
 void App::drawOptions() {
     for (int c = 0; c < kOptCols; ++c) drawOptColumn(c);
     // Over F6..F8: what the selected option does.
-    static const char* const kHelp[11][4] = {
+    static const char* const kHelp[12][4] = {
         {"Stop", "Free: the take ends when you", "press. On bar / on beat: it", "records on to the next line."},
         {"Length", "Recording stops by itself.", "Encoder: whole bars,", "Shift + encoder: beats."},
         {"Start", "Now, or a bar of click first", "(count-in), or when the input", "goes over the threshold."},
@@ -1752,6 +1918,7 @@ void App::drawOptions() {
         {"Click", "Click level.", "", ""},
         {"Threshold", "Input level that starts an", "\"on sound\" take. Watch the", "armed lane's meter."},
         {"Tempo", "Tape: a tempo change moves", "the pitch too. Stretch: the", "track keeps its pitch."},
+        {"Stop fade", "Stop fades the track out over", "this long, then stops it. A", "second press stops at once."},
     };
     OptParam p;
     int t;
@@ -1766,7 +1933,8 @@ void App::drawOptions() {
 
 void App::drawOptColumn(int c) {
     static const char* const kRowName[kOptRows] = {"Stop", "Length", "Start", "Input", "After rec", "Tempo"};
-    static const char* const kTempoRow[kOptRows - 1] = {"Tempo", "Beats/bar", "Metronome", "Click", "Threshold"};
+    static const char* const kTempoRow[kOptRows] = {"Tempo", "Beats/bar", "Metronome", "Click", "Threshold",
+                                                    "Stop fade"};
     const int x0 = c * kKeyW + 4, x1 = (c + 1) * kKeyW - 4, cx = c * kKeyW + kKeyW / 2;
     const uint32_t sc = c < kTracks ? kTrackColor[c] : kAmber;
     const bool sel = optCol_ == c;
@@ -1828,6 +1996,12 @@ void App::drawOptColumn(int c) {
                 break;
             }
             case OptParam::kStretch: std::snprintf(buf, sizeof buf, "%s", v ? "Stretch" : "Tape"); break;
+            case OptParam::kStopFade: {
+                static const char* const n[4] = {"Off", "1 beat", "1 bar", "2 bars"};
+                std::snprintf(buf, sizeof buf, "%s", n[v & 3]);
+                break;
+            }
+            case OptParam::kMonitorFx: std::snprintf(buf, sizeof buf, "%u", unsigned(v)); break;   // not a row here
             case OptParam::kTempo:
                 std::snprintf(buf, sizeof buf, "%u bpm", unsigned(v));
                 if (haveLoop && engine_.speed() != 1.0f) {   // tape speed: the loop's own tempo beside it
@@ -1872,16 +2046,19 @@ void App::applyConfig() {
 // Input page: the input card and the metronome card
 
 namespace {
-constexpr int kInRows[2] = {5, 4};
-const char* const kInName[2][5] = {{"Source", "Gain", "Channels", "Monitor", "Overdub feedback"},
-                                   {"Metronome", "Click level", "Tempo", "Beats per bar", ""}};
-const char* const kInHelp[2][5] = {
+constexpr int kInRows[2] = {6, 4};
+const char* const kInName[2][6] = {{"Source", "Gain", "Channels", "Monitor", "Monitor FX", "Overdub feedback"},
+                                   {"Metronome", "Click level", "Tempo", "Beats per bar", "", ""}};
+const char* const kInHelp[2][6] = {
     {"Line in, or the mic input at low or high gain.", "Codec input gain. Watch the meter while you play.",
      "Stereo or mono takes for the selected track (set while the track is empty).",
-     "Hear the input through the outputs.", "How much of the loop stays under each overdub pass."},
+     "Hear the input through the outputs.",
+     "Hear the input through the effects too (full send). Takes are still recorded dry.",
+     "How much of the loop stays under each overdub pass."},
     {"Click on every beat, accent on the bar line. Count-ins click either way.", "Click volume.",
      "Before the first loop: the bar length. After: tape speed, 50 to 200 %.", "Beats in a bar: the grid for stops, count-ins and the click.",
-     ""}};
+     "", ""}};
+const char* const kMonFxName[4] = {"Off", "FX 1", "FX 2", "Both"};
 const char* const kChName[4] = {"Stereo", "Mono L", "Mono R", "Mono sum"};
 }  // namespace
 
@@ -1898,7 +2075,7 @@ void App::inputKey(uint8_t id) {
         case b::F4: inCol_ = 1; inRow_ = 0; inputEncoder(engine_.opt(OptParam::kMetronome) ? -1 : 1); break;
         case b::F5: {
             inCol_ = 0;
-            inRow_ = 4;
+            inRow_ = 5;
             int i = 0;
             while (i < int(sizeof kFeedbackSteps) && kFeedbackSteps[i] != engine_.feedback()) ++i;
             engine_.post(Engine::kFeedback, 0, kFeedbackSteps[(i + 1) % int(sizeof kFeedbackSteps)]);
@@ -1940,6 +2117,7 @@ void App::inputEncoder(int delta) {
                 return;
             }
             case 3: cfg_.monitor = delta > 0 ? 1 : 0; break;
+            case 4: opt(OptParam::kMonitorFx, 0, lim(int(engine_.opt(OptParam::kMonitorFx)) + (delta > 0 ? 1 : -1), 0, 3)); return;
             default:
                 engine_.post(Engine::kFeedback, 0, int16_t(lim(int(engine_.feedback()) + delta * (shift_ ? 1 : 5), 0, 100)));
                 return;
@@ -1969,7 +2147,7 @@ void App::drawInput() {
         color(kAmber);
         text(x0, 22, kFontBig, Disp::kOptCenterY, c ? "METRONOME" : "INPUT");
         for (int r = 0; r < kInRows[c]; ++r) {
-            const int y0 = 46 + r * 52, y1 = y0 + 44, cy = (y0 + y1) / 2;
+            const int y0 = 46 + r * 48, y1 = y0 + 40, cy = (y0 + y1) / 2;
             const bool sel = inCol_ == c && inRow_ == r;
             if (sel) {
                 color(kAmber);
@@ -1999,6 +2177,10 @@ void App::drawInput() {
                         dim = !empty;   // fixed once the track holds a loop
                         break;
                     case 3: std::snprintf(v, sizeof v, "%s", engine_.monitoring() ? "On" : "Off"); break;
+                    case 4:
+                        std::snprintf(v, sizeof v, "%s", kMonFxName[engine_.opt(OptParam::kMonitorFx) & 3]);
+                        dim = !engine_.monitoring();   // only with monitoring on
+                        break;
                     default:
                         std::snprintf(v, sizeof v, "%u %%", unsigned(engine_.feedback()));
                         frac = engine_.feedback() / 100.0f;
@@ -2057,7 +2239,15 @@ void App::configKey(uint8_t id) {
         fwKey(id);
         return;
     }
-    if (id == b::F1) {   // the firmware screen
+    if (midiPage_) {
+        midiKey(id);
+        return;
+    }
+    if (id == b::F2) {   // the MIDI page
+        midiPage_ = true;
+        midiRow_ = 0;
+        midi_.learn(-1);
+    } else if (id == b::F1) {   // the firmware screen
         fwPage_ = true;
         fwMsg_ = nullptr;
         confirm_ = -1;
@@ -2068,6 +2258,17 @@ void App::configKey(uint8_t id) {
 }
 
 void App::configEncoder(int delta) {
+    if (midiPage_) {   // the clock row: off / send / follow; the others: the row
+        if (midiRow_ == 0) {
+            int c = int(cfg_.midiClock) + (delta > 0 ? 1 : -1);
+            cfg_.midiClock = uint8_t(c < 0 ? 0 : (c > 2 ? 2 : c));
+            markConfig();
+        } else {
+            midiRow_ += delta > 0 ? 1 : -1;
+            midiRow_ = midiRow_ < 1 ? 1 : (midiRow_ > kMidiActions ? kMidiActions : midiRow_);
+        }
+        return;
+    }
     if (fwPage_) {   // the encoder picks an image
         fwSel_ += delta > 0 ? 1 : -1;
         fwSel_ = fwSel_ < 0 ? 0 : (fwSel_ >= fwCount_ ? (fwCount_ ? fwCount_ - 1 : 0) : fwSel_);
@@ -2187,6 +2388,103 @@ void App::fwKey(uint8_t id) {
     confirm_ = -1;
 }
 
+void App::midiKey(uint8_t id) {
+    switch (id) {
+        case b::F1:   // learn: the next note / controller in does this row's action
+            if (midiRow_ > 0) midi_.learn(midi_.learning() == midiRow_ - 1 ? -1 : midiRow_ - 1);
+            break;
+        case b::F2:
+            if (midiRow_ > 0) {
+                cfg_.midiMap[midiRow_ - 1] = MidiBinding{};
+                markConfig();
+            }
+            break;
+        case b::F7:
+            midiPage_ = false;
+            midi_.learn(-1);
+            break;
+        case b::F8: goHome(); break;
+        case b::Up:
+            if (midiRow_ > 0) --midiRow_;
+            midi_.learn(-1);
+            break;
+        case b::Down:
+            if (midiRow_ < kMidiActions) ++midiRow_;
+            midi_.learn(-1);
+            break;
+        default: break;
+    }
+}
+
+void App::midiAction(MidiAction a) {
+    switch (a) {
+        case MidiAction::kRec: record(selected_); break;
+        case MidiAction::kPlayStop: engine_.post(Engine::kPlayStop, uint8_t(selected_)); break;
+        case MidiAction::kUndo: undoDub(false); break;
+        case MidiAction::kRedo: undoDub(true); break;
+        case MidiAction::kReplace: record(selected_, true); break;
+        case MidiAction::kNextTrack: selected_ = (selected_ + 1) % kTracks; break;
+        case MidiAction::kPrevTrack: selected_ = (selected_ + kTracks - 1) % kTracks; break;
+        case MidiAction::kPlayAll: engine_.post(Engine::kTransport); break;
+        default: break;
+    }
+}
+
+void App::drawMidi() {
+    char buf[48];
+    color(kAmber);
+    text(20, 22, kFontBig, Disp::kOptCenterY, "MIDI");
+    // Left: the clock and what is coming in.
+    static const char* const kClock[3] = {"Off", "Send", "Follow"};
+    const bool sel0 = midiRow_ == 0;
+    if (sel0) {
+        color(kAmber);
+        fillRect(18, 44, 342, 92, 9);
+    }
+    panel(20, 46, 340, 90, 8, sel0 ? kLaneSel : kLane);
+    color(sel0 ? kInk : kDim);
+    text(36, 68, kFontBody, Disp::kOptCenterY, "Clock");
+    color(kInk);
+    text(324, 68, kFontBody, Disp::kOptRightX | Disp::kOptCenterY, kClock[cfg_.midiClock % 3]);
+    color(kDim);
+    const MidiClock mc = MidiClock(cfg_.midiClock);
+    if (mc == MidiClock::kSend) text(36, 116, kFontSmall, 0, "24 a beat, Start / Stop with Play; DIN and USB");
+    else if (mc == MidiClock::kFollow) {
+        if (midi_.clockIn()) std::snprintf(buf, sizeof buf, "Following: %.1f bpm", double(midi_.followBpm()));
+        else std::snprintf(buf, sizeof buf, "Waiting for a clock (DIN or USB)");
+        text(36, 116, kFontSmall, 0, buf);
+        text(36, 138, kFontSmall, 0, "Start / Stop run the loops, the tempo follows");
+    } else {
+        text(36, 116, kFontSmall, 0, "No clock in or out");
+    }
+    std::snprintf(buf, sizeof buf, "Last in: %s", midi_.lastMessage());
+    text(36, 184, kFontSmall, 0, buf);
+    color(0x4A5563);
+    text(36, 300, kFontSmall, 0, "Controls: a note or a controller (any");
+    text(36, 320, kFontSmall, 0, "channel; a footswitch's 127 presses).");
+    text(36, 340, kFontSmall, 0, "F1 Learn, then press it. F2 clears.");
+    // Right: the actions and what plays them.
+    for (int a = 0; a < kMidiActions; ++a) {
+        const int y0 = 46 + a * 46, y1 = y0 + 40, cy = (y0 + y1) / 2;
+        const bool sel = midiRow_ == a + 1;
+        const bool waiting = midi_.learning() == a;
+        if (sel) {
+            color(waiting ? kInk : kAmber);
+            fillRect(358, y0 - 2, 782, y1 + 2, 9);
+        }
+        panel(360, y0, 780, y1, 8, sel ? kLaneSel : kLane);
+        color(sel ? kInk : kDim);
+        text(376, cy, kFontBody, Disp::kOptCenterY, kMidiActionName[a]);
+        const MidiBinding& mb = cfg_.midiMap[a];
+        if (waiting) std::snprintf(buf, sizeof buf, "press it...");
+        else if (mb.type == 1) std::snprintf(buf, sizeof buf, "Note %u", unsigned(mb.num));
+        else if (mb.type == 2) std::snprintf(buf, sizeof buf, "CC %u", unsigned(mb.num));
+        else std::snprintf(buf, sizeof buf, "-");
+        color(waiting ? kInk : (mb.type ? kInk : kDim));
+        text(764, cy, kFontBody, Disp::kOptRightX | Disp::kOptCenterY, buf);
+    }
+}
+
 void App::drawFirmware() {
     char buf[96];
     color(kAmber);
@@ -2239,6 +2537,10 @@ void App::drawFirmware() {
 void App::drawConfig() {
     if (fwPage_) {
         drawFirmware();
+        return;
+    }
+    if (midiPage_) {
+        drawMidi();
         return;
     }
     char buf[96];

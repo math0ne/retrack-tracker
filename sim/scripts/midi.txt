@@ -1,0 +1,74 @@
+# MIDI: Config > MIDI (F2). Clock out, clock in, learned controls.
+wait 300
+opt all start 0
+press CONFIG
+press F2
+wait 50
+shot ../build/sim/check/midi_page.png
+
+# Learn: Rec / dub (row 1) <- note 60, Undo (row 3) <- CC 64 (a footswitch).
+press DOWN
+press F1
+wait 30
+midi_in 90 3C 7F
+wait 30
+press DOWN
+press DOWN
+press F1
+wait 30
+midi_in B0 40 7F
+wait 30
+midi_in B0 40 00
+wait 1300
+shot ../build/sim/check/midi_learned.png
+expect_file Looper/config.bin 31
+press F8
+
+# Note 60 records track 1 (a 2 s take from note to note).
+tone_shape steady
+tone 330
+midi_in 90 3C 7F
+wait 30
+midi_in 80 3C 00
+expect_state 1 REC
+wait 2000
+midi_in 90 3C 7F
+wait 2100
+tone off
+expect_state 1 PLAY
+
+# Clock out: Send. Play stops the transport (Stop), Play starts it (Start,
+# then 24 ticks a beat: 2 s at 120 bpm = 4 beats = 96).
+press CONFIG
+press F2
+enc 1
+wait 30
+press F8
+reset_midi
+press PLAY
+wait 100
+expect_midi_out usb FC 1 1
+reset_midi
+press PLAY
+wait 2000
+expect_midi_out usb FA 1 1
+expect_midi_out usb F8 94 98
+expect_midi_out din F8 94 98
+
+# Clock in: Follow. A 100 bpm clock (with Start): the tape speed follows to
+# 100 bpm (the loop's own tempo is 120).
+press CONFIG
+press F2
+enc 1
+wait 30
+shot ../build/sim/check/midi_follow.png
+press F8
+press PLAY
+wait 100
+midi_clock 100 start
+wait 6000
+expect_opt 1 tempo 100
+expect_state 1 PLAY
+midi_clock 0 stop
+wait 100
+midi_clock 0

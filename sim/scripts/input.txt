@@ -50,7 +50,8 @@ press DOWN
 enc -1
 wait 30
 expect_opt 1 monitor 0
-# Overdub feedback: the encoder in 5 % steps, F5 steps 100 / 90 / 75 / 50.
+# Overdub feedback (below Monitor FX): the encoder in 5 % steps, F5 steps 100 / 90 / 75 / 50.
+press DOWN
 press DOWN
 enc -2
 wait 30

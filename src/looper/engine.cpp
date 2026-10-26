@@ -122,18 +122,36 @@ void Engine::runJobChunk() {
     const TrackMemory& m = mem_[j.track];
     const uint32_t fb = j.mono ? 2u : 4u;   // bytes per frame
     uint8_t* base = reinterpret_cast<uint8_t*>(m.frames) + size_t(j.base) * fb;
-    const bool cut = j.kind == kEditCut;
-    const uint32_t work = cut ? j.len - j.b : j.b - j.a;
+    if (j.kind == kDubUndo && j.done < j.b) {
+        // Undo / redo: swap the saved cells with the loop's, 32 cells a call.
+        uint8_t* save = reinterpret_cast<uint8_t*>(m.frames) + size_t(capOf(j.track) - j.len) * fb;
+        uint8_t tmp[kUndoCellFrames * 4];
+        for (int step = 0; step < 32 && j.done < j.b; ++step, ++j.done) {
+            const uint32_t c = j.done;
+            if (!((undoMap_[j.track][c >> 3] >> (c & 7)) & 1)) continue;
+            const uint32_t f0 = c * kUndoCellFrames, f1 = f0 + kUndoCellFrames < j.len ? f0 + kUndoCellFrames : j.len;
+            const size_t bytes = size_t(f1 - f0) * fb;
+            std::memcpy(tmp, base + size_t(f0) * fb, bytes);
+            std::memcpy(base + size_t(f0) * fb, save + size_t(f0) * fb, bytes);
+            std::memcpy(save + size_t(f0) * fb, tmp, bytes);
+        }
+        return;
+    }
+    const bool cut = j.kind == kEditCut, mul = j.kind == kMultiply;
+    // Multiply: a = 0, b = len (the copy goes to [len, 2 len)).
+    const uint32_t work = j.kind == kDubUndo ? 0 : (cut ? j.len - j.b : j.b - j.a);
     if (j.done < work) {
         const uint32_t n = work - j.done < kZeroChunkFrames ? work - j.done : kZeroChunkFrames;
         if (cut) std::memmove(base + size_t(j.a + j.done) * fb, base + size_t(j.b + j.done) * fb, size_t(n) * fb);
+        else if (mul) std::memcpy(base + size_t(j.len + j.done) * fb, base + size_t(j.done) * fb, size_t(n) * fb);
         else std::memset(base + size_t(j.a + j.done) * fb, 0, size_t(n) * fb);
         j.done += n;
         return;
     }
-    const uint32_t valid = cut ? j.len - (j.b - j.a) : j.len;   // loop frames that hold audio now
-    const uint32_t p1 = cut ? valid : j.b;
-    const uint32_t c0 = (j.base + j.a) / kPeakFrames, c1 = (j.base + p1 + kPeakFrames - 1) / kPeakFrames;
+    const uint32_t valid = cut ? j.len - (j.b - j.a) : (mul ? 2 * j.len : j.len);   // loop frames with audio now
+    const uint32_t p1 = cut || mul || j.kind == kDubUndo ? valid : j.b;
+    const uint32_t pa = j.kind == kDubUndo ? 0 : j.a;   // undo: the whole loop's peaks
+    const uint32_t c0 = (j.base + pa) / kPeakFrames, c1 = (j.base + p1 + kPeakFrames - 1) / kPeakFrames;
     const uint32_t lo = j.base, hi = j.base + valid;   // absolute frames with audio
     for (uint32_t step = 0; step < 64 && c0 + j.peaksDone < c1; ++step, ++j.peaksDone) {
         const uint32_t c = c0 + j.peaksDone;
@@ -169,6 +187,12 @@ void Engine::finishJob() {
         k.offset16 = 0;
         k.busy = false;
         restartGrains(k, uint64_t(posOf(k)) << 16);
+    } else if (j.kind == kDubUndo) {   // the other version plays now
+        k.busy = false;
+        k.dubUndo = k.dubUndo == 1 ? 2 : 1;
+    } else if (j.kind == kMultiply && k.len == j.len) {   // the copy is in: twice as long, same place
+        setLength(k, 2 * j.len);
+        if (k.written < k.start + k.len) k.written = k.start + k.len;
     }
     view_[j.track].peakVersion.fetch_add(1, std::memory_order_relaxed);
     j.state.store(0, std::memory_order_release);
@@ -209,6 +233,39 @@ uint64_t Engine::phaseOfPos(const Track& k, uint32_t pos, bool secondHalf) const
     if (mi.reverse) return uint64_t(k.len - 1 - pos) << 16;
     if (mi.pingPong && secondHalf) return uint64_t(2 * k.len - 1 - pos) << 16;
     return uint64_t(pos) << 16;
+}
+
+void Engine::saveUndoCell(int t, uint32_t i) {
+    Track& k = trk_[t];
+    if (!k.undoOk) return;
+    const uint32_t c = i / kUndoCellFrames;
+    uint8_t& bits = undoMap_[t][c >> 3];
+    const uint8_t bit = uint8_t(1u << (c & 7));
+    if (bits & bit) return;
+    bits |= bit;
+    // The whole cell, before anything in it changes (this is its first write).
+    const TrackMemory& m = mem_[t];
+    const uint32_t f0 = c * kUndoCellFrames, f1 = f0 + kUndoCellFrames < k.len ? f0 + kUndoCellFrames : k.len;
+    const size_t fb = k.mono ? 2 : 4;
+    const uint8_t* src = reinterpret_cast<const uint8_t*>(m.frames) + (size_t(k.start) + f0) * fb;
+    uint8_t* dst = reinterpret_cast<uint8_t*>(m.frames) + (size_t(undoBase(t)) + f0) * fb;
+    std::memcpy(dst, src, size_t(f1 - f0) * fb);
+    k.dubUndo = 1;
+}
+
+void Engine::setLength(Track& k, uint32_t len) {
+    // A new loop length (multiply / halve) that keeps the read position: the
+    // same frame, wrapped into the new length, plays on from here.
+    const uint64_t ph = phase16(k);
+    uint32_t pos = posOfPhase(k, ph);
+    const bool second = modeInfo(k.mode).pingPong && (ph >> 16) >= k.len;
+    k.len = len;
+    pos %= len;
+    const uint64_t P = period16(k);
+    const uint64_t want = phaseOfPos(k, pos, second);
+    k.offset16 = 0;
+    k.offset16 = (want + P - phase16(k)) % P;
+    restartGrains(k, uint64_t(pos) << 16);
 }
 
 void Engine::restartGrains(Track& k, uint64_t pos16) {
@@ -297,14 +354,31 @@ void Engine::setMode(int t, PlayMode mode) {
 }
 
 float Engine::baseTempo() const {
-    if (!L_) return float(bpm_);
+    if (!L_) return bpm16_ ? float(bpm16_) / 65536.0f : float(bpm_);
     return float(kSampleRate) * 60.0f * float(beats_) / float(L_);
 }
 
 uint32_t Engine::barLen() const {
     // The master loop's bar once there is one; before that, the tempo's.
     if (L_) return L_;
+    if (bpm16_) return uint32_t((uint64_t(kSampleRate) * 60u * beats_ << 16) / bpm16_);
     return uint32_t(uint64_t(kSampleRate) * 60u * beats_ / (bpm_ ? bpm_ : 120));
+}
+
+void Engine::pushRealtime(uint8_t b) {
+    if (rtHook_) rtHook_(b);
+    const uint32_t h = rtHead_.load(std::memory_order_relaxed), nh = (h + 1) % sizeof rt_;
+    if (nh == rtTail_.load(std::memory_order_acquire)) return;   // full: dropped
+    rt_[h] = b;
+    rtHead_.store(nh, std::memory_order_release);
+}
+
+bool Engine::popRealtime(uint8_t& b) {
+    const uint32_t t = rtTail_.load(std::memory_order_relaxed);
+    if (t == rtHead_.load(std::memory_order_acquire)) return false;
+    b = rt_[t];
+    rtTail_.store((t + 1) % sizeof rt_, std::memory_order_release);
+    return true;
 }
 
 void Engine::startRecording(int t) {
@@ -363,9 +437,12 @@ void Engine::beginTake(int t, uint32_t tf, const int16_t* pre, uint32_t preFrame
     k.stopAt = o.lenBeats ? uint32_t(o.lenBeats) * beatLen() : 0;
     const uint32_t n = preFrames < k.written ? preFrames : k.written;
     const TrackMemory& m = mem_[t];
+    // Silence before the take in its loop: the take fades in (no click on the press).
+    k.fadeAt = k.written - n > 0 ? k.written - n : 0xFFFFFFFFu;
     for (uint32_t i = 0; i < n; ++i) {
         const uint32_t dst = k.written - n + i, src = preFrames - n + i;
-        const int16_t l = pre[2 * src], r = pre[2 * src + 1];
+        const float g = k.fadeIn(dst);
+        const int16_t l = int16_t(float(pre[2 * src]) * g), r = int16_t(float(pre[2 * src + 1]) * g);
         if (k.mono) {
             const int16_t v = fold(k.input, l, r);
             m.frames[dst] = v;
@@ -382,7 +459,7 @@ void Engine::beginTake(int t, uint32_t tf, const int16_t* pre, uint32_t preFrame
     k.state = TrackState::kRecording;
 }
 
-void Engine::dubVari(int t, uint64_t ph, uint64_t step16, const int16_t* in, float fb) {
+void Engine::dubVari(int t, uint64_t ph, uint64_t step16, const int16_t* in, float oldK, float inK) {
     // Overdub at a changed tempo (Forward only, so the phase is the loop frame):
     // the input resampled onto the buffer frames between the last input frame
     // and this one, each mixed into what is there.
@@ -394,15 +471,16 @@ void Engine::dubVari(int t, uint64_t ph, uint64_t step16, const int16_t* in, flo
     const int64_t hi = int64_t(ph), lo = hi - int64_t(step16);
     for (int64_t x = (lo >> 16) + 1; x <= (hi >> 16); ++x) {
         const uint32_t i = uint32_t(((x % int64_t(k.len)) + int64_t(k.len)) % int64_t(k.len));
+        saveUndoCell(t, i);
         const float a = step16 ? float(x * 65536 - lo) / float(step16) : 1.0f;
         const float vl = lerp(k.prevL, l, a), vr = lerp(k.prevR, r, a);
         if (mono) {
-            const int16_t nv = sat16(float(fr[i]) * fb + float(fold(k.input, sat16(vl), sat16(vr))));
+            const int16_t nv = sat16(float(fr[i]) * oldK + float(fold(k.input, sat16(vl), sat16(vr))) * inK);
             fr[i] = nv;
             notePeakMono(m.peaks, k.start + i, nv);
         } else {
-            const int16_t nl = sat16(float(fr[2 * i]) * fb + vl);
-            const int16_t nr = sat16(float(fr[2 * i + 1]) * fb + vr);
+            const int16_t nl = sat16(float(fr[2 * i]) * oldK + vl * inK);
+            const int16_t nr = sat16(float(fr[2 * i + 1]) * oldK + vr * inK);
             fr[2 * i] = nl;
             fr[2 * i + 1] = nr;
             notePeak(m.peaks, k.start + i, nl, nr);
@@ -470,6 +548,14 @@ void Engine::finishRecording(int t, uint32_t len) {
     k.stopAt = 0;
     // Frames past len (a late press) were written too: the next clear zeroes them.
     k.written = n > len ? n : len;
+    // Loop point: blend what followed the end into the start (an overdub writes
+    // across the loop point itself; off speed 1 the tail is not on the timeline).
+    k.tailTo = 0;
+    if (o.after != AfterRec::kOverdub && speed16_ == 65536 && len >= 4 * kXfadeFrames &&
+        k.start + len + kXfadeFrames <= capOf(t)) {
+        if (k.written >= len + kXfadeFrames) crossfadeLoopPoint(t);   // a late press recorded it already
+        else k.tailTo = len + kXfadeFrames;
+    }
     switch (o.after) {
         case AfterRec::kPlay: k.state = TrackState::kPlaying; break;
         case AfterRec::kOverdub:
@@ -478,6 +564,31 @@ void Engine::finishRecording(int t, uint32_t len) {
         case AfterRec::kStop: k.state = TrackState::kStopped; break;
     }
     restartGrains(k, uint64_t(posOf(k)) << 16);
+}
+
+void Engine::crossfadeLoopPoint(int t) {
+    // The loop's first kXfadeFrames fade in from the tail (the input right
+    // after the take): at the loop point the end runs on into the start.
+    Track& k = trk_[t];
+    const TrackMemory& m = mem_[t];
+    const uint32_t s = k.start, L = k.len;
+    for (uint32_t i = 0; i < kXfadeFrames; ++i) {
+        const float w = (float(i) + 0.5f) / float(kXfadeFrames);   // 0: the tail .. 1: the take
+        if (k.mono) {
+            const float a = m.frames[s + i], b = m.frames[s + L + i];
+            const int16_t v = sat16(b + (a - b) * w);
+            m.frames[s + i] = v;
+            notePeakMono(m.peaks, s + i, v);
+        } else {
+            int16_t* fa = m.frames + 2 * size_t(s + i);
+            const int16_t* fb = m.frames + 2 * size_t(s + L + i);
+            const int16_t l = sat16(float(fb[0]) + (float(fa[0]) - float(fb[0])) * w);
+            const int16_t r = sat16(float(fb[1]) + (float(fa[1]) - float(fb[1])) * w);
+            fa[0] = l;
+            fa[1] = r;
+            notePeak(m.peaks, s + i, l, r);
+        }
+    }
 }
 
 void Engine::clearTrack(int t) {
@@ -516,11 +627,18 @@ void Engine::apply(const Msg& m) {
                     if (!canDubNow(k)) break;   // the app tells the user why
                     if (!running_) startClockAlone(t);
                     k.state = TrackState::kOverdubbing;
+                    k.replace = m.arg == 1;
                     break;
                 case TrackState::kStopped:   // start from the top on the next bar, overdubbing
-                    if (canDubNow(k)) queueLaunch(t, true);
+                    if (canDubNow(k)) {
+                        queueLaunch(t, true);
+                        k.replace = m.arg == 1;
+                    }
                     break;
-                case TrackState::kQueued: k.launchDub = canDubNow(k); break;
+                case TrackState::kQueued:
+                    k.launchDub = canDubNow(k);
+                    k.replace = m.arg == 1;
+                    break;
                 case TrackState::kOverdubbing: k.state = TrackState::kPlaying; break;
                 case TrackState::kClearing: break;
             }
@@ -532,7 +650,18 @@ void Engine::apply(const Msg& m) {
                 case TrackState::kRecording: requestStop(t); break;
                 case TrackState::kPlaying:
                 case TrackState::kOverdubbing:   // stop: back to its start (shown there)
-                    k.state = TrackState::kStopped;
+                    if (stopFade_ && !k.fadeOut) {
+                        // Fade out first (1 beat, 1 bar or 2 bars), then stop; a
+                        // second press stops at once.
+                        static const uint8_t kBeatsOf[4] = {0, 0, 1, 2};   // 1: one beat; 2, 3: bars
+                        k.fadeOutLen = stopFade_ == 1 ? beatLen() : barLen() * kBeatsOf[stopFade_ & 3];
+                        if (!k.fadeOutLen) k.fadeOutLen = 1;
+                        k.fadeOut = k.fadeOutLen;
+                        k.state = TrackState::kPlaying;
+                    } else {
+                        k.fadeOut = k.fadeOutLen = 0;
+                        k.state = TrackState::kStopped;
+                    }
                     break;
                 case TrackState::kStopped: queueLaunch(t, false); break;
                 case TrackState::kQueued: k.state = TrackState::kStopped; break;   // cancel
@@ -576,6 +705,7 @@ void Engine::apply(const Msg& m) {
                 k.start += m.a;
                 k.anchor += m.a;
                 k.len = m.b - m.a;
+                dropUndo(k);
                 k.offset16 = 0;
                 restartGrains(k, uint64_t(posOf(k)) << 16);
                 view_[t].peakVersion.fetch_add(1, std::memory_order_relaxed);
@@ -610,7 +740,68 @@ void Engine::apply(const Msg& m) {
             if (cut) {
                 k.busy = true;
                 k.undo.has = false;   // the audio moves: an older trim cannot come back
+                dropUndo(k);
             }
+            job_.state.store(1, std::memory_order_release);
+            break;
+        }
+        case kExtTempo: {   // MIDI clock in: a precise tempo
+            const uint32_t a = m.a < (40u << 16) ? (40u << 16) : (m.a > (240u << 16) ? (240u << 16) : m.a);
+            if (!L_) {
+                bpm16_ = a;
+                bpm_ = uint8_t((a + 32768u) >> 16);
+            } else {
+                const float s = float(a) / 65536.0f / baseTempo() * 65536.0f;
+                speed16_ = uint32_t(s < 32768.0f ? 32768.0f : (s > 131072.0f ? 131072.0f : s));
+                for (Track& x : trk_)
+                    if (x.state == TrackState::kOverdubbing && !canDubNow(x)) x.state = TrackState::kPlaying;
+            }
+            break;
+        }
+        case kClockOut: clockOut_ = m.arg != 0; break;
+        case kDubUndo: {
+            const bool want = m.arg == 0 ? k.dubUndo == 1 : k.dubUndo == 2;
+            if (!want || !k.len || k.busy || job_.state.load(std::memory_order_acquire)) break;
+            if (k.state == TrackState::kOverdubbing) k.state = TrackState::kPlaying;
+            k.dubX = 0.0f;
+            k.dubSession = false;
+            job_.track = uint8_t(t);
+            job_.kind = kDubUndo;
+            job_.mono = k.mono;
+            job_.base = k.start;
+            job_.len = k.len;
+            job_.a = 0;
+            job_.b = (k.len + kUndoCellFrames - 1) / kUndoCellFrames;   // cells to look at
+            job_.done = job_.peaksDone = 0;
+            k.busy = true;   // silent while the two versions swap
+            job_.state.store(1, std::memory_order_release);
+            break;
+        }
+        case kMultiply: {
+            const bool busyJob = job_.state.load(std::memory_order_acquire) != 0;
+            const bool loop = k.len && !k.busy && (k.state == TrackState::kPlaying || k.state == TrackState::kStopped ||
+                                                   k.state == TrackState::kOverdubbing || k.state == TrackState::kQueued);
+            if (!loop) break;
+            if (m.arg == 0) {   // halve: instant, the first half stays (where it plays now, wrapped)
+                if (k.len / 2 >= kMinMasterFrames) {
+                    setLength(k, k.len / 2);
+                    k.undo.has = false;
+                    dropUndo(k);
+                }
+                break;
+            }
+            if (busyJob || k.start + 2 * k.len > capOf(t)) break;
+            if (k.state == TrackState::kOverdubbing) k.state = TrackState::kPlaying;   // the copy is a snapshot
+            dropUndo(k);
+            job_.track = uint8_t(t);
+            job_.kind = kMultiply;
+            job_.mono = k.mono;
+            job_.base = k.start;
+            job_.len = k.len;
+            job_.a = 0;
+            job_.b = k.len;
+            job_.done = job_.peaksDone = 0;
+            k.undo.has = false;
             job_.state.store(1, std::memory_order_release);
             break;
         }
@@ -733,6 +924,7 @@ void Engine::setOpt(OptParam p, int t, int v) {
             // tape speed (50 .. 200 % of the recorded tempo; the pitch follows).
             if (L_ == 0) {
                 bpm_ = lim(v, 40, 240);
+                bpm16_ = 0;   // set by hand: the whole number again
             } else {
                 const float base = baseTempo();
                 if (v == int(base + 0.5f)) {
@@ -749,6 +941,8 @@ void Engine::setOpt(OptParam p, int t, int v) {
         case OptParam::kMetronome: metro_ = v != 0; break;
         case OptParam::kClick: click_ = lim(v, 0, 100); break;
         case OptParam::kThreshold: threshold_ = lim(v, 0, 100); break;
+        case OptParam::kStopFade: stopFade_ = lim(v, 0, 3); break;
+        case OptParam::kMonitorFx: monitorFx_ = lim(v, 0, 3); break;
     }
 }
 
@@ -789,6 +983,7 @@ void Engine::startClockAlone(int t) {
 
 void Engine::launch(Track& k) {
     k.offset16 = 0;
+    k.fadeOut = k.fadeOutLen = 0;
     k.state = k.launchDub ? TrackState::kOverdubbing : TrackState::kPlaying;
     restartGrains(k, uint64_t(posOf(k)) << 16);
 }
@@ -852,7 +1047,7 @@ uint8_t Engine::opt(OptParam p, int t) const {
         case OptParam::kStretch: return o.stretch ? 1 : 0;
         case OptParam::kTempo: {
             // With a loop: the loop's tempo at the tape speed.
-            if (!L_) return bpm_;
+            if (!L_) return bpm16_ ? uint8_t((bpm16_ + 32768u) >> 16) : bpm_;
             const float b = baseTempo() * speed() + 0.5f;
             return uint8_t(b > 255.0f ? 255.0f : b);
         }
@@ -860,6 +1055,8 @@ uint8_t Engine::opt(OptParam p, int t) const {
         case OptParam::kMetronome: return metro_;
         case OptParam::kClick: return click_;
         case OptParam::kThreshold: return threshold_;
+        case OptParam::kStopFade: return stopFade_;
+        case OptParam::kMonitorFx: return monitorFx_;
     }
     return 0;
 }
@@ -909,6 +1106,13 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
         if (pr > inPk[1]) inPk[1] = pr;
         mixL[f] = monitor_ ? float(l) : 0.0f;
         mixR[f] = monitor_ ? float(r) : 0.0f;
+        // Monitoring through the effects: the input on the chosen send buses, at full send.
+        if (monitor_ && monitorFx_)
+            for (int s = 0; s < kFxSlots; ++s)
+                if ((monitorFx_ >> s) & 1) {
+                    busL_[s][f] += float(l);
+                    busR_[s][f] += float(r);
+                }
     }
 
     const float fb = float(feedback_) / 100.0f;
@@ -920,6 +1124,24 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
         uint8_t level = 0;
         bool wrote = false;
         uint32_t fStart = 0;
+        if (k.tailTo && k.state != TrackState::kRecording && k.state != TrackState::kCountIn) {
+            // The loop-point tail: the input just after the take, past the loop end.
+            for (uint32_t f = 0; f < n && k.written < k.tailTo; ++f) {
+                const int16_t l = in ? in[2 * f] : 0, r = in ? in[2 * f + 1] : 0;
+                const uint32_t i = k.written++;
+                if (k.mono) {
+                    m.frames[i] = fold(k.input, l, r);
+                } else {
+                    m.frames[2 * i] = l;
+                    m.frames[2 * i + 1] = r;
+                }
+            }
+            if (k.written >= k.tailTo) {
+                k.tailTo = 0;
+                crossfadeLoopPoint(t);
+                view_[t].peakVersion.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
         if (k.state == TrackState::kArmed && in) {
             // The first frame over the threshold starts the take, with the
             // pre-roll (the last kPreRollFrames before it) at its head.
@@ -950,6 +1172,11 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             const uint32_t sp = speed16_;
             bool done = false;
             auto put = [&](uint32_t i, int16_t l, int16_t r) {
+                if (i - k.fadeAt < kFadeInFrames) {   // the start of a take after silence
+                    const float g = k.fadeIn(i);
+                    l = int16_t(float(l) * g);
+                    r = int16_t(float(r) * g);
+                }
                 if (k.mono) {
                     const int16_t v = fold(k.input, l, r);
                     m.frames[i] = v;
@@ -971,7 +1198,10 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                     k.prevR = r;
                 }
                 const uint32_t i = k.written;
-                if (i >= cap || (k.stopAt && i >= k.stopAt)) {
+                // At speed 1 a take runs on past its stop line for the loop-point tail.
+                const uint32_t end = k.stopAt && sp == 65536 && opts_[t].after != AfterRec::kOverdub
+                                         ? k.stopAt + kXfadeFrames : k.stopAt;
+                if (i >= cap || (k.stopAt && i >= end)) {
                     done = true;
                     break;
                 }
@@ -1015,8 +1245,29 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             const bool tape = has(PerfFx::kTapeStop), vib = has(PerfFx::kVibrato);
             const bool posFx = rep || tape || vib;
             // Overdub writes where it reads: not while a performance effect moves the read position.
-            const bool dub = k.state == TrackState::kOverdubbing && mi.canDub && !posFx;
-            const float target = (k.state == TrackState::kStopped || k.muted) ? 0.0f : float(k.volume) / 100.0f;
+            const bool dubbing = k.state == TrackState::kOverdubbing;
+            const bool dub = (dubbing || k.dubX > 0.0f) && mi.canDub && !posFx;
+            if (dub && !k.dubSession) {   // a new overdub: its cells are saved as it goes
+                k.dubSession = true;
+                k.undoOk = k.start + 2 * k.len + kXfadeFrames <= capOf(t) &&
+                           (k.len + kUndoCellFrames - 1) / kUndoCellFrames <= kUndoMapBytes * 8;
+                std::memset(undoMap_[t], 0, kUndoMapBytes);
+                if (k.undoOk) k.dubUndo = 0;   // the earlier pass cannot come back now
+            } else if (!dub && k.dubSession && k.dubX <= 0.0f && !dubbing) {
+                k.dubSession = false;
+            }
+            // The punch ramp: the loop under the input (overdub: 1 -> feedback;
+            // replace: 1 -> 0) against the input (0 -> 1), over 2 ms each way.
+            auto ramp = [&](float& oldK, float& inK) {
+                k.dubX += dubbing ? kDubRampStep : -kDubRampStep;
+                k.dubX = k.dubX < 0.0f ? 0.0f : (k.dubX > 1.0f ? 1.0f : k.dubX);
+                inK = k.dubX;
+                oldK = k.replace ? 1.0f - inK : 1.0f + (fb - 1.0f) * inK;
+            };
+            // A stop fade lowers the target over its length, block by block.
+            const float fadeEnd = k.fadeOut ? float(k.fadeOut > n ? k.fadeOut - n : 0) / float(k.fadeOutLen) : 1.0f;
+            const float target = (k.state == TrackState::kStopped || k.muted) ? 0.0f
+                                                                                 : float(k.volume) / 100.0f * fadeEnd;
 
             // Filters: a cut holds its knob's cutoff; a sweep moves over its knob's
             // time (in bars) while held.
@@ -1190,7 +1441,11 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                             const uint64_t ph2 = ph + 65536 < P ? ph + 65536 : ph + 65536 - P;
                             const float fp = float(uint32_t(ph & 0xFFFFu)) * (1.0f / 65536.0f);
                             interp(posOfPhase(k, ph), posOfPhase(k, ph2), fp, sl, sr);
-                            if (dub) dubVari(t, ph, step16, in ? in + 2 * f : nullptr, fb);
+                            if (dub) {
+                                float oldK, inK;
+                                ramp(oldK, inK);
+                                dubVari(t, ph, step16, in ? in + 2 * f : nullptr, oldK, inK);
+                            }
                             break;
                         }
                         const uint32_t i = posOfPhase(k, ph);
@@ -1200,13 +1455,16 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                         sr = b;
                         if (dub) {
                             const int16_t l = in ? in[2 * f] : 0, r = in ? in[2 * f + 1] : 0;
+                            float oldK, inK;
+                            ramp(oldK, inK);
+                            saveUndoCell(t, i);
                             if (mono) {
-                                const int16_t nv = sat16(float(a) * fb + float(fold(k.input, l, r)));
+                                const int16_t nv = sat16(float(a) * oldK + float(fold(k.input, l, r)) * inK);
                                 fr[i] = nv;
                                 notePeakMono(m.peaks, pk0 + i, nv);
                             } else {
-                                const int16_t nl = sat16(float(a) * fb + float(l));
-                                const int16_t nr = sat16(float(b) * fb + float(r));
+                                const int16_t nl = sat16(float(a) * oldK + float(l) * inK);
+                                const int16_t nr = sat16(float(b) * oldK + float(r) * inK);
                                 fr[2 * i] = nl;
                                 fr[2 * i + 1] = nr;
                                 notePeak(m.peaks, pk0 + i, nl, nr);
@@ -1262,6 +1520,13 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                 if (p > level) level = p;
             }
             k.gain = target;
+            if (k.fadeOut) {   // the fade is over: stopped, back to its start
+                k.fadeOut = k.fadeOut > n ? k.fadeOut - n : 0;
+                if (!k.fadeOut) {
+                    k.fadeOutLen = 0;
+                    k.state = TrackState::kStopped;
+                }
+            }
             wrote = dub;
             if (vib) pf.vib.renorm();
         }
@@ -1338,6 +1603,27 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
         if (pl > outPk[0]) outPk[0] = pl;
         if (pr > outPk[1]) outPk[1] = pr;
     }
+    // MIDI clock out: Start when the transport starts, 24 ticks a beat on the
+    // bar clock (so it follows the tape speed too), Stop when it stops.
+    if (clockOut_) {
+        if (running_ && !clockRan_) {
+            pushRealtime(0xFA);
+            lastTick_ = 0xFFFFFFFFu;
+        } else if (!running_ && clockRan_) {
+            pushRealtime(0xFC);
+        }
+        if (running_) {
+            const uint32_t beat = beatLen();
+            for (uint32_t f = 0; f < n && beat; ++f) {
+                const uint32_t tick = uint32_t(uint64_t(tf(f)) * 24u / beat);
+                if (tick != lastTick_) {
+                    lastTick_ = tick;
+                    pushRealtime(0xF8);
+                }
+            }
+        }
+    }
+    clockRan_ = running_;
     if (running_) {   // speed16_ loop frames per output frame
         tAcc_ += uint64_t(n) * speed16_;
         t_ = uint32_t(tAcc_ >> 16);
@@ -1369,6 +1655,8 @@ void Engine::publish() {
         v.perf.store(k.perf.mask, std::memory_order_relaxed);
         v.start.store(k.start, std::memory_order_relaxed);
         v.busy.store(k.busy, std::memory_order_relaxed);
+        v.replace.store(k.replace, std::memory_order_relaxed);
+        v.dubUndo.store(k.dubUndo, std::memory_order_relaxed);
         v.canUndo.store(k.undo.has, std::memory_order_relaxed);
         v.startIn.store(k.state == TrackState::kCountIn && k.anchor > t_ ? k.anchor - t_ : 0,
                         std::memory_order_relaxed);

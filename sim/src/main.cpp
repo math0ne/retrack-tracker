@@ -32,6 +32,9 @@
 //   expect_flash NAME|none        the image the last firmware update asked for
 //   expect_pitch HZ [TOL]         the left output's frequency since reset_levels, within 3 % (or TOL %)
 //   expect_mode TRACK NAME        playback mode (label without spaces: Halfspeed, Granular)
+//   midi_in HEX...                bytes in on DIN;  midi_clock BPM [start|stop]  a clock in (0: none)
+//   reset_midi / expect_midi_out din|usb BYTE MIN [MAX]   count a byte sent since reset_midi
+//   expect_smooth MAX             no left-output step between two frames above MAX since reset_levels (clicks)
 //   expect_grain TRACK KNOB VALUE Granular mode's knob 1..4 (spread, size, density, pitch)
 //   expect_fx SLOT TYPE [K V]     FX slot (1..2) holds TYPE (and knob K, 1..4, is V)
 //   expect_perfknob FX VALUE      performance effect FX (1..8) knob value
@@ -140,7 +143,9 @@ public:
     void reset() {
         peak_[0] = peak_[1] = 0.0f;
         rises_ = frames_ = 0;
+        maxStep_ = 0.0f;
     }
+    float maxStep() const { return maxStep_; }   // largest |x[n] - x[n-1]|, left, since reset
     // The left output's frequency since the last reset: rising crossings
     // through +-2 % (hysteresis, so grain fades do not count) over the time.
     float pitchHz() const { return frames_ ? float(rises_) * 44100.0f / float(frames_) : 0.0f; }
@@ -155,6 +160,9 @@ private:
         }
         for (uint32_t f = 0; f < frames; ++f) {
             const float l = float(out[2 * f]) / 32768.0f;
+            const float st = std::fabs(l - p->last_);
+            if (st > p->maxStep_) p->maxStep_ = st;
+            p->last_ = l;
             if (!p->high_ && l > 0.02f) {
                 p->high_ = true;
                 ++p->rises_;
@@ -170,6 +178,29 @@ private:
     float peak_[2] = {0.0f, 0.0f};
     uint32_t rises_ = 0, frames_ = 0;
     bool high_ = false;
+    float last_ = 0.0f, maxStep_ = 0.0f;
+};
+
+// MIDI: script bytes in (DIN), everything sent kept for expect_midi_out.
+class SimMidi final : public ot::IMidiPort {
+public:
+    std::vector<uint8_t> in;
+    size_t inPos = 0;
+    std::vector<uint8_t> out[2];
+    bool send(ot::MidiPortId port, const uint8_t* data, uint32_t len) override {
+        out[int(port) & 1].insert(out[int(port) & 1].end(), data, data + len);
+        return true;
+    }
+    uint32_t receive(ot::MidiPortId port, uint8_t* dst, uint32_t cap) override {
+        if (port != ot::MidiPortId::kDin) return 0;
+        uint32_t n = 0;
+        while (n < cap && inPos < in.size()) dst[n++] = in[inPos++];
+        if (inPos == in.size()) {
+            in.clear();
+            inPos = 0;
+        }
+        return n;
+    }
 };
 
 struct Machine {
@@ -182,6 +213,8 @@ struct Machine {
     ChannelProbe probe{manualAudio};
     ToneIn tone;
     HostStorage storage;
+    SimMidi midi;
+    double clockBpm = 0.0, nextTickMs = 0.0;   // midi_clock: a clock coming in
     ot::IAudioOut* audio = nullptr;
     std::vector<uint8_t> loopMem, scratch;
     std::vector<float> fxMem;   // float elements: 4-byte aligned
@@ -229,6 +262,7 @@ struct Machine {
         } else {
             std::fprintf(stderr, "no SD folder: settings and projects are off\n");
         }
+        p.midi = &midi;
         p.version = "looper-0.1";   // as the device build, so the Firmware page can mark its image
         // The simulator has no bootloader: it notes the image and carries on.
         p.firmwareUpdate = [](const char* name) {
@@ -274,6 +308,13 @@ struct Headless {
     void advance(uint32_t ms) {
         for (uint32_t i = 0; i < ms; ++i) {
             m.clock.advanceUs(1000);
+            if (m.clockBpm > 0.0) {   // midi_clock: 24 ticks a beat on DIN
+                const double nowMs = double(m.clock.micros()) / 1000.0;
+                while (nowMs >= m.nextTickMs) {
+                    m.midi.in.push_back(0xF8);
+                    m.nextTickMs += 60000.0 / (m.clockBpm * 24.0);
+                }
+            }
             frameAcc += 44.1;
             while (frameAcc >= 128.0) {
                 m.manualAudio.pull();
@@ -375,11 +416,11 @@ struct Headless {
             } else if (cmd == "opt") {
                 // opt TRACK|all NAME VALUE: a track option, as the options page sets it
                 static const char* const kNames[] = {"stop",  "length",    "start", "input", "after",
-                                                     "tempo", "beats", "metronome", "click", "threshold", "stretch"};
+                                                     "tempo", "beats", "metronome", "click", "threshold", "stretch", "stopfade", "monitorfx"};
                 std::string name, val;
                 in >> name >> val;
                 int p = -1;
-                for (int i = 0; i < 11; ++i)
+                for (int i = 0; i < 13; ++i)
                     if (name == kNames[i]) p = i;
                 if (p < 0) {
                     std::fprintf(stderr, "%s:%d: unknown option %s\n", path.c_str(), lineNo, name.c_str());
@@ -414,6 +455,43 @@ struct Headless {
                 std::printf("%s:%d: expect_pitch %s %s (%.1f Hz)\n", path.c_str(), lineNo, arg.c_str(),
                             pass ? "PASS" : "FAIL", got);
                 ok = ok && pass;
+            } else if (cmd == "expect_smooth") {
+                // expect_smooth MAX: no sample-to-sample step on the left output above MAX since reset_levels
+                const float want = float(std::atof(arg.c_str())), got = m.probe.maxStep();
+                const bool pass = got <= want;
+                std::printf("%s:%d: expect_smooth %s %s (max step %.4f)\n", path.c_str(), lineNo, arg.c_str(),
+                            pass ? "PASS" : "FAIL", got);
+                ok = ok && pass;
+            } else if (cmd == "midi_in") {
+                // midi_in HEX...: bytes in on DIN (e.g. midi_in 90 3C 7F)
+                std::string hx = arg;
+                do {
+                    if (!hx.empty()) m.midi.in.push_back(uint8_t(std::strtoul(hx.c_str(), nullptr, 16)));
+                } while (in >> hx);
+            } else if (cmd == "midi_clock") {
+                // midi_clock BPM [start]: a clock coming in on DIN from now (0: none); start sends Start first
+                std::string st;
+                in >> st;
+                m.clockBpm = std::atof(arg.c_str());
+                m.nextTickMs = double(m.clock.micros()) / 1000.0;
+                if (st == "start") m.midi.in.push_back(0xFA);
+                if (st == "stop") m.midi.in.push_back(0xFC);
+            } else if (cmd == "reset_midi") {
+                m.midi.out[0].clear();
+                m.midi.out[1].clear();
+            } else if (cmd == "expect_midi_out") {
+                // expect_midi_out din|usb BYTE MIN [MAX]: how many BYTE (hex) went out since reset_midi
+                std::string byteS, minS, maxS;
+                in >> byteS >> minS >> maxS;
+                const auto& o = m.midi.out[arg == "usb" ? 1 : 0];
+                const uint8_t want = uint8_t(std::strtoul(byteS.c_str(), nullptr, 16));
+                long cnt = 0;
+                for (uint8_t b : o) cnt += b == want;
+                const long lo = std::atol(minS.c_str()), hi = maxS.empty() ? 1000000 : std::atol(maxS.c_str());
+                const bool pass = cnt >= lo && cnt <= hi;
+                std::printf("%s:%d: expect_midi_out %s %s %s %s %s (%ld)\n", path.c_str(), lineNo, arg.c_str(),
+                            byteS.c_str(), minS.c_str(), maxS.c_str(), pass ? "PASS" : "FAIL", cnt);
+                ok = ok && pass;
             } else if (cmd == "expect_flash") {
                 // expect_flash NAME|none: the image the last firmware update asked for
                 const bool pass = arg == (gFlashed.empty() ? std::string("none") : gFlashed);
@@ -434,11 +512,11 @@ struct Headless {
             } else if (cmd == "expect_opt") {
                 // expect_opt TRACK NAME VALUE: an option's value (names as for opt)
                 static const char* const kNames[] = {"stop",  "length",    "start", "input", "after",
-                                                     "tempo", "beats", "metronome", "click", "threshold", "stretch"};
+                                                     "tempo", "beats", "metronome", "click", "threshold", "stretch", "stopfade", "monitorfx"};
                 std::string name, val;
                 in >> name >> val;
                 int p = -1;
-                for (int i = 0; i < 11; ++i)
+                for (int i = 0; i < 13; ++i)
                     if (name == kNames[i]) p = i;
                 const int t = std::atoi(arg.c_str()) - 1;
                 int got = p >= 0 && t >= 0 && t < looper::kTracks ? m.app.engine().opt(looper::OptParam(p), t) : -1;

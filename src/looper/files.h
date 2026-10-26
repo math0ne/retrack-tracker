@@ -12,6 +12,7 @@
 
 #include "hal_api.h"
 #include "looper/engine.h"
+#include "looper/midi.h"
 #include "looper/platform.h"
 
 namespace looper {
@@ -24,6 +25,8 @@ struct Config {
     uint8_t source = 0;       // 0 line, 2 mic low, 3 mic high
     uint8_t gain = 50;        // input gain 0..100
     uint8_t monitor = 1;
+    uint8_t midiClock = 0;    // MidiClock: off, send, follow
+    MidiBinding midiMap[kMidiActions];
 };
 
 class Files {
@@ -62,7 +65,7 @@ private:
     };
     struct ProjectFile {
         char magic[4];       // "LPRJ"
-        uint32_t version;    // 2 (1: without the part after track[])
+        uint32_t version;    // 3 (1: up to track[]; 2: up to grain[])
         uint32_t bar;        // master bar length, frames (0: no loop)
         uint8_t bpm, beats, metronome, click, threshold, monitor, feedback, master;
         uint8_t ret[kFxSlots], fxType[kFxSlots];
@@ -72,11 +75,13 @@ private:
         // Version 2:
         uint8_t fxKnob2[kFxSlots][kFxBank];     // the second bank (Clouds)
         uint8_t grain[kTracks][kGrainKnobs];    // Granular mode's knobs
+        // Version 3:
+        uint8_t stopFade, monitorFx, midiClock, reserved[13];   // reserved: zero
     };
-    static constexpr uint32_t kProjectV1Bytes = 136;
+    static constexpr uint32_t kProjectV1Bytes = 136, kProjectV2Bytes = 160;
     static_assert(sizeof(ProjectTrack) == 24, "fixed layout");
-    static_assert(sizeof(ProjectFile) == kProjectV1Bytes + kFxSlots * kFxBank + kTracks * kGrainKnobs,
-                  "fixed layout");
+    static_assert(kProjectV2Bytes == kProjectV1Bytes + kFxSlots * kFxBank + kTracks * kGrainKnobs, "fixed layout");
+    static_assert(sizeof(ProjectFile) == kProjectV2Bytes + 16, "fixed layout");
 
     void snapshot(ProjectFile& pf) const;
     void postSettings(const ProjectFile& pf, bool tracks);

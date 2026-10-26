@@ -11,6 +11,9 @@
 //                The page: source, gain, the track's stereo / mono, monitor,
 //                overdub feedback, and the metronome (on, click, tempo, beats / bar)
 //   F7 Volume    the selected track's volume (and level); hold + encoder: a knob
+//   Shift + F1..F8 (home): Replace, Play / stop all, Solo, Click (hold + encoder),
+//                Undo, Redo, Double, Halve. The labels change while Shift is held.
+//   Encoder push tap tempo (three taps or more; before a loop the bar, after it the tape speed)
 //   F8           free
 //   The lanes are waveforms only; REC, PLAY and MUTE light up for the selected
 //   track's state, and a corner tag on each lane gives its number and length.
@@ -92,7 +95,7 @@ private:
     void onInput(const ot::InputEvent& ev);
     void onFKey(int key);
     void onPad(int pad, bool down);
-    void record(int t);
+    void record(int t, bool replace = false);   // replace: also when Shift is held
     void hint(int t, const char* msg, uint32_t now);
     void updateLeds(uint32_t now);
     void updateWaves(uint32_t now);
@@ -189,6 +192,15 @@ private:
     int inCol_ = 0, inRow_ = 0;
     // F6 on the home page: tap = the Input page, hold + encoder = input gain
     bool f6Held_ = false, f6Turned_ = false;
+    // Tap tempo on the encoder push: the last taps' times.
+    uint32_t tapMs_[5] = {};
+    int taps_ = 0;
+    void tapTempo(uint32_t ms);
+    // Shift + F-key on the home page: the second layer.
+    void shiftFKey(int key);
+    void undoDub(bool redo);          // Insert / Shift + F5, F6
+    void multiply(bool halve);        // Copy / Shift + F7, F8
+    int solo_ = -1;                   // the soloed track (Shift + F3), -1 none
     // F7 on the home page: hold + encoder = the selected track's volume
     bool f7Held_ = false;
     float volShown_ = 0.8f;
@@ -258,6 +270,13 @@ private:
     FwImage fw_[kMaxImages];
     const char* fwMsg_ = nullptr;   // why the last flash was refused
     void fwScan();
+    // Config > MIDI (F2): the MIDI clock and the learned controls.
+    Midi midi_;
+    bool midiPage_ = false;
+    int midiRow_ = 0;            // 0 the clock, 1.. the actions
+    void midiKey(uint8_t id);
+    void drawMidi();
+    void midiAction(MidiAction a);
     void runningImage(char* out, size_t n) const;   // this build's image name
     void fwKey(uint8_t id);
     void drawFirmware();

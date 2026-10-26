@@ -12,6 +12,7 @@ public:
     void init();
     // Main-loop drain of the TX queues (called from hal::service()).
     void service();
+    void serviceDin();   // DIN only, never blocks (the UART ring's free room): audio-thread safe
     // Safe from any context incl. the audio DMA ISR (App::preBlock -> sequencer ->
     // engine MIDI out): only copies into a queue. false + drop count on overflow.
     bool send(MidiPortId port, const uint8_t* data, uint32_t len) override;

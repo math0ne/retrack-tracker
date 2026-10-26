@@ -9,9 +9,12 @@ tone_ch left
 tap 0
 wait 1000
 tone_ch right
-wait 1000
-tap 0
+wait 900
+# Tone off first (100 ms before the end): the loop-point tail (what follows the take, blended into its
+# start) stays silent, so the first second is left only.
 tone off
+wait 100
+tap 0
 expect_len 1 2.0
 
 # Snap is a beat (0.5 s at 120 bpm). End marker two beats back: keep the first second.

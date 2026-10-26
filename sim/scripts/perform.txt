@@ -11,9 +11,11 @@ tone_ch left
 tap 0
 wait 1000
 tone_ch right
-wait 1000
-tap 0
+wait 900
+# Tone off 100 ms early: the loop-point tail (blended into the start) stays silent.
 tone off
+wait 100
+tap 0
 expect_len 1 2.0
 
 # Tap Perform: the overlay stays on.

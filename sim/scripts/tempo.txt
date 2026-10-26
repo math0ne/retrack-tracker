@@ -72,3 +72,25 @@ release SHIFT
 wait 600
 expect_state 1 EMPTY
 expect_opt 1 tempo 100
+
+# Tap tempo on the encoder push: 500 ms apart = 120 bpm (no loop: the bar).
+# (A press holds the key 30 ms, so the waits are 30 ms short of the intervals.)
+press ENCPUSH
+wait 470
+press ENCPUSH
+wait 470
+press ENCPUSH
+wait 470
+press ENCPUSH
+wait 30
+expect_opt 1 tempo 120
+shot ../build/sim/check/tempo_tap.png
+# 400 ms apart = 150 bpm; a pause over 2 s starts over first.
+wait 2500
+press ENCPUSH
+wait 370
+press ENCPUSH
+wait 370
+press ENCPUSH
+wait 30
+expect_opt 1 tempo 150

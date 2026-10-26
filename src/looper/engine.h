@@ -55,12 +55,26 @@ enum class OptParam : uint8_t {
     kTempo, kBeats, kMetronome, kClick, kThreshold,       // global: BPM 40..240, beats per bar 1..12,
                                                           // click on/off, level, sound threshold 0..100
     kStretch,                                             // per track: 0 tape, 1 stretch (keeps pitch)
+    kStopFade,                                            // global: stop fades over 0 off, 1 beat, 1 bar, 2 bars
+    kMonitorFx,                                           // global: monitored input to bit 0 FX 1, bit 1 FX 2
 };
 constexpr uint8_t kMaxLenBeats = 64;
 // Sound start: threshold 0..100 maps to -60..0 dBFS; the take keeps this much
 // input from just before the trigger, so the attack is not cut.
 inline float thresholdDb(uint8_t v) { return -60.0f + 0.6f * float(v > 100 ? 100 : v); }
 constexpr uint32_t kPreRollFrames = 256;   // 5.8 ms
+// Loop point: a take records this much past its end, and that tail is blended
+// into its first frames, so the end runs into what really came next.
+constexpr uint32_t kXfadeFrames = 220;     // 5 ms
+// A take that starts after silence in its loop (mid-bar) fades in over this.
+constexpr uint32_t kFadeInFrames = 88;     // 2 ms
+// Overdub and replace ramp in and out over this (no click at the punch points).
+constexpr float kDubRampStep = 1.0f / 88.0f;   // 2 ms
+// Overdub undo: the loop's audio under an overdub is saved a cell at a time,
+// the first time the overdub touches the cell, at the end of the track's own
+// buffer. So undo needs the loop to fit twice: up to half the track's memory.
+constexpr uint32_t kUndoCellFrames = 256;
+constexpr uint32_t kUndoMapBytes = 512;    // cells of a loop of up to 2^20 frames (half of the largest buffer)
 
 // Performance effects (Engine::kPerf), per track, held from the pad grid.
 // Repeats, tape stop and vibrato move the read position; the phase underneath
@@ -177,12 +191,15 @@ struct TrackView {
     std::atomic<uint32_t> start{0};      // buffer index of the loop's first frame (trim)
     std::atomic<bool> busy{false};       // an edit is moving the audio: silent meanwhile
     std::atomic<bool> canUndo{false};    // a trim can be undone
+    std::atomic<bool> replace{false};    // overdubbing replaces instead of adding
+    std::atomic<uint8_t> dubUndo{0};     // 0 nothing, 1 the last overdub can be undone, 2 redone
 };
 
 class Engine {
 public:
     enum Cmd : uint8_t {
-        kRecord,       // empty -> record, record -> play, play <-> overdub, stopped -> overdub
+        kRecord,       // empty -> record, record -> play, play <-> overdub, stopped -> overdub;
+                       // arg 1: replace instead of overdub (punch-in)
         kPlayStop,     // play/overdub -> stopped, stopped -> play, record -> play
         kMute,
         kClear,
@@ -210,6 +227,10 @@ public:
         kSetBar,       // a = bar length (the master loop), only while every track is empty
         kSetMute,      // arg = 0 / 1
         kGrainParam,   // arg = (knob << 8) | value, Granular mode's knobs
+        kMultiply,     // arg 1: double the loop (a copy of it after it, main loop job), 0: halve it
+        kDubUndo,      // arg 0: undo the last overdub / replace, 1: redo it (main loop job, silent)
+        kExtTempo,     // a = tempo in bpm, 16.16 (MIDI clock in): the bar before a loop, the tape speed after
+        kClockOut,     // arg 0/1: send MIDI clock (24 a beat), start and stop
     };
 
     // fxMem: kFxMemBytes, 4-byte aligned.
@@ -223,6 +244,11 @@ public:
     const TrackMemory& memory(int t) const { return mem_[t]; }
     uint32_t masterLen() const { return master_.load(std::memory_order_relaxed); }
     uint32_t transportFrame() const { return tPub_.load(std::memory_order_relaxed); }
+    // MIDI real-time bytes the audio thread made (clock out): an ISR hook for a
+    // port that takes bytes there (DIN), and a ring for the main loop (USB).
+    void setRealtimeHook(void (*fn)(uint8_t)) { rtHook_ = fn; }
+    bool popRealtime(uint8_t& b);   // main loop
+    uint32_t beatFrames() const { return beatLen(); }   // a beat, loop frames
     bool running() const { return runPub_.load(std::memory_order_relaxed); }
     bool monitoring() const { return monitor_; }
     uint8_t volume(int t) const { return trk_[t].volume; }
@@ -299,6 +325,19 @@ private:
         // loop's own timeline (16.16 position, the input frame before).
         int64_t recPos16 = 0;        // recording: this input frame's place in the buffer, 16.16
         int16_t prevL = 0, prevR = 0;
+        uint32_t tailTo = 0;         // still recording the loop-point tail up to this frame (0: no)
+        uint32_t fadeOut = 0, fadeOutLen = 0;   // stopping with a fade: frames left, of
+        bool replace = false;        // this overdub replaces what is there (punch-in)
+        // Overdub undo: a session runs from an overdub's start to its end.
+        bool dubSession = false;     // an overdub session is open (its cells are being saved)
+        bool undoOk = false;         // the loop fits twice: this session can be undone
+        uint8_t dubUndo = 0;         // 0 nothing, 1 can undo, 2 can redo (TrackView::dubUndo)
+        float dubX = 0.0f;           // overdub / replace ramp, 0..1 (it ramps out after the stop too)
+        uint32_t fadeAt = 0xFFFFFFFFu;   // the take's first frame after silence: it fades in from here
+        // The fade-in gain for buffer frame i of a take (1 outside the fade).
+        float fadeIn(uint32_t i) const {
+            return i >= fadeAt && i - fadeAt < kFadeInFrames ? (float(i - fadeAt) + 0.5f) / float(kFadeInFrames) : 1.0f;
+        }
         struct {
             bool has = false;
             uint32_t start = 0, len = 0, anchor = 0;
@@ -340,7 +379,15 @@ private:
     void startClockAlone(int t);
     void startRepeat(Track& k, PerfFx r);
     void beginTake(int t, uint32_t tf, const int16_t* pre, uint32_t preFrames);   // sound start
-    void dubVari(int t, uint64_t ph, uint64_t step16, const int16_t* in, float fb);   // overdub off speed 1
+    void dubVari(int t, uint64_t ph, uint64_t step16, const int16_t* in, float oldK, float inK);   // overdub off speed 1
+    void crossfadeLoopPoint(int t);   // blend the recorded tail into the loop's start
+    void setLength(Track& k, uint32_t len);   // keeps the read position
+    // Overdub undo: before the overdub writes loop frame i the first time this
+    // session, save its cell. The undo copy of loop frame i is at undoBase + i.
+    uint32_t undoBase(int t) const { return capOf(t) - trk_[t].len; }
+    void saveUndoCell(int t, uint32_t i);
+    void dropUndo(Track& k) { k.dubUndo = 0; k.dubSession = false; }
+    uint8_t undoMap_[kTracks][kUndoMapBytes] = {};
     void clearTrack(int t);
     void setMode(int t, PlayMode mode);
     uint64_t period16(const Track& k) const;
@@ -387,6 +434,13 @@ private:
     // recording options, tempo and metronome (kept across track clears)
     TrackOpts opts_[kTracks];
     uint8_t bpm_ = 120, beats_ = 4;
+    uint32_t bpm16_ = 0;                // a precise tempo from MIDI clock (16.16 bpm), 0: bpm_
+    bool clockOut_ = false, clockRan_ = false;
+    uint32_t lastTick_ = 0xFFFFFFFFu;
+    void (*rtHook_)(uint8_t) = nullptr;
+    uint8_t rt_[64] = {};
+    std::atomic<uint32_t> rtHead_{0}, rtTail_{0};
+    void pushRealtime(uint8_t b);
     bool metro_ = false;
     uint8_t click_ = 60;
     uint32_t clickAge_ = 0xFFFFFFFFu;   // frames since the last click started
@@ -394,6 +448,8 @@ private:
     Osc clickOsc_;
     std::atomic<uint32_t> bar_{0};
     uint8_t threshold_ = 50;            // -30 dBFS
+    uint8_t stopFade_ = 0;              // OptParam::kStopFade
+    uint8_t monitorFx_ = 0;             // OptParam::kMonitorFx
     int16_t preRoll_[kPreRollFrames * 2] = {};   // the input before this block, oldest first
     uint8_t perfParam_[kPerfFxCount] = {};
     uint8_t grain_[kTracks][kGrainKnobs] = {};
