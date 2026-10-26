@@ -77,6 +77,8 @@ public:
     // magnified RGB332 frame draw on its own bitmap handle.
     bool writeRamG(uint32_t ramgAddr, const void* src, uint32_t len) override;
     void drawRgb332(int16_t x, int16_t y, uint32_t ramgAddr, uint16_t w, uint16_t h, uint8_t scale) override;
+    void drawL8(int16_t x, int16_t y, uint32_t ramgAddr, uint16_t w, uint16_t h, uint8_t scale) override;
+    void drawBitmapFmt(uint32_t fmt, int16_t x, int16_t y, uint32_t ramgAddr, uint16_t w, uint16_t h, uint8_t scale);
 
     // RAM_G map (1 MiB, 0x000000..0x0FFFFF). The UI keeps no cached display
     // lists, so these are the only users:

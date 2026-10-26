@@ -73,6 +73,8 @@ public:
     // (nearest filtering, scissored, modulated by COLOR_RGB/COLOR_A).
     bool writeRamG(uint32_t ramgAddr, const void* src, uint32_t len) override;
     void drawRgb332(int16_t x, int16_t y, uint32_t ramgAddr, uint16_t w, uint16_t h, uint8_t scale) override;
+    void drawL8(int16_t x, int16_t y, uint32_t ramgAddr, uint16_t w, uint16_t h, uint8_t scale) override;
+    void drawBytes(bool l8, int16_t x, int16_t y, uint32_t ramgAddr, uint16_t w, uint16_t h, uint8_t scale);
     const uint8_t* ramG() const { return ramg_.data(); }
     // REG_PWM_DUTY stand-in (0..128). Only the interactive window is dimmed
     // (dimFrame); screenshots/readPixels show the frame itself, like the

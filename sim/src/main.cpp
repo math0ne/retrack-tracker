@@ -23,13 +23,14 @@
 //   expect_ch left|right MIN|silent   the same for one channel (no reset)
 //   expect_len TRACK SEC          track (1..4) loop length, within 10 ms
 //   expect_state TRACK NAME       EMPTY, COUNT, ARMED, REC, PLAY, DUB, STOP or QUEUED
-//   expect_opt also takes monitor, feedback and gain (the Input page's other settings)
+//   expect_opt also takes monitor, feedback, gain (the Input page's other settings) and volume
 //   opt TRACK|all NAME VALUE      set an option (stop, length, start, input, after, tempo,
 //                                 beats, metronome, click, threshold) as the options page does
 //   expect_opt TRACK NAME VALUE   an option's value (names as for opt)
 //   expect_file PATH MINBYTES     a file on the SD card folder, at least MINBYTES long
 //   sd_file PATH BYTES            write a file of BYTES zero bytes on the SD card folder
 //   expect_flash NAME|none        the image the last firmware update asked for
+//   expect_pitch HZ               the left output's frequency since reset_levels, within 3 %
 //   expect_fx SLOT TYPE [K V]     FX slot (1..2) holds TYPE (and knob K, 1..4, is V)
 //   expect_perfknob FX VALUE      performance effect FX (1..8) knob value
 //   tone_shape steady|bursts      a continuous sine, or the default bursts
@@ -134,7 +135,13 @@ public:
     bool start() override { return a_.start(); }
     void stop() override { a_.stop(); }
     float peak(int ch) const { return peak_[ch]; }
-    void reset() { peak_[0] = peak_[1] = 0.0f; }
+    void reset() {
+        peak_[0] = peak_[1] = 0.0f;
+        rises_ = frames_ = 0;
+    }
+    // The left output's frequency since the last reset: rising crossings
+    // through +-2 % (hysteresis, so grain fades do not count) over the time.
+    float pitchHz() const { return frames_ ? float(rises_) * 44100.0f / float(frames_) : 0.0f; }
 
 private:
     static void fill(int16_t* out, uint32_t frames, void* ctx) {
@@ -144,11 +151,23 @@ private:
             const float v = std::fabs(float(out[i]) / 32768.0f);
             if (v > p->peak_[i & 1]) p->peak_[i & 1] = v;
         }
+        for (uint32_t f = 0; f < frames; ++f) {
+            const float l = float(out[2 * f]) / 32768.0f;
+            if (!p->high_ && l > 0.02f) {
+                p->high_ = true;
+                ++p->rises_;
+            } else if (p->high_ && l < -0.02f) {
+                p->high_ = false;
+            }
+        }
+        p->frames_ += frames;
     }
     ManualAudio& a_;
     FillFn fn_ = nullptr;
     void* ctx_ = nullptr;
     float peak_[2] = {0.0f, 0.0f};
+    uint32_t rises_ = 0, frames_ = 0;
+    bool high_ = false;
 };
 
 struct Machine {
@@ -259,8 +278,10 @@ struct Headless {
                 frameAcc -= 128.0;
             }
             m.app.loop();
+            if (m.app.lastWords() > maxWords) maxWords = m.app.lastWords();
         }
     }
+    uint32_t maxWords = 0;   // the busiest frame's display list, in words (FT81x: 2048)
 
     bool run(const std::string& path) {
         std::ifstream f(path);
@@ -352,11 +373,11 @@ struct Headless {
             } else if (cmd == "opt") {
                 // opt TRACK|all NAME VALUE: a track option, as the options page sets it
                 static const char* const kNames[] = {"stop",  "length",    "start", "input", "after",
-                                                     "tempo", "beats", "metronome", "click", "threshold"};
+                                                     "tempo", "beats", "metronome", "click", "threshold", "stretch"};
                 std::string name, val;
                 in >> name >> val;
                 int p = -1;
-                for (int i = 0; i < 10; ++i)
+                for (int i = 0; i < 11; ++i)
                     if (name == kNames[i]) p = i;
                 if (p < 0) {
                     std::fprintf(stderr, "%s:%d: unknown option %s\n", path.c_str(), lineNo, name.c_str());
@@ -381,6 +402,13 @@ struct Headless {
                     m.storage.write(fh, z.data(), uint32_t(z.size()));
                     m.storage.close(fh);
                 }
+            } else if (cmd == "expect_pitch") {
+                // expect_pitch HZ: the left output's frequency since reset_levels, within 3 %
+                const float want = float(std::atof(arg.c_str())), got = m.probe.pitchHz();
+                const bool pass = want > 0.0f && std::fabs(got - want) <= want * 0.03f;
+                std::printf("%s:%d: expect_pitch %s %s (%.1f Hz)\n", path.c_str(), lineNo, arg.c_str(),
+                            pass ? "PASS" : "FAIL", got);
+                ok = ok && pass;
             } else if (cmd == "expect_flash") {
                 // expect_flash NAME|none: the image the last firmware update asked for
                 const bool pass = arg == (gFlashed.empty() ? std::string("none") : gFlashed);
@@ -401,11 +429,11 @@ struct Headless {
             } else if (cmd == "expect_opt") {
                 // expect_opt TRACK NAME VALUE: an option's value (names as for opt)
                 static const char* const kNames[] = {"stop",  "length",    "start", "input", "after",
-                                                     "tempo", "beats", "metronome", "click", "threshold"};
+                                                     "tempo", "beats", "metronome", "click", "threshold", "stretch"};
                 std::string name, val;
                 in >> name >> val;
                 int p = -1;
-                for (int i = 0; i < 10; ++i)
+                for (int i = 0; i < 11; ++i)
                     if (name == kNames[i]) p = i;
                 const int t = std::atoi(arg.c_str()) - 1;
                 int got = p >= 0 && t >= 0 && t < looper::kTracks ? m.app.engine().opt(looper::OptParam(p), t) : -1;
@@ -413,6 +441,7 @@ struct Headless {
                 if (name == "monitor") got = m.app.engine().monitoring() ? 1 : 0;
                 else if (name == "feedback") got = m.app.engine().feedback();
                 else if (name == "gain") got = m.app.inputGain();
+                else if (name == "volume" && t >= 0 && t < looper::kTracks) got = m.app.engine().volume(t);
                 const bool pass = got == std::atoi(val.c_str());
                 std::printf("%s:%d: expect_opt %s %s %s %s (%d)\n", path.c_str(), lineNo, arg.c_str(), name.c_str(),
                             val.c_str(), pass ? "PASS" : "FAIL", got);
@@ -468,6 +497,9 @@ struct Headless {
                 ok = false;
             }
         }
+        std::printf("%s: display list max %u words of 2048%s\n", path.c_str(), unsigned(maxWords),
+                    maxWords > 1900 ? " FAIL (too close to the limit)" : "");
+        ok = ok && maxWords <= 1900;
         return ok;
     }
 };

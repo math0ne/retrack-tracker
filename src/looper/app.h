@@ -10,7 +10,10 @@
 //   F6 Input     tap: the Input page; hold + encoder: input gain (a knob shows while held)
 //                The page: source, gain, the track's stereo / mono, monitor,
 //                overdub feedback, and the metronome (on, click, tempo, beats / bar)
-//   F7, F8       free
+//   F7 Volume    the selected track's volume (and level); hold + encoder: a knob
+//   F8           free
+//   The lanes are waveforms only; REC, PLAY and MUTE light up for the selected
+//   track's state, and a corner tag on each lane gives its number and length.
 // Other keys
 //   Pads (4 rows x 12): row = track. Col 1 REC/DUB, col 2 PLAY/STOP, col 3 MUTE,
 //                       col 4 CLEAR, cols 5..12 jump to that eighth of the loop
@@ -53,7 +56,7 @@
 // Left/Right also move between knobs; the encoder turns the selected one.
 //
 // Drawing goes straight to the FT81x display list (no widget layer). The
-// waveforms are RGB332 bitmaps rendered here and copied to RAM_G, so each lane
+// waveforms are L8 (greyscale) bitmaps rendered here and copied to RAM_G, so each lane
 // costs a handful of display-list words however detailed it is.
 #pragma once
 
@@ -71,17 +74,18 @@ public:
     void loop();
     const Engine& engine() const { return engine_; }   // read-only, for the simulator's checks
     uint8_t inputGain() const { return cfg_.gain; }
+    uint32_t lastWords() const { return lastWords_; }   // the last frame's display list
     // Simulator scripts: set an option directly (as the options page would).
     void scriptOpt(int track, OptParam p, int value) {
         engine_.post(Engine::kOpt, uint8_t(track), int16_t((int(p) << 8) | (value & 0xFF)));
     }
 
     // Bitmap geometry (public for the RAM_G layout check).
-    static constexpr uint16_t kWaveW = 660, kWaveH = 88;
+    static constexpr uint16_t kWaveW = 772, kWaveH = 88;
     static constexpr uint32_t kWaveBytes = uint32_t(kWaveW) * kWaveH;
     static constexpr uint32_t kWaveRamG = 0x090000;   // above the font image (ends 0x08C3E0)
     static constexpr uint16_t kEditW = 760, kEditH = 160;   // the loop editor's waveform
-    static constexpr uint32_t kEditRamG = 0x0C9000;   // after the four lane bitmaps
+    static constexpr uint32_t kEditRamG = 0x0D3000;   // after the four lane bitmaps
 
 private:
     static void audioFill(int16_t* out, uint32_t frames, void* ctx);
@@ -100,6 +104,10 @@ private:
     void color(uint32_t rgb);
     void alpha(uint8_t a);
     void fillRect(int x0, int y0, int x1, int y1, int radius = 0);
+    // Greyscale depth: a raised surface (soft drop shadow, lit top edge) and a
+    // sunken one (dark top edge, lit bottom edge).
+    void panel(int x0, int y0, int x1, int y1, int radius, uint32_t fill);
+    void well(int x0, int y0, int x1, int y1, int radius, uint32_t fill);
     void hline(int x0, int x1, int y, int width16 = 16);
     void vline(int x, int y0, int y1, int width16 = 16);
     void dot(int x, int y, int radius);
@@ -125,7 +133,7 @@ private:
 
     // track options page
     static constexpr int kOptCols = 5;    // 4 tracks, tempo
-    static constexpr int kOptRows = 5;
+    static constexpr int kOptRows = 6;   // the tempo column has 5
     bool optParam(int col, int row, OptParam& p, int& track) const;
     void optKey(uint8_t id);
     void optEncoder(int delta);
@@ -179,6 +187,9 @@ private:
     int inCol_ = 0, inRow_ = 0;
     // F6 on the home page: tap = the Input page, hold + encoder = input gain
     bool f6Held_ = false, f6Turned_ = false;
+    // F7 on the home page: hold + encoder = the selected track's volume
+    bool f7Held_ = false;
+    float volShown_ = 0.8f;
     uint32_t f6DownMs_ = 0, f4DownMs_ = 0;   // a hold this long or longer is not a tap
     static constexpr uint32_t kTapMs = 400;
     float gainShown_ = 0.5f;

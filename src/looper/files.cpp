@@ -214,6 +214,7 @@ void Files::snapshot(ProjectFile& pf) const {
         pt.start = e.opt(OptParam::kStart, t);
         pt.input = e.opt(OptParam::kInput, t);
         pt.after = e.opt(OptParam::kAfter, t);
+        pt.stretch = e.opt(OptParam::kStretch, t);
     }
 }
 
@@ -248,6 +249,7 @@ void Files::postSettings(const ProjectFile& pf, bool tracks) {
             opt(t, OptParam::kStart, pt.start);
             opt(t, OptParam::kInput, pt.input);
             opt(t, OptParam::kAfter, pt.after);
+            opt(t, OptParam::kStretch, pt.stretch);
         }
         return;
     }

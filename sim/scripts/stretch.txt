@@ -1,0 +1,96 @@
+# Per-track Tempo: Tape / Stretch. At a changed tempo a Tape track's pitch
+# follows the speed; a Stretch track keeps its pitch (grains).
+wait 300
+opt all start 0
+# Monitor off (Input page, F2), so only the loops reach the output.
+press F6
+wait 30
+press F2
+press F8
+wait 30
+expect_opt 1 monitor 0
+
+# Track 1 (Tape, on bar): 4 s of a steady 330 Hz tone from the clock start.
+# Track 2 (Stretch, free stop): 2 s of the same tone.
+tone_shape steady
+tone 330
+tap 0
+wait 2100
+tap 0
+wait 2100
+opt 2 stop 0
+opt 2 stretch 1
+expect_opt 2 stretch 1
+tap 12
+wait 2000
+tap 12
+wait 100
+tone off
+expect_state 1 PLAY
+expect_state 2 PLAY
+
+# At 100 % both play at 330 Hz. Track 1 alone first (track 2 muted).
+tap 14
+wait 200
+reset_levels
+wait 1000
+expect_pitch 330
+
+# Tempo 120 -> 150 bpm (125 %): the tape track goes up to 412 Hz...
+hold F4
+enc 30
+release F4
+wait 100
+expect_opt 1 tempo 150
+reset_levels
+wait 1000
+expect_pitch 412
+
+# ...the stretch track stays at 330 Hz.
+tap 2
+tap 14
+wait 200
+reset_levels
+wait 1000
+expect_pitch 330
+shot ../build/sim/check/stretch_lanes.png
+
+# Reverse on the stretch track: still 330 Hz.
+press DOWN
+press F5
+press F2
+wait 200
+reset_levels
+wait 1000
+expect_pitch 330
+
+# Slower, 90 bpm (75 %): tape 248 Hz, stretch 330 Hz.
+hold F4
+enc -60
+release F4
+wait 100
+expect_opt 1 tempo 90
+reset_levels
+wait 1000
+expect_pitch 330
+tap 14
+tap 2
+wait 200
+reset_levels
+wait 1000
+expect_pitch 248
+
+# The options page: Tempo row in each track column.
+press INSTR
+press F2
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+wait 50
+shot ../build/sim/check/stretch_options.png
+enc -1
+wait 30
+expect_opt 2 stretch 0
+press F8

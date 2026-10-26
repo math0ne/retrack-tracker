@@ -52,17 +52,27 @@ mouse wheel = encoder. The panel is clickable.
 ## Controls
 
 The screen is the four track lanes and, along the bottom, the labels of the
-eight screen keys, each centred over its key as on the stock Tracker.
+eight screen keys, each centred over its key as on the stock Tracker. The whole
+interface is greyscale: shades of grey for depth (a soft light from the top,
+raised panels with shadows and lit edges, waveforms set into the lanes), the
+four tracks told apart by slightly different greys. The lanes
+are waveforms only, the full width of the screen; a tag in each lane's corner
+gives its number and, when they apply, its length, mode (other than Forward)
+and Muted. The selected track's state is on the keys: REC lights up while it
+records (brightest, pulsing; a softer pulse for an overdub, dim during a count-in
+or while armed), PLAY lights while it plays (dim while it waits for its bar line), MUTE
+while it is muted.
 
-| Screen key | Action (selected track for F1–F5) |
+| Screen key | Action (selected track for F1–F3, F5, F7) |
 |---|---|
 | F1 REC | Record / finish / overdub / stop overdub |
-| F2 PLAY | Stop: the track goes silent and back to its start. Play: it starts again from its start on the next bar line (WAIT; press again to cancel) |
+| F2 PLAY | Stop: the track goes silent and back to its start. Play: it starts again from its start on the next bar line (press again to cancel) |
 | F3 MUTE | Mute on/off |
-| F4 TEMPO | Tap: metronome on/off (the label is amber while it is on). Hold + encoder: tempo, 1 bpm a step (a knob shows while held). Shift + hold + encoder: click level. Delete clears tracks |
+| F4 TEMPO | Tap: metronome on/off (the label is bright while it is on). Hold + encoder: tempo, 1 bpm a step (a knob shows while held). Shift + hold + encoder: click level. Delete clears tracks |
 | F5 MODE | Opens the mode bar: the eight labels become the playback modes and the key under one picks it. Any other key closes it. |
 | F6 INPUT | Tap: the Input page (the cell shows the source and the input level). Hold + encoder: input gain (a knob with the input level shows while held) |
-| F7, F8 | Free |
+| F7 VOLUME | The selected track's volume, with its output level in the cell. Hold + encoder: a volume knob (the encoder alone sets it too) |
+| F8 | Free |
 
 **Input page** (F6): two cards. Up/Down pick a setting, Left/Right the card, the
 encoder sets it (Shift: fine steps); F6 or F8 closes it.
@@ -189,10 +199,11 @@ F1–F4 and the tempo column over F5 (same navigation as the mixer, F8 back).
 | Start | **Count-in** (default): one bar of click, then the take starts on the bar line; with loops running it waits for the next bar line at least half a bar away. **Now**: at once. **On sound**: the track arms and starts when the input crosses the threshold, keeping the 6 ms before it so the attack is not cut; with no loop yet the bar clock starts there. The armed lane shows the input level against the threshold. Press again to cancel. |
 | Input | Stereo, Mono L, Mono R, Mono sum. Mono uses half the memory, so a track holds about 44 s. Only while the track is empty. |
 | After rec | Play, Overdub or Stop when the take ends. |
+| Tempo | **Tape** (default): a tempo change speeds the track up or down and its pitch follows. **Stretch**: it keeps its pitch, played through two cross-faded 46 ms grains while the tempo is not 100 % (at 100 % it plays as recorded). Stretch tracks do not overdub off 100 %; a take recorded on one off 100 % is still resampled like tape. |
 
 | Tempo column | |
 |---|---|
-| Tempo | 40–240 bpm (default 120). It sets the bar until there is a loop. After that it is tape-style varispeed: 50–200 % of the loop's own tempo, every loop speeds up or slows down together and the pitch follows. The metronome, count-ins, beat repeats and delay times follow it; new takes are resampled onto the loops' timeline, and only Forward overdubs off 100 %. Clearing every track goes back to 100 %. Projects save it. |
+| Tempo | 40–240 bpm (default 120). It sets the bar until there is a loop. After that it is tape-style varispeed: 50–200 % of the loop's own tempo, every loop speeds up or slows down together and the pitch follows (or, on a track set to Stretch, stays). The metronome, count-ins, beat repeats and delay times follow it; new takes are resampled onto the loops' timeline, and only Forward Tape tracks overdub off 100 %. Clearing every track goes back to 100 %. Projects save it. |
 | Beats / bar | 1–12 (default 4): the click, on-beat stops and the beat lines. |
 | Metronome | Click on every beat while the transport runs (the count-in always clicks). Also Shift + Play. |
 | Click | Click level. |

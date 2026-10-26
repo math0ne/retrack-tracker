@@ -125,3 +125,14 @@ press F8
 wait 30
 expect_opt 1 monitor 1
 expect_opt 1 feedback 75
+
+# F7 VOLUME: hold + encoder sets the selected track's volume (a knob shows).
+hold F7
+wait 30
+enc -10
+wait 30
+shot ../build/sim/check/input_volume_knob.png
+release F7
+wait 30
+expect_opt 2 volume 60
+expect_opt 1 volume 80

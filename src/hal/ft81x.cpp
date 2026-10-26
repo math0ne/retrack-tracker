@@ -671,11 +671,20 @@ bool Ft81xDisplay::writeRamG(uint32_t addr, const void* src, uint32_t len) {
 }
 
 void Ft81xDisplay::drawRgb332(int16_t x, int16_t y, uint32_t addr, uint16_t w, uint16_t h, uint8_t scale) {
-    // spec 14 §3.2 items 3-4: SETBITMAP(addr, RGB332, w, h), BITMAP_TRANSFORM_A
+    drawBitmapFmt(4, x, y, addr, w, h, scale);   // RGB332
+}
+
+void Ft81xDisplay::drawL8(int16_t x, int16_t y, uint32_t addr, uint16_t w, uint16_t h, uint8_t scale) {
+    drawBitmapFmt(3, x, y, addr, w, h, scale);   // L8, one byte per pixel like RGB332
+}
+
+void Ft81xDisplay::drawBitmapFmt(uint32_t fmt, int16_t x, int16_t y, uint32_t addr, uint16_t w, uint16_t h,
+                                 uint8_t scale) {
+    // spec 14 §3.2 items 3-4: SETBITMAP(addr, fmt, w, h), BITMAP_TRANSFORM_A
     // = E = 256 / scale, BITMAP_SIZE(NEAREST, BORDER, BORDER, w * s, h * s).
     // FT81x programmer guide: SAVE_CONTEXT 0x22, RESTORE_CONTEXT 0x23,
-    // BITMAP_TRANSFORM_A 0x15 / E 0x19 (signed 8.8).
-    constexpr uint32_t kFmtRgb332 = 4;
+    // BITMAP_TRANSFORM_A 0x15 / E 0x19 (signed 8.8). Both formats here are one
+    // byte per pixel, so the line stride is w.
     if (!ok_ || w == 0 || h == 0 || scale == 0 || w > 1023 || h > 1023) return;
     const uint32_t sw = uint32_t(w) * scale, sh = uint32_t(h) * scale;
     if (sw > 2047 || sh > 2047) return;
@@ -684,7 +693,7 @@ void Ft81xDisplay::drawRgb332(int16_t x, int16_t y, uint32_t addr, uint16_t w, u
     cmd((0x05u << 24) | kGameHandle);
     cmd((0x01u << 24) | (addr & 0x3FFFFFu));
     cmd((0x28u << 24) | (((uint32_t(w) >> 10) & 3u) << 2) | ((uint32_t(h) >> 9) & 3u));
-    cmd((0x07u << 24) | (kFmtRgb332 << 19) | ((uint32_t(w) & 0x3FFu) << 9) | (h & 0x1FFu));
+    cmd((0x07u << 24) | (fmt << 19) | ((uint32_t(w) & 0x3FFu) << 9) | (h & 0x1FFu));
     cmd((0x29u << 24) | (((sw >> 9) & 3u) << 2) | ((sh >> 9) & 3u));
     cmd((0x08u << 24) | ((sw & 0x1FFu) << 9) | (sh & 0x1FFu));
     cmd((0x15u << 24) | (ab & 0x1FFFFu));

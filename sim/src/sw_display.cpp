@@ -366,8 +366,16 @@ bool SwDisplay::writeRamG(uint32_t addr, const void* src, uint32_t len) {
 }
 
 void SwDisplay::drawRgb332(int16_t x, int16_t y, uint32_t addr, uint16_t w, uint16_t h, uint8_t scale) {
+    drawBytes(false, x, y, addr, w, h, scale);
+}
+
+void SwDisplay::drawL8(int16_t x, int16_t y, uint32_t addr, uint16_t w, uint16_t h, uint8_t scale) {
+    drawBytes(true, x, y, addr, w, h, scale);
+}
+
+void SwDisplay::drawBytes(bool l8, int16_t x, int16_t y, uint32_t addr, uint16_t w, uint16_t h, uint8_t scale) {
     if (!w || !h || !scale || addr + uint32_t(w) * h > kRamGSize) {
-        warnOnce(5, "drawRgb332 outside RAM_G", int(addr));
+        warnOnce(5, "bitmap outside RAM_G", int(addr));
         return;
     }
     // Clip: scissor intersected with the screen.
@@ -383,8 +391,9 @@ void SwDisplay::drawRgb332(int16_t x, int16_t y, uint32_t addr, uint16_t w, uint
         const uint8_t* row = src + size_t((py - y) / scale) * w;
         for (int qx = x0; qx < x1; ++qx) {
             const uint8_t c = row[(qx - x) / scale];
-            // RGB332 expanded to 8 bits per channel, then modulated.
+            // RGB332 expanded to 8 bits per channel (L8: the byte on all three), then modulated.
             uint32_t r = uint32_t(c >> 5) * 255 / 7, g = uint32_t((c >> 2) & 7) * 255 / 7, b = uint32_t(c & 3) * 255 / 3;
+            if (l8) r = g = b = c;
             r = r * ((rgb_ >> 16) & 255) / 255;
             g = g * ((rgb_ >> 8) & 255) / 255;
             b = b * (rgb_ & 255) / 255;

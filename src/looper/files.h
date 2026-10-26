@@ -58,7 +58,7 @@ private:
         uint32_t len;        // frames; 0 = empty
         uint32_t phase;      // where its start sits in the bar (anchor mod bar)
         uint8_t mono, stopped, mode, volume, muted, send1, send2, stop;
-        uint8_t lenBeats, start, input, after, pad[4];
+        uint8_t lenBeats, start, input, after, stretch, pad[3];
     };
     struct ProjectFile {
         char magic[4];       // "LPRJ"

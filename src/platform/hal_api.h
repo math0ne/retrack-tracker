@@ -166,6 +166,12 @@ public:
     virtual void drawRgb332(int16_t x, int16_t y, uint32_t ramgAddr, uint16_t w, uint16_t h, uint8_t scale) {
         (void)x; (void)y; (void)ramgAddr; (void)w; (void)h; (void)scale;
     }
+    // The same for an L8 bitmap (FT81x format 3: one byte of luminance per
+    // pixel, stride w), e.g. a greyscale image tinted by COLOR_RGB. Default:
+    // drawn as RGB332 (tinted greys).
+    virtual void drawL8(int16_t x, int16_t y, uint32_t ramgAddr, uint16_t w, uint16_t h, uint8_t scale) {
+        drawRgb332(x, y, ramgAddr, w, h, scale);
+    }
 
     // --- frame pacing (non-blocking swap) ----------------------------------
     // True when a new frame can start without waiting: the coprocessor has

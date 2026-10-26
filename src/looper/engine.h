@@ -47,11 +47,13 @@ struct TrackOpts {
     StartMode start = StartMode::kCountIn;   // count-in: one bar of click, then record from the bar line
     InputCh input = InputCh::kStereo;
     AfterRec after = AfterRec::kPlay;
+    bool stretch = false;        // at a changed tempo: keep the pitch (grains) instead of tape
 };
 enum class OptParam : uint8_t {
     kStop, kLength, kStart, kInput, kAfter,               // per track
     kTempo, kBeats, kMetronome, kClick, kThreshold,       // global: BPM 40..240, beats per bar 1..12,
                                                           // click on/off, level, sound threshold 0..100
+    kStretch,                                             // per track: 0 tape, 1 stretch (keeps pitch)
 };
 constexpr uint8_t kMaxLenBeats = 64;
 // Sound start: threshold 0..100 maps to -60..0 dBFS; the take keeps this much
@@ -230,6 +232,7 @@ private:
     struct Grain {
         uint64_t pos16 = 0;          // read position, 16.16 frames
         uint32_t age = 0;            // output frames since the grain started
+        bool back = false;           // reads backwards (Stretch in Reverse / Ping-pong's return)
     };
     // Zavalishin state-variable filter, one per channel.
     struct Svf {
@@ -349,8 +352,9 @@ private:
         lastBeat_ = 0xFFFFFFFFu;
     }
     uint32_t tf(uint32_t f) const { return uint32_t((tAcc_ + uint64_t(f) * speed16_) >> 16); }
-    bool canDubNow(const Track& k) const {   // at a changed tempo only Forward overdubs (resampled)
-        return modeInfo(k.mode).canDub && (speed16_ == 65536 || k.mode == PlayMode::kForward);
+    bool canDubNow(const Track& k) const {   // at a changed tempo only Forward tape tracks overdub (resampled)
+        return modeInfo(k.mode).canDub &&
+               (speed16_ == 65536 || (k.mode == PlayMode::kForward && !opts_[&k - trk_].stretch));
     }
     uint32_t L_ = 0;                 // master loop length
     bool running_ = false;

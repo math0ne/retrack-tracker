@@ -22,7 +22,7 @@ namespace {
 constexpr uint32_t kScratchBytes = 64 * 1024;
 constexpr uint32_t kFxBytes = (looper::kFxMemBytes + 15u) & ~15u;
 constexpr uint32_t kLoopBytes = ot::board::kSdramSize - kScratchBytes - kFxBytes;
-static_assert(looper::App::kWaveBytes <= kScratchBytes, "waveform staging buffer");
+static_assert(uint32_t(looper::App::kEditW) * 16 <= kScratchBytes, "waveform staging buffer (bands of rows)");
 
 looper::App gApp;
 

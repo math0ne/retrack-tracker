@@ -650,6 +650,13 @@ void Engine::setOpt(OptParam p, int t, int v) {
             if (empty) o.input = InputCh(lim(v, 0, 3));
             break;
         case OptParam::kAfter: o.after = AfterRec(lim(v, 0, 2)); break;
+        case OptParam::kStretch: {
+            o.stretch = v != 0;
+            Track& k = trk_[t];
+            if (k.state == TrackState::kOverdubbing && !canDubNow(k)) k.state = TrackState::kPlaying;
+            restartGrains(k, uint64_t(posOf(k)) << 16);
+            break;
+        }
         case OptParam::kTempo:
             // Before there is a loop the tempo sets the bar; after, it sets the
             // tape speed (50 .. 200 % of the recorded tempo; the pitch follows).
@@ -771,6 +778,7 @@ uint8_t Engine::opt(OptParam p, int t) const {
         case OptParam::kStart: return uint8_t(o.start);
         case OptParam::kInput: return uint8_t(o.input);
         case OptParam::kAfter: return uint8_t(o.after);
+        case OptParam::kStretch: return o.stretch ? 1 : 0;
         case OptParam::kTempo: {
             // With a loop: the loop's tempo at the tape speed.
             if (!L_) return bpm_;
@@ -1004,6 +1012,10 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             const uint64_t pitch16 = (uint64_t(mi.pitch16) * sp) >> 16;
             const float tapeStep = float(sp) / 65536.0f / float(tapeFrames ? tapeFrames : 1u);
             const float speed = float(step16) / 65536.0f;
+            // Stretch tracks at a changed tempo: the position follows the clock
+            // (step16), two cross-faded grains read at the mode's own rate, so
+            // the pitch stays where it was recorded.
+            const bool keep = vari && opts_[t].stretch;
             const float step = (target - k.gain) / float(n);
             float g = k.gain;
             float sg[kFxSlots], sstep[kFxSlots];
@@ -1072,6 +1084,28 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                     interp(ip, j, fp, sl, sr);
                     sl *= env;
                     sr *= env;
+                } else if (keep) {
+                    for (Grain& gr : k.grain) {
+                        if (gr.age >= kGrainFrames) {
+                            if (mi.reader == ModeInfo::kDirect) {   // the read position and direction now
+                                const bool back = mi.reverse || (mi.pingPong && (ph >> 16) >= k.len);
+                                gr = Grain{uint64_t(posOfPhase(k, ph)) << 16, 0, back};
+                            } else {
+                                gr = Grain{ph, 0, false};   // tape and grain modes: the phase is the position
+                            }
+                        }
+                        const float w = gWin[gr.age * kWinSize / kGrainFrames];
+                        const uint32_t i = uint32_t(gr.pos16 >> 16), j = i + 1 < k.len ? i + 1 : 0;
+                        const float fr = float(uint32_t(gr.pos16 & 0xFFFFu)) * (1.0f / 65536.0f);
+                        float gl, gr2;
+                        interp(i, j, fr, gl, gr2);
+                        sl += w * gl;
+                        sr += w * gr2;
+                        const uint64_t rate = mi.pitch16;
+                        if (gr.back) gr.pos16 = gr.pos16 >= rate ? gr.pos16 - rate : gr.pos16 + L16 - rate;
+                        else if ((gr.pos16 += rate) >= L16) gr.pos16 -= L16;
+                        ++gr.age;
+                    }
                 } else
                 switch (mi.reader) {
                     case ModeInfo::kDirect: {   // speed 1: forward, reverse, ping-pong; overdub writes here
