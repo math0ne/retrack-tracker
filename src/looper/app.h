@@ -18,7 +18,7 @@
 //   Shift+Help   stress preset: the heaviest audio load, for measuring on the device
 //   Note         home: the loop lanes, from any page
 //   Master       mixer page on/off
-//   I.Param      track options page on/off;  Song: the same page at the tempo column
+//   Instr        track options page on/off;  Song: the same page at the tempo column
 //   FX1 / FX2    that effect slot's page on/off
 //   S.Edit       loop editor for the selected track: F1/F2 start/end marker,
 //                F3 snap, F4 trim, F5 cut, F6 erase (twice), F7 undo trim, F8 home

@@ -108,7 +108,7 @@ private:
     Line ap_[kDiffusers] = {};
     float gain_[kLines] = {};
     float lp_[kLines] = {};
-    float damp_ = 0.5f, width_ = 1.0f;
+    float damp_ = 0.5f, width_ = 1.0f, out_ = 1.0f;
     uint8_t size_ = 255, tone_ = 255;    // last applied (255 = not yet)
     float* mem_ = nullptr;
 };

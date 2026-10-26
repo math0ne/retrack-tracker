@@ -19,7 +19,13 @@ inline int16_t sat16(float v) {
 constexpr uint32_t kLineLen[Reverb::kLines] = {1031, 1327, 1523, 1801, 2053, 2311, 2579, 2861};
 constexpr uint32_t kApLen[Reverb::kDiffusers] = {142, 379, 107, 277};   // L, L, R, R
 constexpr float kApGain = 0.65f;
-constexpr float kInGain = 0.25f, kOutGain = 0.45f;
+constexpr float kInGain = 0.25f;
+// Output gain: measured with steady noise, a send at the default size (RT60
+// 2.1 s) comes back about 3 dB below its input, like the delay and chorus. A
+// longer tail stacks up more energy, so the gain falls a little with the decay
+// (small rooms are not much quieter than big ones).
+constexpr float kOutGain = 1.37f;
+constexpr float kOutRt = 2.1f;   // the decay the gain is set for
 
 static_assert(1031 + 1327 + 1523 + 1801 + 2053 + 2311 + 2579 + 2861 + 142 + 379 + 107 + 277 <= Reverb::kFloats,
               "reverb memory");
@@ -147,6 +153,7 @@ void Reverb::set(uint8_t size, uint8_t tone, uint8_t width) {
     const float rt60 = 0.3f * std::pow(30.0f, float(size) / 100.0f);
     for (int i = 0; i < kLines; ++i) gain_[i] = std::pow(10.0f, -3.0f * float(kLineLen[i]) / (rt60 * kFs));
     damp_ = 0.12f + 0.88f * float(tone) / 100.0f;
+    out_ = kOutGain * std::pow(rt60 / kOutRt, -0.2f);
 }
 
 void Reverb::process(const float* inL, const float* inR, float* outL, float* outR, uint32_t n) {
@@ -180,8 +187,8 @@ void Reverb::process(const float* inL, const float* inR, float* outL, float* out
             if (i & 1) r += x[i];
             else l += x[i];
         }
-        l *= kOutGain;
-        r *= kOutGain;
+        l *= out_;
+        r *= out_;
         const float mid = (l + r) * 0.5f;
         outL[f] = mid + (l - mid) * width_;
         outR[f] = mid + (r - mid) * width_;

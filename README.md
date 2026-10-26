@@ -79,7 +79,7 @@ eight screen keys, each centred over its key as on the stock Tracker.
 | Encoder | Selected track volume; Shift + encoder = input gain |
 | Note | Home: the loop lanes, from any page |
 | Master | Mixer page on / off |
-| I.Param | Track options page on / off |
+| Instr | Track options page on / off |
 | Song | Track options page at the tempo column (BPM, metronome, click) |
 | FX1 / FX2 | That effect slot's page on / off |
 | S.Edit | Loop editor for the selected track |
@@ -120,7 +120,7 @@ shows a hint instead.
 
 ### Track options and tempo
 
-The **I.Param** key opens the track options page: a column per track over
+The **Instr** key opens the track options page: a column per track over
 F1–F4 and the tempo column over F5 (same navigation as the mixer, F8 back).
 
 | Option (per track) | Values |

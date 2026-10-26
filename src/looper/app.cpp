@@ -335,11 +335,11 @@ void App::onInput(const ot::InputEvent& ev) {
         goHome();
         return;
     }
-    if (ev.id == b::Master || ev.id == b::InstrParams || ev.id == b::Song) {   // page keys toggle their page
+    if (ev.id == b::Master || ev.id == b::Instr || ev.id == b::Song) {   // page keys toggle their page
         const bool wasMixer = mixer_, wasOptions = options_;
         goHome();
         if (ev.id == b::Master) mixer_ = !wasMixer;
-        else if (ev.id == b::InstrParams) options_ = !wasOptions;
+        else if (ev.id == b::Instr) options_ = !wasOptions;
         else {   // Song: straight to the tempo column
             options_ = true;
             optCol_ = 4;
