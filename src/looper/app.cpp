@@ -6,6 +6,7 @@
 
 #include "ui/buttons.h"
 #include "ui/fonts/fonts.h"
+#include "looper/manual.h"
 
 namespace looper {
 
@@ -183,7 +184,7 @@ void App::loop() {
                 waveDrawnMs_[editTrack_] = now;
                 waveValid_[editTrack_] = false;   // the lane redraws when it is back on screen
             }
-        } else if (!mixer_ && !options_ && fxPage_ < 0 && !config_ && !file_ && !inPage_) {
+        } else if (!mixer_ && !options_ && fxPage_ < 0 && !config_ && !file_ && !inPage_ && !manual_) {
             updateWaves(now);   // lanes only when they are on screen
         }
         render(now);
@@ -419,6 +420,10 @@ void App::onInput(const ot::InputEvent& ev) {
             inputEncoder(ev.delta);
             return;
         }
+        if (manual_) {
+            manualScroll(ev.delta);
+            return;
+        }
         if (edit_) {
             editEncoder(ev.delta);
             return;
@@ -468,7 +473,7 @@ void App::onInput(const ot::InputEvent& ev) {
         }
         return;
     }
-    const bool home = !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !modeBar_;
+    const bool home = !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !modeBar_;
     if (home && shift_ && b::isFKey(ev.id) && ev.id != b::F4 && !f5Held_ && !f6Held_ && !f7Held_) {
         if (down) shiftFKey(ev.id - b::F1);
         return;
@@ -542,15 +547,18 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     if (ev.id == b::Master || ev.id == b::Instr || ev.id == b::Song) {   // page keys toggle their page
-        const bool wasMixer = mixer_, wasOptions = options_;
+        const bool wasMixer = mixer_, wasOptions = options_, wasManual = manual_;
         goHome();
         if (ev.id == b::Master) mixer_ = !wasMixer;
         else if (ev.id == b::Instr) options_ = !wasOptions;
-        else {   // Song: straight to the tempo column
-            options_ = true;
-            optCol_ = 4;
-            optRow_ = 0;
-        }
+        else manual_ = !wasManual;   // Song: the manual (where it was left)
+        return;
+    }
+    if ((ev.id == b::Config || ev.id == b::File) && shift_) {
+        // Shift + Config: the load / frame-rate readout; Shift + File: the
+        // stress preset (Help does the same, where there is one).
+        if (ev.id == b::Config) stats_ = !stats_;
+        else stressPreset();
         return;
     }
     if (ev.id == b::Config || ev.id == b::File) {   // settings, projects and export
@@ -595,6 +603,10 @@ void App::onInput(const ot::InputEvent& ev) {
     }
     if (config_ && nav) {
         configKey(ev.id);
+        return;
+    }
+    if (manual_ && nav) {
+        manualKey(ev.id);
         return;
     }
     if (inPage_ && nav) {
@@ -689,7 +701,7 @@ void App::closePerf() {
 }
 
 void App::goHome() {
-    mixer_ = options_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = false;
+    mixer_ = options_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = manual_ = false;
     midi_.learn(-1);
     fxPage_ = -1;
     fxBar_ = modeBar_ = false;
@@ -1001,7 +1013,7 @@ void App::render(uint32_t now) {
     words_ = 0;
     d_->dlStart();
     // The lanes sit on plain black; the other pages on a top-lit gradient.
-    const bool lanes = fxPage_ < 0 && !edit_ && !config_ && !mixer_ && !options_ && !file_ && !inPage_;
+    const bool lanes = fxPage_ < 0 && !edit_ && !config_ && !mixer_ && !options_ && !file_ && !inPage_ && !manual_;
     d_->clearColorRGB(lanes ? 0 : r8(kBg), lanes ? 0 : g8(kBg), lanes ? 0 : b8(kBg));
     d_->clear(true, true, true);
     if (!lanes) d_->gradient(0, 0, 0x202020, 0, 479, 0x080808);   // light falls from the top
@@ -1012,6 +1024,7 @@ void App::render(uint32_t now) {
     else if (config_) drawConfig();
     else if (file_) drawFile();
     else if (inPage_) drawInput();
+    else if (manual_) drawManual();
     else if (mixer_) drawMixer();
     else if (options_) drawOptions();
     else
@@ -1287,7 +1300,7 @@ void App::drawFKeys() {
             std::snprintf(val[i], sizeof val[i], "%s",
                           m >= 0 ? kModes[m].name : (m == kModeMore ? (modePage_ ? "< Back" : "More >") : ""));
             hot = m >= 0 && int(mode) == m;
-        } else if (shift_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ &&
+        } else if (shift_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ &&
                    !f5Held_ && !f6Held_ && !f7Held_) {
             // The Shift layer of the home page.
             const bool dubbable = v.len.load() != 0 && modeInfo(mode).canDub;
@@ -1357,6 +1370,18 @@ void App::drawFKeys() {
             else if (i == 7) v = "Loops";
             std::snprintf(val[i], sizeof val[i], "%s", v);
             hot = i == 0 && armed;
+        } else if (manual_) {   // F1..F7 the chapters, F8 home
+            if (i < kManualChapters) {
+                title[i] = "MANUAL";
+                std::snprintf(val[i], sizeof val[i], "%s", kManual[i].key);
+                hot = manChapter_ == i;
+            } else if (i == 7) {
+                title[i] = "HOME";
+                std::snprintf(val[i], sizeof val[i], "Loops");
+            } else {
+                title[i] = "";
+                val[i][0] = '\0';
+            }
         } else if (inPage_) {   // quick keys for the main switches, F6 / F8 close
             const uint8_t ch = engine_.opt(OptParam::kInput, selected_);
             static const char* const kCh[4] = {"Stereo", "Mono L", "Mono R", "Mono sum"};
@@ -1519,6 +1544,7 @@ void App::drawFKeys() {
             else if (fxPage_ >= 0) tcol = i < 6 ? scale(hc, 0.9f) : kDim;
             else if (mixer_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
             else if (options_) tcol = i < 5 ? scale(hc, 0.9f) : kDim;
+            else if (manual_) tcol = kDim;   // the chapter keys alike
             else if (!modeBar_ && i == 3) tcol = engine_.opt(OptParam::kMetronome) ? kAmber : kDim;   // F4 is global
             else if (!modeBar_ && (i < 5 || i == 6)) tcol = scale(tc, 0.9f);
             color(tcol);
@@ -1531,7 +1557,7 @@ void App::drawFKeys() {
     // Home page: the input level inside the INPUT cell, the track's level inside VOLUME
     // (not under the Shift layer, where those keys do other things).
     const bool shiftLayer = shift_ && !f5Held_ && !f6Held_ && !f7Held_;
-    if (!modeBar_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !shiftLayer) {
+    if (!modeBar_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !shiftLayer) {
         const int x0 = 5 * kKeyW + 10, x1 = 6 * kKeyW - 10;
         for (int c = 0; c < 2; ++c) {
             const float m = inMeter_[c];
@@ -2075,6 +2101,71 @@ const char* const kInHelp[2][6] = {
 const char* const kMonFxName[4] = {"Off", "FX 1", "FX 2", "Both"};
 const char* const kChName[4] = {"Stereo", "Mono L", "Mono R", "Mono sum"};
 }  // namespace
+
+namespace {
+constexpr int kManLines = 18;   // lines on screen
+constexpr int kManLineH = 20;
+}  // namespace
+
+void App::manualKey(uint8_t id) {
+    if (b::isFKey(id)) {
+        const int c = id - b::F1;
+        if (c == 7) goHome();
+        else if (c < kManualChapters && c != manChapter_) {
+            manChapter_ = c;
+            manScroll_ = 0;
+        }
+        return;
+    }
+    if (id == b::Up) manualScroll(-1);
+    else if (id == b::Down) manualScroll(1);
+    else if (id == b::Left && manChapter_ > 0) {
+        --manChapter_;
+        manScroll_ = 0;
+    } else if (id == b::Right && manChapter_ + 1 < kManualChapters) {
+        ++manChapter_;
+        manScroll_ = 0;
+    }
+}
+
+void App::manualScroll(int delta) {
+    const int top = kManual[manChapter_].count - kManLines;
+    manScroll_ += delta;
+    if (manScroll_ > top) manScroll_ = top;
+    if (manScroll_ < 0) manScroll_ = 0;
+}
+
+void App::drawManual() {
+    const ManualChapter& ch = kManual[manChapter_];
+    char buf[48];
+    color(kAmber);
+    text(20, 22, kFontBig, Disp::kOptCenterY, ch.title);
+    std::snprintf(buf, sizeof buf, "%d / %d", manChapter_ + 1, kManualChapters);
+    color(kDim);
+    text(780, 22, kFontSmall, Disp::kOptRightX | Disp::kOptCenterY, buf);
+    for (int r = 0; r < kManLines && manScroll_ + r < ch.count; ++r) {
+        const char* line = ch.lines[manScroll_ + r];
+        if (!line[0]) continue;
+        const int y = 52 + r * kManLineH;
+        if (line[0] == '#' && line[1] == ' ') {   // a heading
+            color(kInk);
+            text(24, y, kFontSmall, 0, line + 2);
+        } else {
+            color(0xA8A8A8);
+            text(24, y, kFontSmall, 0, line);
+        }
+    }
+    // A scroll bar when the chapter is longer than the screen.
+    if (ch.count > kManLines) {
+        const int y0 = 52, y1 = 52 + kManLines * kManLineH;
+        const int h = (y1 - y0) * kManLines / ch.count;
+        const int top = y0 + (y1 - y0 - h) * manScroll_ / (ch.count - kManLines);
+        color(kFaint);
+        fillRect(784, y0, 788, y1, 2);
+        color(kDim);
+        fillRect(784, top, 788, top + h, 2);
+    }
+}
 
 void App::inputKey(uint8_t id) {
     auto flipMonitor = [&] {

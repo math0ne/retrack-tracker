@@ -25,9 +25,10 @@
 //   Encoder      selected track volume (Shift: input gain)
 //   Shift+Play   metronome on/off
 //   Config       settings; F1 there: Firmware (flash an image from /Firmware)
-//   Help         toggle the load / frame-rate readout
+//   Shift+Config toggle the load / frame-rate readout (Help too)
 //   Shift+Help   stress preset: the heaviest audio load, for measuring on the device
 //   Note         home: the loop lanes, from any page
+//   Song         the manual
 //   Master       mixer page on/off
 //   Instr        track options page on/off;  Song: the same page at the tempo column
 //   FX1 / FX2    that effect slot's page on/off
@@ -190,6 +191,12 @@ private:
     int confirm_ = -1;                 // F-key waiting for its second press
     uint32_t confirmUntilMs_ = 0;
 
+    // The manual (Song): chapters on F1..F7, Up / Down / encoder scroll.
+    bool manual_ = false;
+    int manChapter_ = 0, manScroll_ = 0;
+    void manualKey(uint8_t id);
+    void manualScroll(int delta);
+    void drawManual();
     // Input page (F6 on the home page): the input card (source, gain, the selected
     // track's channels, monitor, overdub feedback) and the metronome card.
     bool inPage_ = false;

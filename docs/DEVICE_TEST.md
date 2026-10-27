@@ -53,7 +53,7 @@ Things the simulator could not check, because it maps them its own way:
 
 ## 2. Performance
 
-Press **Help** for the on-screen readout, and keep the serial terminal open.
+Press **Shift + Config** for the on-screen readout, and keep the serial terminal open.
 Once a second it prints a line like:
 
 ```
@@ -79,7 +79,7 @@ Run these and note the lines:
    and waves/s: the waveform uploads are the main-loop cost).
 4. **Performance mode**: hold several effects at once, filter sweeps and
    repeats.
-5. **Worst case**: record a loop on all four tracks, then **Shift + Help**.
+5. **Worst case**: record a loop on all four tracks, then **Shift + File**.
    Every track goes to Granular (8 grains, an octave up) with both filters
    latched and full sends; FX 1 becomes a reverb and FX 2 Clouds at full
    density (24 grains); the metronome comes on. This is the highest load the

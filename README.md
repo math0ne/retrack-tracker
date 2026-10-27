@@ -122,12 +122,13 @@ mode, F4 metronome on/off, F5 feedback 100 / 90 / 75 / 50 %.
 | Note | Home: the loop lanes, from any page |
 | Master | Mixer page on / off |
 | Instr | Track options page on / off |
-| Song | Track options page at the tempo column (BPM, metronome, click) |
 | FX1 / FX2 | That effect slot's page on / off |
 | S.Edit | Loop editor for the selected track |
 | Config | Settings page (F1 firmware, F2 MIDI) |
 | File | Projects (save / load) and WAV export |
-| Help | Show / hide the CPU, frame-rate and display-list readout; Shift + Help: stress preset |
+| Shift + Config | Show / hide the CPU, frame-rate and display-list readout (Help too, if the panel has one) |
+| Shift + File | Stress preset (Shift + Help too) |
+| Song | The manual: chapters on F1–F7, Up / Down or the encoder scroll, F8 home |
 | Power (hold 1.5 s) | Switch off |
 
 ### Config, projects and export
