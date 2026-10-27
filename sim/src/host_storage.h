@@ -28,6 +28,7 @@ public:
     bool remove(const char* path) override;
     bool rename(const char* from, const char* to) override;
     int32_t listDir(const char* path, DirFn fn, void* ctx) override;
+    bool preallocate(const char* path, uint32_t bytes) override;
 
 private:
     // Resolve a card path to a host path. If the last component does not exist,

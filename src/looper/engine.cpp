@@ -83,6 +83,9 @@ void Engine::init(const TrackMemory mem[kTracks], uint8_t* fxMem) {
         // The SDRAM holds garbage after power-up: zero every buffer once.
         trk_[t].written = mem[t].capacity;
         zeroTodo_[t].store(mem[t].capacity);
+        const uint32_t ramPeaks = mem[t].capacity / kPeakFrames * 2;
+        zeroPeakFrom_[t] = ramPeaks;
+        zeroPeakTo_[t].store(mem[t].peakBytes > ramPeaks ? mem[t].peakBytes : 0);
     }
     for (int c = 0; c < 2; ++c) {
         inPeak_[c].store(0);
@@ -100,6 +103,15 @@ void Engine::post(Cmd c, uint8_t track, int16_t arg, uint32_t a, uint32_t b) {
 }
 
 void Engine::service() {
+    for (int t = 0; t < kTracks; ++t) {   // a long take's peaks past the RAM's
+        const uint32_t to = zeroPeakTo_[t].load(std::memory_order_acquire);
+        if (!to) continue;
+        const uint32_t from = zeroPeakFrom_[t], n = to - from < 32768u ? to - from : 32768u;
+        std::memset(mem_[t].peaks + from, 0, n);
+        zeroPeakFrom_[t] = from + n;
+        if (from + n >= to) zeroPeakTo_[t].store(0, std::memory_order_release);
+        return;
+    }
     for (int t = 0; t < kTracks; ++t) {
         uint32_t todo = zeroTodo_[t].load(std::memory_order_acquire);
         if (!todo) continue;
@@ -308,21 +320,66 @@ void Engine::renderGrains(int t, uint64_t ph0, uint64_t step16, uint32_t n) {
         // Centred on the playhead (the grain's middle plays when the loop is
         // there), scattered by Spread, panned a little at random.
         const int32_t here = int32_t(((ph0 + uint64_t(f) * step16) >> 16) % uint64_t(len));
-        int32_t start = here - int32_t(width * ratio * 0.5f) +
-                        int32_t(scatter * (2.0f * stmlib::Random::GetFloat() - 1.0f));
-        start %= len;
+        const int32_t raw = here - int32_t(width * ratio * 0.5f) +
+                            int32_t(scatter * (2.0f * stmlib::Random::GetFloat() - 1.0f));
+        int32_t start = raw % len;
         if (start < 0) start += len;
         const float pan = 0.5f + 0.3f * (stmlib::Random::GetFloat() - 0.5f);
         const float gl = pan < 0.5f ? 1.0f : 2.0f * (1.0f - pan), gr = pan < 0.5f ? 2.0f * pan : 1.0f;
-        free->Start(int32_t(f), len, start, int32_t(width) & ~1, int32_t(ratio * 65536.0f), 1.0f, gl, gr,
-                    clouds::GRAIN_QUALITY_HIGH);
+        int32_t w = int32_t(width) & ~1;
+        if (k.head) {
+            // A long take: the grain reads either the RAM part or the ring,
+            // wholly, without wrapping. It keeps out of the loop's end, off
+            // the RAM part's edge, and inside what the ring holds (with its
+            // own length to spare behind: the ring moves on as it plays).
+            const size_t idx = size_t(free - k.cg);
+            int32_t S = int32_t(float(w) * ratio) + 4;   // buffer frames it reads
+            if (S >= len) S = len - 1;
+            start = raw < 0 ? 0 : (raw + S > len ? len - S : raw);   // no wrap: at the start it stays there
+            uint32_t B0 = k.start + uint32_t(start);
+            bool card = B0 + uint32_t(S) > k.head;
+            if (card && B0 < k.head) {   // across the RAM part's edge: to the side it is mostly on
+                if (k.head - B0 > uint32_t(S) / 2 && k.head >= uint32_t(S)) {
+                    B0 = k.head - uint32_t(S);
+                    card = false;
+                } else {
+                    B0 = k.head;
+                }
+            }
+            uint32_t first = B0;
+            if (card) {
+                const StreamView& sv = stream_[t];
+                const uint32_t lo = sv.rStart.load(std::memory_order_acquire) + uint32_t(w);
+                const uint32_t hi = sv.rEnd.load(std::memory_order_acquire);
+                if (hi < lo + 256) continue;   // the ring is not there yet: no grain now
+                if (hi - lo < uint32_t(S)) {   // too long for the ring: a shorter grain
+                    S = int32_t(hi - lo);
+                    w = int32_t(float(S - 4) / ratio) & ~1;
+                    if (w < 64) continue;
+                }
+                if (B0 < lo) B0 = lo;
+                if (B0 + uint32_t(S) > hi) B0 = hi - uint32_t(S);
+                first = (B0 - k.head) % ringOf(t);
+            }
+            k.cgRing[idx] = card;
+            k.cgB0[idx] = B0;
+            k.cgFirst[idx] = first;
+            free->Start(int32_t(f), int32_t(card ? ringOf(t) : k.head), int32_t(first), w, int32_t(ratio * 65536.0f),
+                        1.0f, gl, gr, clouds::GRAIN_QUALITY_HIGH);
+            continue;
+        }
+        free->Start(int32_t(f), len, start, w, int32_t(ratio * 65536.0f), 1.0f, gl, gr, clouds::GRAIN_QUALITY_HIGH);
     }
     int active = 0;
-    for (clouds::Grain& c : k.cg)
-        if (c.active()) {
-            c.OverlapAdd(buf, len, grainOut_, grainEnv_, n, k.mono ? 1 : 2);
-            ++active;
-        }
+    const int16_t* const ringBuf = m.frames + (k.mono ? size_t(k.head) : 2 * size_t(k.head));
+    for (int i = 0; i < kLoopGrains; ++i) {
+        clouds::Grain& c = k.cg[i];
+        if (!c.active()) continue;
+        if (!k.head) c.OverlapAdd(buf, len, grainOut_, grainEnv_, n, k.mono ? 1 : 2);
+        else if (k.cgRing[i]) c.OverlapAdd(ringBuf, int32_t(ringOf(t)), grainOut_, grainEnv_, n, k.mono ? 1 : 2);
+        else c.OverlapAdd(m.frames, int32_t(k.head), grainOut_, grainEnv_, n, k.mono ? 1 : 2);
+        ++active;
+    }
     // Overlapping windows add up: about 1 / sqrt(n) for n grains (Clouds), gliding.
     const float target = active > 1 ? 1.0f / std::sqrt(float(active)) * 1.4f : 1.0f;
     for (uint32_t f = 0; f < n; ++f) {
@@ -337,9 +394,13 @@ int Engine::loopGrains(int t, LoopGrain* out) const {
     const int32_t len = int32_t(k.len);
     int n = 0;
     if (!len) return 0;
-    for (const clouds::Grain& c : k.cg) {   // read while the audio runs: a frame late at worst
+    for (int i = 0; i < kLoopGrains; ++i) {   // read while the audio runs: a frame late at worst
+        const clouds::Grain& c = k.cg[i];
         if (!c.active()) continue;
-        int32_t p = c.readIndex() % len;
+        // A long take's grain reads the buffer (the RAM part or the ring): back to its loop frame.
+        int32_t p = k.head ? int32_t(k.cgB0[i] + uint32_t(c.readIndex() - int32_t(k.cgFirst[i]))) - int32_t(k.start)
+                           : c.readIndex();
+        p %= len;
         if (p < 0) p += len;
         const float e = c.envelopePhase() > 2.0f ? 2.0f : c.envelopePhase();
         out[n++] = {p, c.width(), 1.0f - std::fabs(1.0f - e), c.gainR() / (c.gainL() + c.gainR() + 0.001f)};
@@ -451,27 +512,19 @@ void Engine::beginTake(int t, uint32_t tf, const int16_t* pre, uint32_t preFrame
     k.recStart = tf;
     k.stopAt = o.lenBeats ? uint32_t(o.lenBeats) * beatLen() : 0;
     const uint32_t n = preFrames < k.written ? preFrames : k.written;
-    const TrackMemory& m = mem_[t];
     // Silence before the take in its loop: the take fades in (no click on the press).
     k.fadeAt = k.written - n > 0 ? k.written - n : 0xFFFFFFFFu;
     for (uint32_t i = 0; i < n; ++i) {
         const uint32_t dst = k.written - n + i, src = preFrames - n + i;
         const float g = k.fadeIn(dst);
         const int16_t l = int16_t(float(pre[2 * src]) * g), r = int16_t(float(pre[2 * src + 1]) * g);
-        if (k.mono) {
-            const int16_t v = fold(k.input, l, r);
-            m.frames[dst] = v;
-            notePeakMono(m.peaks, dst, v);
-        } else {
-            m.frames[2 * dst] = l;
-            m.frames[2 * dst + 1] = r;
-            notePeak(m.peaks, dst, l, r);
-        }
+        recFrame(t, dst, l, r, true, true);
     }
     k.recPos16 = int64_t(k.written) << 16;
     k.prevL = n ? pre[2 * (preFrames - 1)] : 0;
     k.prevR = n ? pre[2 * (preFrames - 1) + 1] : 0;
     k.state = TrackState::kRecording;
+    beginStream(t);
 }
 
 void Engine::dubVari(int t, uint64_t ph, uint64_t step16, const int16_t* in, float oldK, float inK) {
@@ -482,22 +535,23 @@ void Engine::dubVari(int t, uint64_t ph, uint64_t step16, const int16_t* in, flo
     const TrackMemory& m = mem_[t];
     const int16_t l = in ? in[0] : 0, r = in ? in[1] : 0;
     const bool mono = k.mono;
-    int16_t* const fr = m.frames + (mono ? size_t(k.start) : size_t(k.start) * 2);
     const int64_t hi = int64_t(ph), lo = hi - int64_t(step16);
     for (int64_t x = (lo >> 16) + 1; x <= (hi >> 16); ++x) {
         const uint32_t i = uint32_t(((x % int64_t(k.len)) + int64_t(k.len)) % int64_t(k.len));
         saveUndoCell(t, i);
         const float a = step16 ? float(x * 65536 - lo) / float(step16) : 1.0f;
         const float vl = lerp(k.prevL, l, a), vr = lerp(k.prevR, r, a);
+        int16_t* p = dubFrame(t, i);   // RAM, or a long take's ring
+        if (!p) continue;
         if (mono) {
-            const int16_t nv = sat16(float(fr[i]) * oldK + float(fold(k.input, sat16(vl), sat16(vr))) * inK);
-            fr[i] = nv;
+            const int16_t nv = sat16(float(p[0]) * oldK + float(fold(k.input, sat16(vl), sat16(vr))) * inK);
+            p[0] = nv;
             notePeakMono(m.peaks, k.start + i, nv);
         } else {
-            const int16_t nl = sat16(float(fr[2 * i]) * oldK + vl * inK);
-            const int16_t nr = sat16(float(fr[2 * i + 1]) * oldK + vr * inK);
-            fr[2 * i] = nl;
-            fr[2 * i + 1] = nr;
+            const int16_t nl = sat16(float(p[0]) * oldK + vl * inK);
+            const int16_t nr = sat16(float(p[1]) * oldK + vr * inK);
+            p[0] = nl;
+            p[1] = nr;
             notePeak(m.peaks, k.start + i, nl, nr);
         }
     }
@@ -541,7 +595,7 @@ void Engine::finishNow(int t) {
     }
     const uint32_t unit = o.stop == StopQuant::kBar && !o.lenBeats ? barLen() : beatLen();
     uint32_t len = (n + unit - 1) / unit * unit;   // the rest of the unit stays silent
-    if (len > capOf(t)) len = capOf(t) / unit * unit;
+    if (len > recCap(t)) len = recCap(t) / unit * unit;
     finishRecording(t, len ? len : n);
 }
 
@@ -558,19 +612,22 @@ void Engine::finishRecording(int t, uint32_t len) {
         // or fixed-length first takes keep the tempo's bar.
         L_ = (o.stop == StopQuant::kFree && !o.lenBeats) ? len : barLen();
     }
-    if (len > capOf(t)) len = capOf(t);
+    if (len > recCap(t)) len = recCap(t);
     k.len = len;
     k.stopAt = 0;
+    const bool mirrored = stream_[t].active.load(std::memory_order_relaxed);
+    if (mirrored) stream_[t].recorded.store(n < len ? n : len, std::memory_order_relaxed);   // then zeros to len
     // Frames past len (a late press) were written too: the next clear zeroes them.
     k.written = n > len ? n : len;
     // Loop point: blend what followed the end into the start (an overdub writes
     // across the loop point itself; off speed 1 the tail is not on the timeline).
     k.tailTo = 0;
     if (o.after != AfterRec::kOverdub && speed16_ == 65536 && len >= 4 * kXfadeFrames &&
-        k.start + len + kXfadeFrames <= capOf(t)) {
+        k.start + len + kXfadeFrames <= recCap(t)) {
         if (k.written >= len + kXfadeFrames) crossfadeLoopPoint(t);   // a late press recorded it already
         else k.tailTo = len + kXfadeFrames;
     }
+    if (mirrored && !k.tailTo) endTake(t);   // with a tail: once it is in
     switch (o.after) {
         case AfterRec::kPlay: k.state = TrackState::kPlaying; break;
         case AfterRec::kOverdub:
@@ -587,16 +644,18 @@ void Engine::crossfadeLoopPoint(int t) {
     Track& k = trk_[t];
     const TrackMemory& m = mem_[t];
     const uint32_t s = k.start, L = k.len;
+    // A long take's tail (past its end) is in the ring.
+    auto tailAt = [&](uint32_t i) { return k.head && i >= k.head ? k.head + (i - k.head) % ringOf(t) : s + i; };
     for (uint32_t i = 0; i < kXfadeFrames; ++i) {
         const float w = (float(i) + 0.5f) / float(kXfadeFrames);   // 0: the tail .. 1: the take
         if (k.mono) {
-            const float a = m.frames[s + i], b = m.frames[s + L + i];
+            const float a = m.frames[s + i], b = m.frames[tailAt(L + i)];
             const int16_t v = sat16(b + (a - b) * w);
             m.frames[s + i] = v;
             notePeakMono(m.peaks, s + i, v);
         } else {
             int16_t* fa = m.frames + 2 * size_t(s + i);
-            const int16_t* fb = m.frames + 2 * size_t(s + L + i);
+            const int16_t* fb = m.frames + 2 * size_t(tailAt(L + i));
             const int16_t l = sat16(float(fb[0]) + (float(fa[0]) - float(fb[0])) * w);
             const int16_t r = sat16(float(fb[1]) + (float(fa[1]) - float(fb[1])) * w);
             fa[0] = l;
@@ -606,11 +665,126 @@ void Engine::crossfadeLoopPoint(int t) {
     }
 }
 
+uint32_t Engine::recCap(int t) const {
+    // A long take: its head and the stream file; one that could become long
+    // (a stream file is ready, the take fills its buffer from 0): the same.
+    const Track& k = trk_[t];
+    if (k.head || stream_[t].active.load(std::memory_order_relaxed)) return k.fileUnits;   // the file holds it all
+    return capOf(t);
+}
+
+bool Engine::recFrame(int t, uint32_t i, int16_t l, int16_t r, bool take, bool peaks) {
+    Track& k = trk_[t];
+    const TrackMemory& m = mem_[t];
+    StreamView& sv = stream_[t];
+    uint32_t b = i;   // the buffer index
+    if (take && !k.head && headOf(t) && i >= headOf(t) && sv.active.load(std::memory_order_relaxed)) {
+        // The take outgrows its RAM: from here on it goes to the card only
+        // (it has been going there all along).
+        k.head = headOf(t);
+        for (clouds::Grain& c : k.cg) c.Init();   // Granular: its grains start again where the buffer holds them
+        sv.rStart.store(k.head, std::memory_order_relaxed);
+        sv.rEnd.store(k.head, std::memory_order_relaxed);
+        sv.head.store(k.head, std::memory_order_release);
+    }
+    if (k.head && i >= k.head) {
+        const uint32_t ring = ringOf(t);
+        if (i - sv.flushed.load(std::memory_order_acquire) >= ring) {   // the card is a whole ring behind
+            sv.overruns.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        b = k.head + (i - k.head) % ring;
+    }
+    if (k.mono) {
+        const int16_t v = fold(k.input, l, r);
+        m.frames[b] = v;
+        if (peaks) notePeakMono(m.peaks, i, v);
+    } else {
+        m.frames[2 * b] = l;
+        m.frames[2 * b + 1] = r;
+        if (peaks) notePeak(m.peaks, i, l, r);
+    }
+    return true;
+}
+
+int16_t* Engine::dubFrame(int t, uint32_t i) {
+    Track& k = trk_[t];
+    const TrackMemory& m = mem_[t];
+    if (!k.head) return m.frames + (k.mono ? size_t(k.start + i) : 2 * size_t(k.start + i));
+    // A long take: its block goes back to the card (and the pass can be undone there).
+    StreamView& sv = stream_[t];
+    const uint32_t bi = k.start + i;   // its buffer frame (the file mirrors the buffer)
+    int16_t* p;
+    if (bi >= k.head) {
+        if (bi < sv.rStart.load(std::memory_order_acquire) || bi >= sv.rEnd.load(std::memory_order_acquire)) {
+            sv.dropped.fetch_add(1, std::memory_order_relaxed);
+            return nullptr;
+        }
+        const uint32_t s = (bi - k.head) % ringOf(t);
+        p = m.frames + (k.mono ? size_t(k.head + s) : 2 * size_t(k.head + s));
+    } else {
+        p = m.frames + (k.mono ? size_t(bi) : 2 * size_t(bi));
+    }
+    const uint32_t b = bi / blockOf(t);
+    sv.dirty[b >> 5].fetch_or(1u << (b & 31), std::memory_order_relaxed);
+    if (k.cardUndo) k.dubUndo = 1;
+    return p;
+}
+
+void Engine::beginStream(int t) {
+    Track& k = trk_[t];
+    StreamView& sv = stream_[t];
+    const uint32_t ff = sv.fileFrames.load(std::memory_order_acquire);
+    if (!ff || k.start || !headOf(t)) {
+        sv.active.store(false, std::memory_order_relaxed);
+        return;
+    }
+    k.fileUnits = k.mono ? 2 * ff : ff;
+    sv.ring.store(ringOf(t), std::memory_order_relaxed);
+    sv.flushed.store(0, std::memory_order_relaxed);
+    sv.recorded.store(k.written, std::memory_order_relaxed);
+    sv.len.store(0, std::memory_order_relaxed);
+    sv.rStart.store(0, std::memory_order_relaxed);
+    sv.rEnd.store(0, std::memory_order_relaxed);
+    sv.undoReq.store(0, std::memory_order_relaxed);
+    sv.undoDone.store(false, std::memory_order_relaxed);
+    for (std::atomic<uint32_t>& w : sv.dirty) w.store(0, std::memory_order_relaxed);
+    sv.recording.store(true, std::memory_order_relaxed);
+    sv.take.fetch_add(1, std::memory_order_relaxed);
+    sv.active.store(true, std::memory_order_release);
+}
+
+void Engine::endTake(int t) {
+    StreamView& sv = stream_[t];
+    sv.len.store(trk_[t].len, std::memory_order_relaxed);
+    sv.recording.store(false, std::memory_order_release);
+    if (!trk_[t].head) sv.active.store(false, std::memory_order_release);   // it fits in RAM: the card is not needed
+}
+
 void Engine::clearTrack(int t) {
     Track& k = trk_[t];
     const uint8_t vol = k.volume;
     // Zeroing counts stereo frames (4 bytes); a mono track's frames are 2 bytes.
-    const uint32_t dirty = k.mono ? (k.written + 1) / 2 : k.written;
+    // A long take's card part is not zeroed (the next take overwrites it); its
+    // peaks past the RAM's are.
+    uint32_t dirty = k.mono ? (k.written + 1) / 2 : k.written;
+    if (dirty > mem_[t].capacity) dirty = mem_[t].capacity;
+    if (k.head) {
+        const uint32_t used = k.written > k.start + k.len ? k.written : k.start + k.len;   // a loaded take too
+        const uint32_t cells = (used + kPeakFrames - 1) / kPeakFrames;
+        uint32_t to = k.mono ? cells : 2 * cells;
+        if (to > mem_[t].peakBytes) to = mem_[t].peakBytes;
+        const uint32_t from = mem_[t].capacity / kPeakFrames * 2;
+        if (to > from) {
+            zeroPeakFrom_[t] = from;
+            zeroPeakTo_[t].store(to, std::memory_order_release);
+        }
+    }
+    StreamView& sv = stream_[t];
+    sv.head.store(0, std::memory_order_release);
+    sv.active.store(false, std::memory_order_release);
+    sv.recording.store(false, std::memory_order_relaxed);
+    sv.undoReq.store(0, std::memory_order_relaxed);
     k = Track{};
     k.volume = vol;
     k.written = dirty;
@@ -691,6 +865,38 @@ void Engine::apply(const Msg& m) {
         case kInstall:
             // A loop the app has read into this empty track (its peaks too):
             // from its start, its bar phase kept, playing or stopped.
+            if (k.state == TrackState::kEmpty && m.a && (m.arg & 4)) {
+                // A long take: its RAM part is in, the whole of it in stream file A.
+                k.mono = (m.arg & 1) != 0;
+                StreamView& sv = stream_[t];
+                const uint32_t ff = sv.fileFrames.load(std::memory_order_acquire);
+                if (!ff || !headOf(t) || m.a <= headOf(t) || m.a > (k.mono ? 2 * ff : ff)) break;
+                k.len = m.a;
+                k.written = headOf(t) < m.a ? headOf(t) : m.a;   // what a clear zeroes (the RAM part)
+                k.start = 0;
+                k.anchor = m.b;
+                k.offset16 = 0;
+                k.undo.has = false;
+                k.head = headOf(t);
+                k.fileUnits = k.mono ? 2 * ff : ff;
+                sv.ring.store(ringOf(t), std::memory_order_relaxed);
+                sv.recorded.store(m.a, std::memory_order_relaxed);
+                sv.len.store(m.a, std::memory_order_relaxed);
+                sv.flushed.store(m.a, std::memory_order_relaxed);
+                sv.rStart.store(k.head, std::memory_order_relaxed);
+                sv.rEnd.store(k.head, std::memory_order_relaxed);
+                sv.undoReq.store(0, std::memory_order_relaxed);
+                sv.undoDone.store(false, std::memory_order_relaxed);
+                for (std::atomic<uint32_t>& w : sv.dirty) w.store(0, std::memory_order_relaxed);
+                sv.recording.store(false, std::memory_order_relaxed);
+                sv.take.fetch_add(1, std::memory_order_relaxed);
+                sv.active.store(true, std::memory_order_relaxed);
+                sv.head.store(k.head, std::memory_order_release);
+                k.state = (m.arg & 2) ? TrackState::kStopped : TrackState::kPlaying;
+                restartGrains(k, uint64_t(posOf(k)) << 16);
+                view_[t].peakVersion.fetch_add(1, std::memory_order_relaxed);
+                break;
+            }
             if (k.state == TrackState::kEmpty && m.a && m.a <= (m.arg & 1 ? 2 * mem_[t].capacity : mem_[t].capacity)) {
                 k.mono = (m.arg & 1) != 0;
                 k.len = m.a;
@@ -742,7 +948,23 @@ void Engine::apply(const Msg& m) {
             // A main-loop job; a cut leaves at least one frame and silences the
             // track while the audio moves.
             const bool cut = m.cmd == kEditCut;
-            if (!k.len || k.busy || job_.state.load(std::memory_order_acquire) || m.b <= m.a || m.b > k.len) break;
+            if (k.head) {   // a long take: the Streamer edits it on the card; silent meanwhile
+                if (!k.len || k.busy || m.b <= m.a || m.b > k.len || (cut && m.b - m.a >= k.len)) break;
+                StreamView& sv = stream_[t];
+                if (k.state == TrackState::kOverdubbing) k.state = TrackState::kPlaying;
+                k.dubX = 0.0f;
+                k.dubSession = false;
+                k.busy = true;
+                if (cut) k.undo.has = false;   // the audio moves: an older trim cannot come back
+                dropUndo(k);
+                sv.editA = m.a;
+                sv.editB = m.b;
+                sv.editDone.store(false, std::memory_order_relaxed);
+                sv.editReq.store(cut ? 1 : 2, std::memory_order_release);
+                break;
+            }
+            if (!k.len || k.busy || job_.state.load(std::memory_order_acquire) || m.b <= m.a || m.b > k.len)
+                break;
             if (cut && m.b - m.a >= k.len) break;
             job_.track = uint8_t(t);
             job_.kind = m.cmd;
@@ -776,6 +998,16 @@ void Engine::apply(const Msg& m) {
         case kClockOut: clockOut_ = m.arg != 0; break;
         case kDubUndo: {
             const bool want = m.arg == 0 ? k.dubUndo == 1 : k.dubUndo == 2;
+            if (k.head) {   // a long take: the Streamer swaps the pass's blocks on the card; silent meanwhile
+                if (!want || k.busy || !k.cardUndo) break;
+                if (k.state == TrackState::kOverdubbing) k.state = TrackState::kPlaying;
+                k.dubX = 0.0f;
+                k.dubSession = false;
+                k.busy = true;
+                stream_[t].undoDone.store(false, std::memory_order_relaxed);
+                stream_[t].undoReq.store(m.arg == 0 ? 1 : 2, std::memory_order_release);
+                break;
+            }
             if (!want || !k.len || k.busy || job_.state.load(std::memory_order_acquire)) break;
             if (k.state == TrackState::kOverdubbing) k.state = TrackState::kPlaying;
             k.dubX = 0.0f;
@@ -796,7 +1028,7 @@ void Engine::apply(const Msg& m) {
             const bool busyJob = job_.state.load(std::memory_order_acquire) != 0;
             const bool loop = k.len && !k.busy && (k.state == TrackState::kPlaying || k.state == TrackState::kStopped ||
                                                    k.state == TrackState::kOverdubbing || k.state == TrackState::kQueued);
-            if (!loop) break;
+            if (!loop || k.head) break;
             if (m.arg == 0) {   // halve: instant, the first half stays (where it plays now, wrapped)
                 if (k.len / 2 >= kMinMasterFrames) {
                     setLength(k, k.len / 2);
@@ -1101,11 +1333,37 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
         qTail_.store(tail, std::memory_order_release);
     }
     if (job_.state.load(std::memory_order_acquire) == 2) finishJob();
+    for (int t = 0; t < kTracks; ++t) {   // a long take's cut / erase is in
+        StreamView& sv = stream_[t];
+        Track& k = trk_[t];
+        if (!k.busy || !k.head || !sv.editDone.load(std::memory_order_acquire)) continue;
+        if (sv.editReq.load(std::memory_order_relaxed) == 1) {
+            k.len -= sv.editB - sv.editA;
+            k.offset16 = 0;
+        }
+        k.busy = false;
+        sv.editReq.store(0, std::memory_order_relaxed);
+        sv.editDone.store(false, std::memory_order_relaxed);
+        restartGrains(k, uint64_t(posOf(k)) << 16);
+        view_[t].peakVersion.fetch_add(1, std::memory_order_relaxed);
+    }
+    for (int t = 0; t < kTracks; ++t) {   // a long take's undo / redo is in
+        StreamView& sv = stream_[t];
+        Track& k = trk_[t];
+        if (!k.busy || !k.head || !sv.undoDone.load(std::memory_order_acquire)) continue;
+        k.busy = false;
+        k.dubUndo = sv.undoReq.load(std::memory_order_relaxed) == 1 ? 2 : 1;
+        sv.undoReq.store(0, std::memory_order_relaxed);
+        sv.undoDone.store(false, std::memory_order_relaxed);
+        restartGrains(k, uint64_t(posOf(k)) << 16);
+        view_[t].peakVersion.fetch_add(1, std::memory_order_relaxed);
+    }
     if (running_)
         for (Track& k : trk_)   // queued tracks start on their bar line
             if (k.state == TrackState::kQueued && k.anchor <= t_) launch(k);
     for (int t = 0; t < kTracks; ++t)
-        if (trk_[t].state == TrackState::kClearing && zeroTodo_[t].load(std::memory_order_acquire) == 0) {
+        if (trk_[t].state == TrackState::kClearing && zeroTodo_[t].load(std::memory_order_acquire) == 0 &&
+            zeroPeakTo_[t].load(std::memory_order_acquire) == 0) {
             trk_[t].state = TrackState::kEmpty;
             trk_[t].written = 0;
         }
@@ -1145,19 +1403,23 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
         uint32_t fStart = 0;
         if (k.tailTo && k.state != TrackState::kRecording && k.state != TrackState::kCountIn) {
             // The loop-point tail: the input just after the take, past the loop end.
+            bool full = false;
             for (uint32_t f = 0; f < n && k.written < k.tailTo; ++f) {
                 const int16_t l = in ? in[2 * f] : 0, r = in ? in[2 * f + 1] : 0;
-                const uint32_t i = k.written++;
-                if (k.mono) {
-                    m.frames[i] = fold(k.input, l, r);
-                } else {
-                    m.frames[2 * i] = l;
-                    m.frames[2 * i + 1] = r;
+                if (!recFrame(t, k.written, l, r, false, false)) {   // a long take's ring is full: no blend
+                    full = true;
+                    break;
                 }
+                ++k.written;
             }
-            if (k.written >= k.tailTo) {
+            const bool mirrored = stream_[t].active.load(std::memory_order_relaxed);
+            if (full) {
+                k.tailTo = 0;
+                if (mirrored) endTake(t);
+            } else if (k.written >= k.tailTo) {
                 k.tailTo = 0;
                 crossfadeLoopPoint(t);
+                if (mirrored) endTake(t);
                 view_[t].peakVersion.fetch_add(1, std::memory_order_relaxed);
             }
         }
@@ -1187,7 +1449,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             }
         }
         if ((k.state == TrackState::kRecording || k.state == TrackState::kCountIn) && running_) {
-            const uint32_t cap = capOf(t);
+            const uint32_t cap = recCap(t);
             const uint32_t sp = speed16_;
             bool done = false;
             auto put = [&](uint32_t i, int16_t l, int16_t r) {
@@ -1196,15 +1458,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                     l = int16_t(float(l) * g);
                     r = int16_t(float(r) * g);
                 }
-                if (k.mono) {
-                    const int16_t v = fold(k.input, l, r);
-                    m.frames[i] = v;
-                    notePeakMono(m.peaks, i, v);
-                } else {
-                    m.frames[2 * i] = l;
-                    m.frames[2 * i + 1] = r;
-                    notePeak(m.peaks, i, l, r);
-                }
+                return recFrame(t, i, l, r, true, true);
             };
             for (uint32_t f = fStart; f < n; ++f) {
                 const int16_t l = in ? in[2 * f] : 0, r = in ? in[2 * f + 1] : 0;
@@ -1212,6 +1466,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                     if (tf(f) < k.anchor) continue;
                     k.state = TrackState::kRecording;
                     k.written = 0;
+                    beginStream(t);
                     k.recPos16 = int64_t(tAcc_ + uint64_t(f) * sp) - (int64_t(k.anchor) << 16);
                     k.prevL = l;
                     k.prevR = r;
@@ -1225,7 +1480,10 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                     break;
                 }
                 if (sp == 65536) {
-                    put(i, l, r);
+                    if (!put(i, l, r)) {   // a long take's card fell behind: it ends here
+                        done = true;
+                        break;
+                    }
                     k.written = i + 1;
                     k.recPos16 = int64_t(k.written) << 16;
                 } else {
@@ -1240,7 +1498,10 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                             break;
                         }
                         const float a = float(x * 65536 - lo) / float(sp);
-                        put(j, sat16(lerp(k.prevL, l, a)), sat16(lerp(k.prevR, r, a)));
+                        if (!put(j, sat16(lerp(k.prevL, l, a)), sat16(lerp(k.prevR, r, a)))) {
+                            done = true;
+                            break;
+                        }
                         k.written = j + 1;
                     }
                     k.recPos16 = hi + int64_t(sp);
@@ -1249,6 +1510,8 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                 k.prevL = l;
                 k.prevR = r;
             }
+            if (stream_[t].active.load(std::memory_order_relaxed))   // the Streamer mirrors it
+                stream_[t].recorded.store(k.written, std::memory_order_release);
             if (k.state == TrackState::kRecording) {
                 if (k.stopAt && k.written >= k.stopAt) finishRecording(t, k.stopAt);
                 else if (done || k.written >= cap) finishNow(t);
@@ -1272,6 +1535,11 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                            (k.len + kUndoCellFrames - 1) / kUndoCellFrames <= kUndoMapBytes * 8;
                 std::memset(undoMap_[t], 0, kUndoMapBytes);
                 if (k.undoOk) k.dubUndo = 0;   // the earlier pass cannot come back now
+                k.cardUndo = k.head && stream_[t].undoFiles.load(std::memory_order_acquire);
+                if (k.cardUndo) {   // a long take: the Streamer keeps this pass's blocks apart
+                    stream_[t].session.fetch_add(1, std::memory_order_release);
+                    k.dubUndo = 0;
+                }
             } else if (!dub && k.dubSession && k.dubX <= 0.0f && !dubbing) {
                 k.dubSession = false;
             }
@@ -1379,11 +1647,29 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             // Loop frame i is buffer frame start + i (a trim moves start).
             int16_t* const fr = m.frames + (mono ? size_t(k.start) : size_t(k.start) * 2);
             const uint32_t pk0 = k.start;   // peak cells use buffer frames
+            // A long take: buffer frames from head on (the stream file mirrors
+            // the buffer) come from the ring, if the Streamer has them there;
+            // otherwise silence.
+            const uint32_t sh = k.head, sring = ringOf(t), s0 = k.start;
+            const uint32_t rS = sh ? stream_[t].rStart.load(std::memory_order_acquire) : 0;
+            const uint32_t rE = sh ? stream_[t].rEnd.load(std::memory_order_acquire) : 0;
+            uint32_t under = 0;
             auto lr = [&](uint32_t i, int16_t& a, int16_t& b) {
-                if (mono) a = b = fr[i];
+                const int16_t* p = fr + (mono ? size_t(i) : 2 * size_t(i));
+                if (sh && s0 + i >= sh) {
+                    const uint32_t bi = s0 + i;
+                    if (bi < rS || bi >= rE) {
+                        a = b = 0;
+                        ++under;
+                        return;
+                    }
+                    const uint32_t s = sh + (bi - sh) % sring;
+                    p = m.frames + (mono ? size_t(s) : 2 * size_t(s));
+                }
+                if (mono) a = b = p[0];
                 else {
-                    a = fr[2 * i];
-                    b = fr[2 * i + 1];
+                    a = p[0];
+                    b = p[1];
                 }
             };
             auto interp = [&](uint32_t i, uint32_t j, float fr, float& l, float& r) {
@@ -1482,16 +1768,18 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                             float oldK, inK;
                             ramp(oldK, inK);
                             saveUndoCell(t, i);
-                            if (mono) {
-                                const int16_t nv = sat16(float(a) * oldK + float(fold(k.input, l, r)) * inK);
-                                fr[i] = nv;
-                                notePeakMono(m.peaks, pk0 + i, nv);
-                            } else {
-                                const int16_t nl = sat16(float(a) * oldK + float(l) * inK);
-                                const int16_t nr = sat16(float(b) * oldK + float(r) * inK);
-                                fr[2 * i] = nl;
-                                fr[2 * i + 1] = nr;
-                                notePeak(m.peaks, pk0 + i, nl, nr);
+                            if (int16_t* p = dubFrame(t, i)) {   // RAM, or a long take's ring
+                                if (mono) {
+                                    const int16_t nv = sat16(float(a) * oldK + float(fold(k.input, l, r)) * inK);
+                                    p[0] = nv;
+                                    notePeakMono(m.peaks, pk0 + i, nv);
+                                } else {
+                                    const int16_t nl = sat16(float(a) * oldK + float(l) * inK);
+                                    const int16_t nr = sat16(float(b) * oldK + float(r) * inK);
+                                    p[0] = nl;
+                                    p[1] = nr;
+                                    notePeak(m.peaks, pk0 + i, nl, nr);
+                                }
                             }
                         }
                         break;
@@ -1562,6 +1850,10 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             }
             wrote = dub;
             if (vib) pf.vib.renorm();
+            if (under) stream_[t].underruns.fetch_add(under, std::memory_order_relaxed);
+            if (sh)   // which way the Streamer fills the ring
+                stream_[t].back.store(mi.reverse || (mi.pingPong && (phase16(k) >> 16) >= k.len),
+                                      std::memory_order_relaxed);
         }
         if (wrote) view_[t].peakVersion.fetch_add(1, std::memory_order_relaxed);
         view_[t].level.store(level, std::memory_order_relaxed);

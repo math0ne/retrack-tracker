@@ -317,6 +317,21 @@ public:
     virtual bool remove(const char* path) = 0;   // file or empty directory
     virtual bool rename(const char* from, const char* to) = 0;
     virtual int32_t listDir(const char* path, DirFn fn, void* ctx) = 0; // entry count, <0 error
+    // A file of exactly `bytes`, allocated in one contiguous run where the
+    // card allows it, without writing the data (the looper's stream files).
+    // An existing file of that size is kept as it is. False: not possible.
+    virtual bool preallocate(const char* path, uint32_t bytes) {
+        (void)path;
+        (void)bytes;
+        return false;
+    }
+    // Seeks in this open file without walking the FAT (a cluster map kept in
+    // memory): for files read and written all over (the stream files). Its
+    // size cannot change while this is on. False: not available (plain seeks).
+    virtual bool fastSeek(Handle h) {
+        (void)h;
+        return false;
+    }
 };
 
 // ---------------------------------------------------------------------------

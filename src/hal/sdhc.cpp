@@ -82,6 +82,7 @@ uint32_t gClockIdx = 1;
 uint32_t gProctl = PROCTL_LE;
 Info gInfo;
 const char* gNote = "";
+bool gSdramDma = false;   // setSdramDma: the experimental direct SDRAM path
 
 bool waitPrs(uint32_t mask, uint32_t timeoutMs) {
     uint32_t t = millis();
@@ -315,6 +316,19 @@ bool xfer(bool write, uint32_t lba, uint8_t* buf, uint32_t count) {
                    detail::dmaDirectOk(addr, n * 512, board::kSdDmaToSdram, board::kSdramBase,
                                        board::kSdramSize)) {
             ok = xferRobust(write, lba, buf, n);
+        } else if (gSdramDma && detail::dmaDirectOk(addr, n * 512, true, board::kSdramBase, board::kSdramSize)) {
+            // The experimental direct SDRAM path: one try, no degrade. A failure
+            // turns it off and the same chunk goes again through the bounce buffer.
+            if (xferOnce(write, lba, buf, n)) {
+                gInfo.sdramDirect++;
+                ok = true;
+            } else {
+                gInfo.sdramFails++;
+                gSdramDma = false;
+                recoverAfterError();
+                if (!cardPresent()) return false;
+                continue;
+            }
         } else {
             n = count < kBounceBlocks ? count : kBounceBlocks;
             gInfo.bounced++;
@@ -380,6 +394,8 @@ bool ready() { return gReady; }
 uint32_t sectorCount() { return gSectors; }
 uint32_t lastError() { return gLastErr; }
 const Info& info() { return gInfo; }
+void setSdramDma(bool on) { gSdramDma = on; }
+bool sdramDma() { return gSdramDma; }
 const char* initNote() { return gNote; }
 
 void release() {

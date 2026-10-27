@@ -100,6 +100,12 @@ constexpr const char* kRecord[] = {
     "count-in and stops on the next bar line after you press again.",
     "A take records a little past its end and blends it into its start: no click.",
     "",
+    "# Long takes (with an SD card)",
+    "Past ~19.5 s (39 s mono) a take goes on to the card, up to 5 min (10 mono).",
+    "The lane says card. Everything works as in RAM (editor cut / erase take a",
+    "few seconds); Granular's Spread stays within ~1 s of the playhead there.",
+    "Format the card FAT32 with 32 KB clusters (Config > F3 tests it).",
+    "",
     "# Overdub, replace, undo",
     "REC on a playing track: overdub (feedback on the Input page).",
     "Shift + REC: replace, recording over the loop instead of on top of it.",
@@ -157,6 +163,8 @@ constexpr const char* kPages[] = {
     "Display and pad brightness, headphones, input, gain, monitor.",
     "F1 Firmware: flash an image from the card's Firmware folder (F1 twice).",
     "F2 MIDI: clock and controls.",
+    "F3 SD test: how fast and how steadily the card writes and reads (F1 starts,",
+    "about 20 s, track 4 empty, 16 MB free); the results also go to Looper/sdtest.txt.",
 };
 
 constexpr const char* kMidi[] = {

@@ -72,6 +72,8 @@
 
 #include "looper/engine.h"
 #include "looper/files.h"
+#include "looper/sdtest.h"
+#include "looper/stream.h"
 #include "looper/platform.h"
 
 namespace looper {
@@ -272,6 +274,16 @@ private:
     bool stats_ = false;
     // Settings kept on the card (Config page; input source and gain too)
     Files files_;
+    Streamer streamer_;   // long takes on the card
+    // Config > F3: the SD card test. It borrows the last 256 KB of track 4's
+    // memory, so it runs only while track 4 is empty (and stops if it is not).
+    SdTest sdTest_;
+    bool sdPage_ = false;
+    bool sdBufDirty_ = false;          // the borrowed memory still holds the test's pattern
+    const char* sdMsg_ = nullptr;      // why the test did not start
+    uint8_t* sdBuffer() const;
+    void sdKey(uint8_t id);
+    void drawSdTest();
     Config cfg_;
     bool cfgDirty_ = false;
     uint32_t cfgDirtyMs_ = 0;

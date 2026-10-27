@@ -16,6 +16,8 @@ struct Info {
     uint32_t degrades = 0;     // clock/mode fallbacks after repeated errors
     uint32_t bounced = 0;      // chunks copied through the SRAM bounce buffer
     uint32_t admaErr = 0;      // ADMAES of the last ADMA error
+    uint32_t sdramDirect = 0;  // chunks DMAed straight to / from SDRAM (setSdramDma)
+    uint32_t sdramFails = 0;   // such chunks that failed (the path then turns itself off)
 };
 
 bool cardPresent();                 // spec 01 §6: PTD0 LOW = inserted
@@ -27,6 +29,14 @@ bool readBlocks(uint32_t lba, uint8_t* dst, uint32_t count);
 bool writeBlocks(uint32_t lba, const uint8_t* src, uint32_t count);
 uint32_t lastError();               // IRQSTAT bits of the last failure (diagnostics)
 const Info& info();
+// Experimental (the looper's SD test): ADMA2 straight to / from SDRAM instead of
+// the SRAM bounce buffer, for as long as it is on. Whether the SDHC DMA master
+// reaches the SDRAM controller is unverified (board::kSdDmaToSdram), so a
+// failed chunk is not retried or degraded: the path turns itself off
+// (sdramDma() false, Info::sdramFails) and that chunk goes through the bounce
+// buffer. Data errors that the DMA does not flag are for the caller to verify.
+void setSdramDma(bool on);
+bool sdramDma();
 const char* initNote();             // why ADMA/high speed were not used ("" when both are)
 
 // ---- pure helpers (host-tested in tests/hw_math_test.cpp) --------------------

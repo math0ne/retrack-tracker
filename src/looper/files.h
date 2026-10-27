@@ -17,6 +17,8 @@
 
 namespace looper {
 
+class Streamer;
+
 // Settings kept across power-offs (the Config page).
 struct Config {
     uint8_t brightness = 2;   // 0 low, 1 medium, 2 high
@@ -34,6 +36,7 @@ public:
     static constexpr int kMaxProjects = 99;
 
     void init(Engine* engine, const Platform* p);
+    void setStreamer(Streamer* s) { stream_ = s; }   // long takes: their audio is on the card
     bool cardReady() const;
 
     bool loadConfig(Config& c);
@@ -102,6 +105,9 @@ private:
     uint8_t phase_ = 0;
     uint8_t todo_ = 0;              // tracks still to write / read
     uint8_t loaded_ = 0;            // load: tracks whose audio is in
+    uint8_t long_ = 0;              // load: tracks longer than their RAM (the rest went to the card)
+    uint32_t head_ = 0;             // load: the track's RAM part (a long take's)
+    Streamer* stream_ = nullptr;
     int track_ = -1;
     ot::IStorage::Handle h_ = -1;
     uint32_t done_ = 0, total_ = 0, start_ = 0;

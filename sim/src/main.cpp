@@ -40,6 +40,9 @@
 //   expect_fx SLOT TYPE [K V]     FX slot (1..2) holds TYPE (and knob K, 1..4, is V)
 //   expect_perfknob FX VALUE      performance effect FX (1..8) knob value
 //   tone_shape steady|bursts      a continuous sine, or the default bursts
+//   expect_stream TRACK long 0|1  the track holds a long take (its tail on the card)
+//   expect_stream TRACK under|over MAX   frames played as silence / takes cut short, at most MAX
+//   reset_stream TRACK            zero those counts
 //   input_wav PATH | input_wav off  a 16-bit 44.1 kHz WAV (mono or stereo) as the line
 //                                 input, from its start, looping (in place of the tone)
 //   expect_below MAX              fail unless the output peak since the last reset < MAX, then reset
@@ -596,6 +599,29 @@ struct Headless {
                             s >= 0 && s < looper::kFxSlots ? looper::fxTypeInfo(m.app.engine().fxType(s)).name : "?",
                             unsigned(m.app.engine().fxKnob(s, 0)), unsigned(m.app.engine().fxKnob(s, 1)),
                             unsigned(m.app.engine().fxKnob(s, 2)), unsigned(m.app.engine().fxKnob(s, 3)));
+                ok = ok && pass;
+            } else if (cmd == "reset_stream") {
+                const int t = std::atoi(arg.c_str()) - 1;
+                if (t >= 0 && t < looper::kTracks) {   // a test's own counters: the engine only ever adds to them
+                    looper::StreamView& sv = const_cast<looper::StreamView&>(m.app.engine().stream(t));
+                    sv.underruns.store(0);
+                    sv.overruns.store(0);
+                }
+            } else if (cmd == "expect_stream") {
+                const int t = std::atoi(arg.c_str()) - 1;
+                std::string field, want;
+                in >> field >> want;
+                long got = -1;
+                if (t >= 0 && t < looper::kTracks) {
+                    const looper::StreamView& sv = m.app.engine().stream(t);
+                    if (field == "long") got = m.app.engine().longTake(t) ? 1 : 0;
+                    else if (field == "under") got = long(sv.underruns.load());
+                    else if (field == "over") got = long(sv.overruns.load());
+                }
+                const long w = std::atol(want.c_str());
+                const bool pass = got >= 0 && (field == "long" ? got == w : got <= w);
+                std::printf("%s:%d: expect_stream %s %s %s %s (%ld)\n", path.c_str(), lineNo, arg.c_str(), field.c_str(),
+                            want.c_str(), pass ? "PASS" : "FAIL", got);
                 ok = ok && pass;
             } else if (cmd == "expect_mode") {
                 // expect_mode TRACK NAME: the track's playback mode, its label without spaces

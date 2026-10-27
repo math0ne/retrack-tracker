@@ -25,8 +25,9 @@ recorded through the looper's input by `sim/demo/readme_shots.txt`.
 
 ### Four stereo tracks on one bar clock
 
-Each track records up to about 22 s of stereo (44 s mono) in the Tracker's
-16 MB SDRAM. The first take sets the bar; every later take, every playback
+Each track records up to about 21 s of stereo (42 s mono) in the Tracker's
+16 MB SDRAM, and with an SD card up to **5 minutes** (10 mono): a longer take
+goes on to the card (see Long takes below). The first take sets the bar; every later take, every playback
 mode and every effect follows the same bar clock, so nothing drifts. Takes
 start with a count-in (or at once, or when sound arrives), stop on the bar
 line, and blend their end into their start so the loop point does not click.
@@ -42,6 +43,19 @@ the selected track and show its state.
 A take in progress, the lane outlined, the REC key showing what a press does:
 
 ![Recording the third track](docs/img/recording.png)
+
+### Long takes on the SD card: up to 5 minutes a track
+
+With a card in, a take is no longer limited by RAM: past about 19.5 s it
+keeps recording onto the card, up to 5 minutes stereo (10 mono) per track.
+Nothing changes in how it plays: overdub, replace, undo / redo, every mode,
+tempo changes, jumps, the effects, the editor, saving and loading all work
+on it. Its lane says **card**. Below, track 1 is a 24 s take with the chord
+stabs overdubbed over its first half (undo is ready on F8), next to two
+ordinary 4 s loops. How it works is under
+[How the SD card streaming works](#how-the-sd-card-streaming-works).
+
+![A 24 s take on the card next to two ordinary loops](docs/img/long.png)
 
 ### Playback modes
 
@@ -147,6 +161,10 @@ a seven-chapter manual on the device.
 |---|---|
 | `src/looper/engine.*` | The audio engine: 4 stereo tracks, master length, overdub, mute, jump. No hardware headers. |
 | `src/looper/app.*` | Input, pad LEDs and the screen, drawn straight on the FT81x display list. |
+| `src/looper/stream.*` | Long takes on the SD card, the main loop's side: the stream files, read-ahead, write-back, undo, edit jobs. |
+| `src/looper/files.*` | Settings, projects (save / load) and WAV export, as background jobs. |
+| `src/looper/sdtest.*` | Config > F3: the SD card speed test. |
+| `src/looper/manual.h` | The on-device manual (Song). |
 | `src/looper/platform.h` | Everything the app needs from outside (display, audio, input, LEDs, clock, memory). |
 | `src/device_main.cpp` | Device glue: HAL drivers + 16 MB SDRAM into `looper::Platform`. |
 | `src/main.cpp`, `src/hal/`, `src/platform/` | Copied from OpenTracker (boot, drivers, display interface, fonts). |
@@ -262,7 +280,7 @@ are the selected track's options (see Track options below):
 | Master | Mixer page on / off |
 | Instr | Loop editor for the selected track |
 | FX1 / FX2 | That effect slot's page on / off |
-| Config | Settings page (F1 firmware, F2 MIDI) |
+| Config | Settings page (F1 firmware, F2 MIDI, F3 SD card test) |
 | File | Projects (save / load) and WAV export |
 | Shift + Config | Show / hide the CPU, frame-rate and display-list readout (Help too, if the panel has one) |
 | Shift + File | Stress preset (Shift + Help too) |
@@ -306,6 +324,128 @@ bar 1. Exports go to a new folder `Looper/Export/NNN` each time. Saving and
 exporting run in the background in 16 KB steps, so the audio and the screen
 keep going.
 
+### Long takes (on the SD card)
+
+With a card in, a take that outgrows its RAM (past about 19.5 s stereo, 39 s
+mono) keeps going onto the card, up to 5 minutes stereo or 10 mono per track.
+Every take is written to the card as it records; one that grows past its RAM
+keeps its first part there and streams the rest through a 2 s buffer, read
+ahead of the playhead in whichever direction it plays. The lane's tag reads
+**card**. Each track has two files, `Looper/Stream/trackN.raw` and
+`trackN.b.raw` (53 MB each, 424 MB in all, allocated once when the card is
+first seen and then kept).
+
+A long take does everything a RAM loop does: overdub and replace, every
+playback mode, any tempo, jumps (a moment of silence while the buffer
+refills), the performance effects, the loop editor, saving, loading and
+exporting. **Undo / redo**: an overdub pass writes the blocks it changes to
+the track's other file, so the pass before stays there; undo switches back to
+it (the track is silent for a moment while its RAM part reloads), redo
+switches again. The editor's trim is instant; cut and erase work through the
+card, so on a long take they take a few seconds (the track is silent
+meanwhile). A project load puts a long track's first part in RAM and the
+rest in its stream file. One difference: in **Granular**, grains on the card
+part stay inside the 2 s buffer around the playhead, so Spread reaches about
+a second either way there instead of the whole loop.
+
+The card matters: format it FAT32 with **32 KB clusters** (the SD Card
+Formatter's default). With small clusters every card command is small and
+writing gets too slow. Config > F3 SD test measures a card.
+
+### How the SD card streaming works
+
+The design notes, measurements and phases are in `docs/SD_STREAMING.md`;
+this is the short version.
+
+**Two threads, one rule.** The audio runs in an interrupt every 128 frames
+(2.9 ms) and must never wait, so it never touches the card: it only reads
+and writes the Tracker's 16 MB SDRAM. Everything on the card is done by the
+main loop (`Streamer`, `src/looper/stream.cpp`), one card command per track
+per pass. They share a small block of atomics per track
+(`StreamView` in `engine.h`): who owns which part of the memory, how far the
+card has caught up, what the ring holds.
+
+```mermaid
+flowchart LR
+    subgraph audio["Audio interrupt, every 2.9 ms"]
+        R["record / overdub"] --> M[("track RAM: first ~19.5 s")]
+        R --> G[("2 s ring, the end of the track's RAM")]
+        P["playback, grains"] --> M
+        P --> G
+    end
+    subgraph main["Main loop: the Streamer"]
+        S{{"32 KB card commands, direct DMA"}}
+    end
+    G <--> S
+    M -- "copy of the RAM part" --> S
+    S <--> A[("trackN.raw")]
+    S <--> B[("trackN.b.raw")]
+```
+
+**Files.** Each track has two stream files on the card, A and B, 53 MB each
+(5 minutes of stereo), created with FatFs's `f_expand` as one contiguous run
+of clusters without writing any data, and kept from then on. The files
+mirror the track's buffer frame for frame, so a frame's place in the file is
+just its index times 4 bytes (2 for mono). FatFs's fast-seek map keeps
+jumping around in them free of FAT lookups.
+
+**Recording.** Every take with a stream file ready is copied to file A as it
+records (a short one simply stops being copied when it ends). A take that
+reaches `head`, its RAM less the last 2 s, becomes a long take: from there on
+the frames go into a 2 s **ring** in that last part of its RAM, and the
+Streamer drains the ring to the file in 32 KB commands. If the card falls a
+whole ring behind (2 s), the take ends there rather than lose audio in the
+middle; the end of the last bar is padded with zeros on the card.
+
+**Playback.** The first `head` frames play straight from RAM. The rest play
+from the ring, which the Streamer keeps filled from the file around the
+playhead: from 0.5 s behind it forwards when it reads forwards (the half
+second behind is there for beat repeats and grains), from 0.5 s after it
+backwards in the reverse modes. While a loop plays its RAM part, the ring is
+already filled with what comes next on the card: the start of the card part,
+or its end for a reverse loop about to wrap. A frame the ring does not hold
+plays as silence and is counted (`under` in the telemetry): a jump pad into
+the card part does that for a moment while the ring refills.
+
+**Overdub.** An overdub mixes into RAM or the ring, then marks the 32 KB
+**block** it changed. A changed block goes back to the card once the
+playhead has left it, as one 32 KB command; before the ring moves (a jump,
+the loop's wrap) it is emptied first, so the overdub stops writing into it,
+and every changed block is written back before its slots are reused.
+
+**Undo on the card.** The Streamer keeps a map of which file, A or B, holds
+the current version of each block. An overdub pass writes each block's
+first change to the *other* file and flips the block in the map, so the
+version from before the pass stays untouched in the first file. Undo writes
+everything back, flips that pass's blocks back, reloads the RAM part's
+blocks from the card, recomputes their waveform and refills the ring; redo
+flips them again. Like the RAM undo it is one level: the next pass starts a
+new set.
+
+**Edits, projects.** A trim only moves the loop's start and end over the
+buffer (the file mirrors the buffer), so it is instant. Cut and erase are
+Streamer jobs that work through RAM and the card (cut moves the rest of the
+take up through a 32 KB staging buffer); saving and exporting read the take
+the way it plays now (RAM, the ring where an overdub has not gone back yet,
+each block's current file); loading writes a long WAV's first part to RAM
+and all of it to file A.
+
+**Granular** grains read either the RAM part or the ring, each grain wholly
+one or the other: a grain is kept off the RAM part's edge and the loop's
+end, and inside what the ring holds, with its own length to spare because
+the ring moves on while it plays.
+
+**Speed.** On the 8 GB test card formatted with 32 KB clusters, with direct
+DMA into the SDRAM (verified on the device: thousands of transfers, every
+word checked), in-place writes ran at 8 MB/s and reads at 16 MB/s, the
+worst write stall 166 ms. Four tracks playing need 0.7 MB/s, four
+overdubbing 1.4 MB/s, so the card is busy a small part of the time and the
+2 s ring rides out the stalls. Card commands block the main loop while they
+run (~2–4 ms for 32 KB), which the screen and pads can afford; the audio
+never waits. The serial telemetry line ends with
+`stream under N over M err E` (frames played as silence, takes cut short,
+failed card commands).
+
 ### Loop points, punches and undo
 
 - **Loop point**: a take records 5 ms past its end and blends that into its
@@ -324,6 +464,16 @@ keep going.
   over 1 beat, 1 bar or 2 bars, then stops it; a second press stops at once.
 
 ### MIDI
+
+**Config > F3 SD test** measures the card for streaming loops from it
+(`docs/SD_STREAMING.md`). **F1** starts it: a 16 MB file in `/Looper` is
+written once in 256 KB commands (which allocates it), then overwritten in place
+and read back in 32, 64 and 256 KB commands, every word checked. Each command
+is timed; the table shows MB/s, the average and the worst command, and how many
+took over 10, 50, 100 and 250 ms. It takes about 20 s, needs 16 MB free and
+track 4 empty (it borrows the end of that track's memory; recording on track 4
+stops it), and leaves `Looper/sdtest.txt` with the results (also on the serial
+log). The test file is deleted afterwards. F1 again stops it, F7 back.
 
 **Config > F2 MIDI.** The **Clock** row: Off, **Send** (24 ticks a beat on the
 bar clock, so it follows the tape speed; Start and Stop with the transport; DIN
@@ -555,14 +705,22 @@ copying that folder onto the card and power-cycling installs the build.
 
 ## Limits found so far
 
-- **Memory:** 16 MB SDRAM = about 22.1 s of stereo audio per track (after the
-  1 MB of the two FX slots' delay lines); undo needs the loop to fit in half
-  of it. Mono tracks double that; longer loops need SD streaming (the SD → SDRAM DMA path is still unverified in the HAL).
+- **Memory:** 16 MB SDRAM = about 21.5 s of stereo audio per track (after the
+  1 MB of the two FX slots' delay lines and the long-take waveforms); a RAM
+  loop's undo needs it to fit in half of that. Mono tracks double it. Longer
+  takes go to the SD card (5 minutes stereo), undo included (it uses the
+  card's second file). Internal SRAM: about 242 of 256 KB in use.
+- **Long takes:** up to 5 minutes (the stream files' size). Granular's Spread
+  on the card part reaches about the 2 s ring around the playhead. Cut and
+  erase on a long take take a few seconds. A card with small clusters (4 KB)
+  is too slow: format with 32 KB clusters.
 - **Display list:** the FT81x runs at most 2048 words (8 KB) per frame. This
   screen uses about 900. Waveforms are RGB332 bitmaps in the display's 1 MB
   RAM_G (13 words each to draw), so detail does not cost display-list space.
-- **SPI:** bitmaps reach RAM_G over a 30 MHz SPI link. A recording lane
-  re-uploads 43 KB at 20 Hz, about 0.7–0.9 MB/s.
+- **SPI:** bitmaps reach RAM_G over a 30 MHz SPI link, a blocking write on
+  the main loop. A recording or overdubbing lane sends only the columns that
+  changed (tens of KB/s); a whole lane (68 KB) only when it comes on screen
+  or its scale changes.
 - **Input latency:** recordings are not yet shifted to make up for the
   codec's in → out delay (OpenTracker measured 10–14 ms on live resampling).
 - **Not yet:** per-track insert effects, latency compensation.

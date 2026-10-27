@@ -107,9 +107,104 @@ spare (a loop under half its share).
 
 ## First step: measure the card
 
-A **Config > SD test** screen: sequential write and read in 32 / 64 / 256 KB
+Built: **Config > F3 SD test** (`src/looper/sdtest.*`). It writes a 16 MB
+file once (256 KB commands, allocating it), then overwrites it in place and
+reads it back in 32 / 64 / 256 KB commands, every word verified, and leaves
+`Looper/sdtest.txt`. It goes through FatFs and the SDRAM bounce buffer, as
+streaming would today; `kSdDmaToSdram` is not tried yet (a compile-time HAL
+constant, and a wrong guess there could corrupt or hang).
+
+The original plan: a **Config > SD test** screen: sequential write and read in 32 / 64 / 256 KB
 commands to a pre-allocated file for ~20 s, reporting MB/s, the average and
 **worst** command time, and a histogram of stalls (> 10, 50, 100, 250 ms). It
 uses the existing `benchmark()` and raw transfers, and it can also try
 `kSdDmaToSdram` with a verify pass. A few minutes with your cards gives the
 numbers the ring sizes depend on, before any of the streaming is built.
+
+## Measured (Config > F3 SD test, one 8 GB card)
+
+| Card format | Overwrite in place, 256 KB requests | Read | Worst overwrite |
+|---|---|---|---|
+| FAT32, 4 KB clusters | 1.7 MB/s (1.9 with direct DMA) | 5.1 MB/s (6.3) | 460 ms |
+| FAT32, 32 KB clusters | 3.0 MB/s (**8.0** with direct DMA) | 7.0 MB/s (**15.9**) | 253 ms (166 with DMA) |
+
+FatFs sends at most one cluster per card command, so a card formatted with
+small clusters is slow: format with 32 KB clusters (the SD Card Formatter's
+default for SDHC). Direct DMA to the SDRAM worked in every run (thousands of
+transfers, no errors, every word checked). Growing a file while writing is
+4x slower with stalls up to 3.9 s: stream files are allocated before use.
+
+## Phase 1: long takes (built)
+
+The time limit goes from ~22 s to 5 minutes stereo (10 mono) per track.
+
+- **Files.** `Looper/Stream/trackN.raw`, 5 minutes of stereo each (53 MB),
+  allocated contiguously with `f_expand` (`IStorage::preallocate`) once the
+  card is ready, and kept. No card: the old limit.
+- **Head + ring.** A take records into RAM as before. When it reaches
+  `head` = its RAM minus 2 s, the track becomes a long take: frames from
+  `head` on go to a 2 s **ring** (that last 2 s of its RAM) and from there to
+  the file at `(frame - head)`. The audio thread only ever touches RAM.
+- **Recording.** The main loop's `Streamer` drains the ring to the file in
+  32 KB commands (direct DMA). If the card falls 2 s behind, the take ends
+  there (an overrun, counted). At the end of the take the file gets zeros
+  for the silent rest of the last bar.
+- **Playback.** The loop's first `head` frames play from RAM; the rest from
+  the ring, which the `Streamer` keeps filled from the file 1.5 s ahead of
+  the playhead and 0.5 s behind it (beat repeats read a little behind). A
+  frame the ring does not hold plays as silence (an underrun, counted) — a
+  jump into the streamed part does that for a moment.
+- **Works on a long take:** Forward and the forward reading modes (Half /
+  Double speed, Half time, Octave up / down), tempo changes (tape or
+  stretch), mute, stop, jumps, the performance effects, sends, the
+  waveform (peaks for the whole take stay in RAM: 100 KB per track).
+- **Not yet** (refused, with a hint): overdub and replace, the reverse
+  modes, Ping-pong and Granular, the loop editor, multiply, saving or
+  exporting a project with a long take.
+
+## Phase 2: overdub, undo, every direction (built)
+
+- **The files hold the whole take**, from frame 0: every take with a stream
+  file ready is mirrored to file A as it records (a short one stops being
+  mirrored when it ends), so the RAM part of a long take is on the card too.
+- **Blocks.** The files are kept in 32 KB blocks (a card command each;
+  `head` and the ring are whole blocks). A per-track map in the Streamer says
+  which file, A or B, holds each block's current version.
+- **Overdub / replace** mix into RAM or the ring (`Engine::dubFrame`) and
+  mark the 32 KB blocks they change. A changed block goes back to the card
+  once the playhead has left it; before the ring moves (a jump, the wrap)
+  all of them go back, the ring empty meanwhile so the overdub stops
+  writing it. A frame the ring does not hold is not overdubbed (counted).
+- **Undo / redo.** A pass's first write of a block goes to the *other* file
+  and flips the block in the map, so the version before the pass stays.
+  Undo writes everything back, flips the pass's blocks back, reloads the RAM
+  part's from the card, recomputes their peaks and refills the ring (the
+  track silent meanwhile); redo flips them again. The next pass starts a new
+  set (the undone version is then overwritten, as in RAM). One level, like
+  the RAM undo. Fast seek (`FF_USE_FASTSEEK`, `IStorage::fastSeek`) keeps the
+  seeks between the two files and back and forth cheap.
+- **Direction.** The engine publishes which way the playhead reads; the
+  Streamer keeps the ring from 0.5 s behind it forwards, or from 0.5 s after
+  it backwards (and, while a reverse loop is in its RAM part, the loop's end:
+  it wraps there next; Ping-pong turns at the start, so forwards there).
+
+## Phase 3: parity (built)
+
+- **Buffer frames.** The ring, the dirty blocks and the file offsets count
+  buffer frames (loop frame + start), so a trim just moves the loop over its
+  buffer, as in RAM; its undo too.
+- **Save / export** read a long take through `Streamer::read` (RAM, the ring
+  where an overdub has not gone back yet, the current file of each block).
+  **Load** puts a WAV longer than the track's RAM into RAM up to `head` and
+  all of it into stream file A (`Streamer::write`), then installs it long
+  (`kInstall` with the long bit).
+- **Cut / erase** are Streamer jobs (`editStep`, the track silent): write
+  everything back, then move the rest up over the cut (through the staging
+  buffer, into RAM below `head` and file A) or zero the range block by
+  block, then recompute the peaks; the overdub undo goes, a cut's map is all
+  file A again.
+- **Granular.** Each grain reads either the RAM part or the ring, wholly and
+  without wrapping: it is kept off `head`, off the loop's end, and inside
+  what the ring holds (with its own length to spare, since the ring moves on
+  as it plays); one too long for the ring is shortened. So on the card part
+  Spread reaches about the ring around the playhead, not the whole loop.

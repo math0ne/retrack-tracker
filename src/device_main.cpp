@@ -13,6 +13,7 @@
 #include "hal/i2c_bus.h"
 #include "hal/midi_ports.h"
 #include "hal/sd_storage.h"
+#include "hal/sdhc.h"
 #include "hal/telemetry.h"
 #include "looper/app.h"
 
@@ -54,6 +55,17 @@ void logLine(const char* line) {
 }
 
 void powerOff() { ot::hal::powerOff(); }
+
+bool sdDirectDma(bool on) {
+    ot::hal::sdhc::setSdramDma(on);
+    return ot::hal::sdhc::sdramDma();
+}
+
+bool sdStats(looper::Platform::SdStats& s) {
+    const ot::hal::sdhc::Info& i = ot::hal::sdhc::info();
+    s = {i.bounced, i.sdramDirect, i.sdramFails, i.retries, i.degrades, i.clockHz};
+    return true;
+}
 
 bool storageReady() { return ot::hal::bootReport().sdMounted && ot::hal::storage().mounted(); }
 
@@ -98,6 +110,8 @@ void otAppMain(ot::hal::HalSet& hal) {
     p.log = &logLine;
     p.storage = hal.storage;
     p.storageReady = &storageReady;
+    p.sdDirectDma = &sdDirectDma;
+    p.sdStats = &sdStats;
     p.setHeadphones = &setHeadphones;
     p.version = OT_VERSION;
     p.firmwareUpdate = &firmwareUpdate;

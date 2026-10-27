@@ -172,10 +172,58 @@ enum class MixParam : uint8_t {
 // are internal SRAM (engine.cpp): the SDRAM is uncached behind a 16-bit bus.
 constexpr uint32_t kFxMemBytes = kFxSlots * Delay::kBytes;
 
+// Long takes (docs/SD_STREAMING.md, phase 1). A take that outgrows its RAM
+// keeps its first `head` frames there; the rest goes to the track's stream file
+// on the card through a ring (the last kStreamRingFrames of its RAM). The
+// main loop's Streamer drains the ring to the file while recording and keeps
+// it filled around the playhead while playing; the audio thread only ever
+// touches RAM.
+constexpr uint32_t kStreamSeconds = 300;                           // a stream file: 5 min stereo, 10 mono
+constexpr uint32_t kStreamFrames = kStreamSeconds * kSampleRate;   // stereo frames (4 bytes each)
+constexpr uint32_t kStreamBlockBytes = 32768;                      // a card command, a block of the files
+constexpr uint32_t kStreamBlocks = (kStreamFrames * 4u + kStreamBlockBytes - 1) / kStreamBlockBytes;
+constexpr uint32_t kStreamRingFrames = 11 * (kStreamBlockBytes / 4);   // ~2 s: 11 blocks
+constexpr uint32_t kStreamBehind = kSampleRate / 2;                // the ring keeps 0.5 s behind the playhead
+
 struct TrackMemory {
     int16_t* frames = nullptr;   // interleaved stereo
     uint32_t capacity = 0;       // frames
-    uint8_t* peaks = nullptr;    // capacity / kPeakFrames cells of 2 bytes (left, right), 0..255
+    uint8_t* peaks = nullptr;    // 2 bytes (left, right) per kPeakFrames frames, 0..255, for
+    uint32_t peakBytes = 0;      //   the RAM and a long take's stream file both
+};
+
+// A track's take on the card, shared by the audio thread and the main loop's
+// Streamer. Units are the track's own: frames, or samples on a mono track.
+// With a stream file ready, every take is written to it as it records (file
+// A); the one that outgrows its RAM becomes a long take. Its overdubs mark
+// the 32 KB blocks they change; the Streamer writes each block's first change
+// in a pass to the other file (A / B), so the pass before stays for undo.
+struct StreamView {
+    static constexpr uint32_t kBlockWords = (kStreamBlocks + 31u) / 32u;
+    std::atomic<uint32_t> fileFrames{0};    // main: the stream file is ready, stereo frames (0: none)
+    std::atomic<bool> undoFiles{false};     // main: the second file is ready too (undo on the card)
+    std::atomic<bool> active{false};        // audio: this take is (being) mirrored on the card
+    std::atomic<uint32_t> take{0};          // audio: counts takes (the Streamer starts each one afresh)
+    std::atomic<uint32_t> head{0};          // audio: > 0 = a long take, loop frames [0, head) in RAM
+    std::atomic<uint32_t> ring{0};          // audio: ring size (loop frame i >= head sits at head + (i - head) % ring)
+    std::atomic<bool> recording{false};     // audio: the take (and its loop-point tail) is still going
+    std::atomic<uint32_t> recorded{0};      // audio: frames recorded (the newest are in the ring)
+    std::atomic<uint32_t> len{0};           // audio: the loop length, once recording is over
+    std::atomic<uint32_t> flushed{0};       // main: loop frames of the take on the card (from 0)
+    std::atomic<uint32_t> rStart{0}, rEnd{0};   // main: loop frames the ring holds for playback
+    std::atomic<bool> back{false};          // audio: the playhead reads backwards (reverse, ping-pong's way back)
+    std::atomic<uint32_t> underruns{0};     // audio: frames played as silence (not in the ring)
+    std::atomic<uint32_t> overruns{0};      // audio: takes cut short (the card fell a ring behind)
+    std::atomic<uint32_t> dirty[kBlockWords];   // audio: blocks an overdub changed (main writes them back)
+    std::atomic<uint32_t> dropped{0};       // audio: overdub frames the ring did not hold (lost)
+    std::atomic<uint32_t> session{0};       // audio: a new overdub pass began (a new undo set)
+    std::atomic<uint8_t> undoReq{0};        // audio: 1 undo, 2 redo the last pass (the Streamer swaps it)
+    std::atomic<bool> undoDone{false};      // main: the swap is in (the track plays again)
+    // A cut or erase of loop frames [editA, editB) on a long take, done on the
+    // card (the track silent meanwhile): 1 cut, 2 erase.
+    std::atomic<uint8_t> editReq{0};
+    std::atomic<bool> editDone{false};      // main: the edit is in
+    uint32_t editA = 0, editB = 0;          // audio, before editReq
 };
 
 // Snapshot the UI reads; written by the audio thread only.
@@ -228,7 +276,8 @@ public:
         kEditCut,      // remove [a, b): the rest moves up (main loop job), silent meanwhile
         kEditErase,    // silence [a, b) (main loop job)
         // Project load: the app has written an empty track's audio and peaks.
-        kInstall,      // a = length, b = bar phase of its start, arg = mono | stopped << 1
+        kInstall,      // a = length, b = bar phase of its start, arg = mono | stopped << 1 | long << 2
+                       // (long: past its RAM, the whole take is in its stream file A already)
         kSetBar,       // a = bar length (the master loop), only while every track is empty
         kSetMute,      // arg = 0 / 1
         kGrainParam,   // arg = (knob << 8) | value, Granular mode's knobs
@@ -247,6 +296,18 @@ public:
 
     const TrackView& view(int t) const { return view_[t]; }
     const TrackMemory& memory(int t) const { return mem_[t]; }
+    StreamView& stream(int t) { return stream_[t]; }   // the main loop's Streamer
+    const StreamView& stream(int t) const { return stream_[t]; }
+    bool longTake(int t) const { return stream_[t].head.load(std::memory_order_relaxed) != 0; }
+    // Where a take on track t would go on to the card (its RAM part), mono or not.
+    uint32_t headFor(int t, bool mono) const {
+        const uint32_t cap = mono ? 2 * mem_[t].capacity : mem_[t].capacity, ring = mono ? 2 * kStreamRingFrames : kStreamRingFrames;
+        const uint32_t bu = mono ? kStreamBlockBytes / 2 : kStreamBlockBytes / 4;
+        return cap > 2 * ring ? (cap - ring) / bu * bu : 0;
+    }
+    // The modes a long take can play: all of them (Granular's grains stay
+    // where the RAM part or the ring holds them).
+    static bool streamMode(PlayMode) { return true; }
     uint32_t masterLen() const { return master_.load(std::memory_order_relaxed); }
     uint32_t transportFrame() const { return tPub_.load(std::memory_order_relaxed); }
     // MIDI real-time bytes the audio thread made (clock out): an ISR hook for a
@@ -329,11 +390,18 @@ private:
         InputCh input = InputCh::kStereo;
         Grain grain[2];
         clouds::Grain cg[kLoopGrains];   // Granular mode
+        // A long take's grains: in the ring (else the RAM part), and where
+        // each started in the buffer and in what it reads (for the screen).
+        bool cgRing[kLoopGrains] = {};
+        uint32_t cgB0[kLoopGrains] = {}, cgFirst[kLoopGrains] = {};
         float cgPhasor = 0.0f, cgNorm = 1.0f;
         Perf perf;
         uint32_t start = 0;          // buffer index of loop frame 0 (trim moves it)
         bool busy = false;           // an edit job is moving the audio
         bool launchDub = false;      // queued: overdub from the launch (Rec on a stopped track)
+        uint32_t head = 0;           // a long take: loop frames from here on are on the card (StreamView)
+        uint32_t fileUnits = 0;      //   its stream file holds this many (the whole take, from 0)
+        bool cardUndo = false;       //   this overdub pass can be undone on the card
         // Recording / overdub at a changed tempo: the input resampled onto the
         // loop's own timeline (16.16 position, the input frame before).
         int64_t recPos16 = 0;        // recording: this input frame's place in the buffer, 16.16
@@ -383,6 +451,21 @@ private:
     uint32_t barLen() const;
     uint32_t beatLen() const { return barLen() / beats_; }
     uint32_t capOf(int t) const { return trk_[t].mono ? 2 * mem_[t].capacity : mem_[t].capacity; }
+    // Long takes: the ring, where the take moves to the card, and the longest take.
+    uint32_t ringOf(int t) const { return trk_[t].mono ? 2 * kStreamRingFrames : kStreamRingFrames; }
+    uint32_t blockOf(int t) const { return trk_[t].mono ? kStreamBlockBytes / 2 : kStreamBlockBytes / 4; }
+    uint32_t headOf(int t) const {   // whole blocks of RAM before the ring
+        return capOf(t) > 2 * ringOf(t) ? (capOf(t) - ringOf(t)) / blockOf(t) * blockOf(t) : 0;
+    }
+    void beginStream(int t);   // a take starts: mirror it on the card when a stream file is ready
+    uint32_t recCap(int t) const;
+    // Record loop frame i (into RAM or the ring; the first frame past headOf
+    // makes a take long when a stream file is ready). False: the ring is full.
+    bool recFrame(int t, uint32_t i, int16_t l, int16_t r, bool take, bool peaks);
+    void endTake(int t);   // a long take's recording (and tail) is over: the Streamer pads and plays it
+    // Where an overdub writes loop frame i: RAM, or a long take's ring slot
+    // (marked for the Streamer to write back); null when the ring does not hold it.
+    int16_t* dubFrame(int t, uint32_t i);
     void setOpt(OptParam p, int track, int value);
     void setPerf(int t, PerfFx fx, bool on);
     // Stop / launch: a stopped track starts again from its beginning on the
@@ -415,6 +498,7 @@ private:
     TrackMemory mem_[kTracks];
     Track trk_[kTracks];
     TrackView view_[kTracks];
+    StreamView stream_[kTracks];
 
     // main loop -> audio thread
     static constexpr uint32_t kQueue = 256;   // a project load posts ~80 commands at once
@@ -485,6 +569,9 @@ private:
 
     // main loop zeroing (kClearing tracks)
     std::atomic<uint32_t> zeroTodo_[kTracks];
+    // and a long take's peaks past the RAM's: bytes [from, to), to = 0 when done
+    uint32_t zeroPeakFrom_[kTracks] = {};
+    std::atomic<uint32_t> zeroPeakTo_[kTracks];
     EditJob job_;
 
     std::atomic<uint32_t> master_{0}, tPub_{0};

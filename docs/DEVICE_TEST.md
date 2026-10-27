@@ -95,6 +95,31 @@ Run these and note the lines:
 Listen for clicks or dropouts in each one; a click with `cpu max` well under
 100 % points somewhere else (SDRAM, I2S), so note when it happens.
 
+## Long takes (streaming from the card)
+
+With the 32 KB-cluster card in: the first start takes a moment longer (it
+allocates `Looper/Stream/track1..4.raw` and `.b.raw`, 53 MB each). Config
+shows "Recording time per track: 5 min stereo". Record a take of about 40 s:
+the lane says **card** once it passes ~19.5 s. Play it a few times round,
+listen past 19.5 s for gaps or clicks, try Half speed / Double, Reverse and
+Ping-pong, a tempo change, a jump pad into the second half. Overdub a whole
+pass (and replace one), then F8: the pass before comes back after a moment
+of silence; F8 again brings it back. Granular on it (Spread up: still
+sounding). In the editor: trim, undo the trim, erase a part past 19.5 s, cut
+the first 10 s (a few seconds). Save the project, load it again, play it.
+Then clear it and record a short loop. The serial telemetry line ends with `stream under N over M err E`:
+`under` counts frames played as silence (a jump makes a few thousand),
+`over` takes cut short because the card fell behind, `err` failed card
+commands. All three should stay 0 in plain playback.
+
+## SD card test (for streaming)
+
+Config > F3 SD test, with track 4 empty and 16 MB free on the card, F1. It
+runs about 20 s (the screen freezes for a moment now and then: each card
+command blocks the main loop). Then send `Looper/sdtest.txt` from the card,
+ideally for each card you might use. The number that matters is the worst
+**Overwrite** time: under ~300 ms, 1 s streaming buffers are plenty.
+
 ## If something goes wrong
 
 - Hangs or crashes: the serial terminal shows the fault report. Copy it.

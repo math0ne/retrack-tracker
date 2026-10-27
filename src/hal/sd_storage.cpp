@@ -62,6 +62,8 @@ FATFS gFs;
 constexpr int kMaxFiles = 14;   // stem export keeps 11 WAVs open (spec 04 §6.1)
 FIL gFiles[kMaxFiles];
 bool gUsed[kMaxFiles];
+// Fast seek (FF_USE_FASTSEEK) cluster maps: 16 words = up to 7 fragments.
+DWORD gClmt[kMaxFiles][16];
 char gPath[FF_MAX_LFN + 4];
 
 // IStorage paths are relative to the card root; FatFs wants "/..." (no drive prefix needed).
@@ -237,6 +239,40 @@ bool SdStorage::benchmark(uint8_t* buf, uint32_t bufLen, uint32_t totalBytes, Be
     r.bytes = chunks * bufLen;
     r.ok = ok && r.verifyErrors == 0;
     return r.ok;
+}
+
+bool SdStorage::fastSeek(Handle h) {
+    // f_open clears cltbl; CREATE_LINKMAP fills the map (the file pointer stays).
+    FIL* f = fileFor(h);
+    if (!f) return false;
+    gClmt[h][0] = sizeof gClmt[h] / sizeof gClmt[h][0];
+    f->cltbl = gClmt[h];
+    if (f_lseek(f, CREATE_LINKMAP) != FR_OK) {   // too fragmented for the map: plain seeks
+        f->cltbl = nullptr;
+        return false;
+    }
+    return true;
+}
+
+bool SdStorage::preallocate(const char* path, uint32_t bytes) {
+    // f_expand (FF_USE_EXPAND): one contiguous cluster run, no data written, so
+    // it takes as long as the FAT updates. A file already that size stays.
+    if (!mounted_ || !bytes) return false;
+    const char* p = fix(path);
+    FILINFO fi;
+    if (f_stat(p, &fi) == FR_OK) {
+        if (!(fi.fattrib & AM_DIR) && fi.fsize == bytes) return true;
+        if (f_unlink(p) != FR_OK) return false;
+    }
+    FIL f;
+    if (f_open(&f, p, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) return false;
+    const FRESULT r = f_expand(&f, bytes, 1);
+    f_close(&f);
+    if (r != FR_OK) {
+        f_unlink(p);
+        return false;
+    }
+    return true;
 }
 
 int32_t SdStorage::listDir(const char* path, DirFn fn, void* ctx) {

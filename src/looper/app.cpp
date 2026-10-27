@@ -106,21 +106,27 @@ bool App::init(const Platform& p) {
     std::memset(waveCol_, 0, kColBytes);
 
     // Split the loop memory into four tracks: frames (4 B) plus two peak bytes
-    // (left, right) per kPeakFrames.
+    // (left, right) per kPeakFrames, for the RAM and for a long take's stream
+    // file (its waveform stays in RAM).
     TrackMemory mem[kTracks];
     const uint32_t perTrack = (p_.loopMemBytes / kTracks) & ~15u;
-    const uint32_t frames = uint32_t(uint64_t(perTrack) * kPeakFrames / (4u * kPeakFrames + 2u)) / kPeakFrames *
-                            kPeakFrames;
+    const uint32_t streamPeaks = (kStreamFrames / kPeakFrames + 1) * 2;
+    const uint32_t frames = uint32_t(uint64_t(perTrack - streamPeaks) * kPeakFrames / (4u * kPeakFrames + 2u)) /
+                            kPeakFrames * kPeakFrames;
     for (int t = 0; t < kTracks; ++t) {
         uint8_t* base = p_.loopMem + size_t(t) * perTrack;
         mem[t].frames = reinterpret_cast<int16_t*>(base);
         mem[t].capacity = frames;
         mem[t].peaks = base + size_t(frames) * 4;
+        mem[t].peakBytes = frames / kPeakFrames * 2 + streamPeaks;
     }
     engine_.init(mem, p_.fxMem);
 
     d_->bindFontSet(0);
     files_.init(&engine_, &p_);
+    files_.setStreamer(&streamer_);
+    sdTest_.init(&p_);
+    streamer_.init(&engine_, &p_);
     files_.loadConfig(cfg_);   // defaults when there is no card or no file yet
     midi_.init(&p_, &engine_);
     engine_.setRealtimeHook(p_.midiDinRealtime);
@@ -154,7 +160,20 @@ void App::loop() {
         }
     }
     engine_.service();
+    streamer_.service();   // long takes: a card command per track at most (they cannot wait)
     files_.service();   // one step of a save / load / export
+    if (sdTest_.running()) {
+        if (TrackState(engine_.view(3).state.load()) != TrackState::kEmpty) {   // track 4 is in use
+            sdTest_.stop();
+            sdMsg_ = "Stopped: track 4 is in use";
+        } else if (!files_.busy()) {
+            sdTest_.service();   // one command
+        }
+    }
+    if (sdBufDirty_ && !sdTest_.running()) {   // give track 4 its memory back clean
+        std::memset(sdBuffer(), 0, SdTest::kBufBytes);
+        sdBufDirty_ = false;
+    }
 
     const uint32_t now = p_.clock->millis();
     if (powerHeld_ && now - powerDownMs_ >= kPowerHoldMs && p_.powerOff) {
@@ -221,17 +240,24 @@ void App::telemetry() {
         for (int t = 0; t < kTracks; ++t) st[t] = kState[engine_.view(t).state.load() % 7];
         st[kTracks] = 0;
         const uint32_t dl = p_.dlBytes ? p_.dlBytes() : lastWords_ * 4;
-        char line[200];
+        uint32_t under = 0, over = 0;
+        for (int t = 0; t < kTracks; ++t) {
+            under += engine_.stream(t).underruns.load();
+            over += engine_.stream(t).overruns.load();
+        }
+        char line[240];
         std::snprintf(line, sizeof line,
                       "looper: cpu avg %lu.%lu%% max %lu.%lu%% | loop max %lu us (%lu/s) | %lu fps | dl %lu B | "
-                      "spi %lu KB/s, %lu waves/s | tracks %s perf %02x%02x%02x%02x",
+                      "spi %lu KB/s, %lu waves/s | tracks %s perf %02x%02x%02x%02x | stream under %lu over %lu err %lu",
                       static_cast<unsigned long>(cpuAvg_ / 10), static_cast<unsigned long>(cpuAvg_ % 10),
                       static_cast<unsigned long>(cpuMax_ / 10), static_cast<unsigned long>(cpuMax_ % 10),
                       static_cast<unsigned long>(loopMaxUs_), static_cast<unsigned long>(loopsInWindow_),
                       static_cast<unsigned long>(fps_), static_cast<unsigned long>(dl),
                       static_cast<unsigned long>(lastUploadBytes_ / 1024), static_cast<unsigned long>(lastWaveUploads_),
                       st, unsigned(engine_.view(0).perf.load()), unsigned(engine_.view(1).perf.load()),
-                      unsigned(engine_.view(2).perf.load()), unsigned(engine_.view(3).perf.load()));
+                      unsigned(engine_.view(2).perf.load()), unsigned(engine_.view(3).perf.load()),
+                      static_cast<unsigned long>(under), static_cast<unsigned long>(over),
+                      static_cast<unsigned long>(streamer_.errors()));
         p_.log(line);
     }
     loopMaxUs_ = 0;
@@ -764,7 +790,8 @@ void App::closePerf() {
 }
 
 void App::goHome() {
-    mixer_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = manual_ = grainMenu_ = false;
+    mixer_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = manual_ = grainMenu_ = sdPage_ = false;
+    sdTest_.stop();
     midi_.learn(-1);
     fxPage_ = -1;
     fxBar_ = modeBar_ = false;
@@ -1249,11 +1276,12 @@ void App::drawLane(int t, uint32_t now) {
     char buf[48];
 
     // No card: the waveforms sit on the black screen; the selected track is
-    // the one drawn at full brightness.
+    // the one drawn at full brightness, with the selection bar at its left.
     (void)y1;
 
     // Waveform inset
     const int wx = kWaveX, wy = y0 + kWaveDy, wx1 = wx + kWaveW, wy1 = wy + kWaveH;
+    if (sel) mark(wx - 10, wy + 10, wy1 - 10);
     if (s == TrackState::kRecording || s == TrackState::kCountIn || s == TrackState::kArmed) {
         color(s == TrackState::kRecording ? kRed : kAmber);
         alpha(uint8_t(80 + 150 * pulse(now, 700)));
@@ -1408,6 +1436,8 @@ void App::drawLane(int t, uint32_t now) {
             fmtSeconds(tag, sizeof tag, written);
             n = int(std::strlen(tag));
         }
+        if (engine_.longTake(t) && n < int(sizeof tag) - 2)   // its tail plays from the SD card
+            n += std::snprintf(tag + n, sizeof tag - size_t(n), "%scard", n ? "  " : "");
         if (mode != PlayMode::kForward && n < int(sizeof tag) - 2)
             n += std::snprintf(tag + n, sizeof tag - size_t(n), "%s%s", n ? "  " : "", modeInfo(mode).name);
         if (muted && n < int(sizeof tag) - 2) std::snprintf(tag + n, sizeof tag - size_t(n), "%sMuted", n ? "  " : "");
@@ -1584,9 +1614,17 @@ void App::drawFKeys() {
             else if (i == 7) v = "Loops";
             std::snprintf(val[i], sizeof val[i], "%s", v);
             hot = i == 0 && act && midi_.learning() == midiRow_ - 1;
-        } else if (config_) {   // F1 firmware, F2 MIDI, F8 home: Up / Down pick a setting, the encoder sets it
-            title[i] = i == 7 ? "HOME" : (i == 0 ? "FIRMWARE" : (i == 1 ? "MIDI" : ""));
-            std::snprintf(val[i], sizeof val[i], "%s", i == 7 ? "Loops" : (i == 0 ? "Update" : (i == 1 ? "Clock, map" : "")));
+        } else if (config_ && sdPage_) {   // F1 start / stop, F7 back, F8 home
+            static const char* const kT[8] = {"TEST", "", "", "", "", "", "BACK", "HOME"};
+            title[i] = kT[i];
+            const char* v = i == 0 ? (sdTest_.running() ? "Stop" : "Start") : (i == 6 ? "Config" : (i == 7 ? "Loops" : ""));
+            std::snprintf(val[i], sizeof val[i], "%s", v);
+            hot = i == 0 && sdTest_.running();
+        } else if (config_) {   // F1 firmware, F2 MIDI, F3 SD test, F8 home: Up / Down pick a setting, the encoder sets it
+            static const char* const kT[8] = {"FIRMWARE", "MIDI", "SD TEST", "", "", "", "", "HOME"};
+            static const char* const kV[8] = {"Update", "Clock, map", "Card speed", "", "", "", "", "Loops"};
+            title[i] = kT[i];
+            std::snprintf(val[i], sizeof val[i], "%s", kV[i]);
         } else if (file_) {   // projects and export
             const bool armed = confirm_ == i && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0;
             switch (i) {
@@ -1992,8 +2030,10 @@ void App::drawGrid(int t, int wx, int wy, uint32_t span, int w, int h) {
         }
         for (uint32_t i = off; i < span && n <= 64; i += bar, ++n) {
             if (lane && n == 1) continue;
+            const int x = wx + int(float(i) * k) + 3;
+            if (lane && x < wx + 120) continue;   // under the corner tag (length, card, mode)
             std::snprintf(buf, sizeof buf, "%d", n);
-            text(wx + int(float(i) * k) + 3, wy + 1, kFontSmall, 0, buf);
+            text(x, wy + 1, kFontSmall, 0, buf);
         }
     }
 }
@@ -2321,7 +2361,14 @@ void App::configKey(uint8_t id) {
         midiKey(id);
         return;
     }
-    if (id == b::F2) {   // the MIDI page
+    if (sdPage_) {
+        sdKey(id);
+        return;
+    }
+    if (id == b::F3) {   // the SD card test
+        sdPage_ = true;
+        sdMsg_ = nullptr;
+    } else if (id == b::F2) {   // the MIDI page
         midiPage_ = true;
         midiRow_ = 0;
         midi_.learn(-1);
@@ -2609,6 +2656,10 @@ void App::drawConfig() {
         drawMidi();
         return;
     }
+    if (sdPage_) {
+        drawSdTest();
+        return;
+    }
     char buf[96];
     color(kAmber);
     text(20, 22, kFontBig, Disp::kOptCenterY, "CONFIG");
@@ -2651,12 +2702,108 @@ void App::drawConfig() {
     color(kDim);
     std::snprintf(buf, sizeof buf, "Tracker Looper %s", p_.version);
     text(40, 340, kFontSmall, 0, buf);
-    std::snprintf(buf, sizeof buf, "Recording time per track: %lu s stereo, %lu s mono", static_cast<unsigned long>(st),
-                  static_cast<unsigned long>(mo));
+    if (streamer_.ready(0))
+        std::snprintf(buf, sizeof buf, "Recording time per track: %lu min stereo, %lu min mono (on the card)",
+                      static_cast<unsigned long>(kStreamSeconds / 60), static_cast<unsigned long>(2 * kStreamSeconds / 60));
+    else
+        std::snprintf(buf, sizeof buf, "Recording time per track: %lu s stereo, %lu s mono%s", static_cast<unsigned long>(st),
+                      static_cast<unsigned long>(mo), streamer_.status()[0] ? " (no stream files)" : "");
     text(40, 362, kFontSmall, 0, buf);
     text(40, 384, kFontSmall, 0, files_.cardReady() ? "SD card ready" : "No SD card: settings are not saved");
     color(0x4A5563);
     text(760, 362, kFontSmall, Disp::kOptRightX, "Up / Down: setting   Encoder: value");
+}
+
+// ---------------------------------------------------------------------------
+// SD card test (Config > F3)
+
+uint8_t* App::sdBuffer() const {
+    // The last 256 KB of track 4's memory: a take starts at the other end.
+    const TrackMemory& m = engine_.memory(3);
+    return reinterpret_cast<uint8_t*>(m.frames) + size_t(m.capacity) * 4 - SdTest::kBufBytes;
+}
+
+void App::sdKey(uint8_t id) {
+    switch (id) {
+        case b::F1:
+            sdMsg_ = nullptr;
+            if (sdTest_.running()) {
+                sdTest_.stop();
+            } else if (TrackState(engine_.view(3).state.load()) != TrackState::kEmpty) {
+                sdMsg_ = "Clear track 4 first: the test borrows its memory";
+            } else if (files_.busy()) {
+                sdMsg_ = "Wait for the File job to finish";
+            } else if (streamer_.active()) {
+                sdMsg_ = "Not while a long loop plays from the card";
+            } else if (!files_.cardReady()) {
+                sdMsg_ = "No SD card";
+            } else if (sdTest_.start(sdBuffer())) {
+                sdBufDirty_ = true;
+            }
+            break;
+        case b::F7:
+            sdTest_.stop();
+            sdPage_ = false;
+            break;
+        case b::F8: goHome(); break;
+        default: break;
+    }
+}
+
+void App::drawSdTest() {
+    char buf[64];
+    color(kAmber);
+    text(20, 22, kFontBig, Disp::kOptCenterY, "SD TEST");
+    const bool run = sdTest_.running();
+    color(sdMsg_ ? kRed : (run ? kInk : kDim));
+    const char* st = sdMsg_ ? sdMsg_ : (run || sdTest_.ran() || sdTest_.status()[0] ? sdTest_.status() : "");
+    text(780, 22, kFontSmall, Disp::kOptRightX | Disp::kOptCenterY, st);
+    if (run) {
+        color(kFaint);
+        fillRect(20, 44, 780, 48, 2);
+        color(kInk);
+        fillRect(20, 44, 22 + int(758.0f * sdTest_.progress()), 48, 2);
+    }
+    // The table: one row per pass, the worst command is what matters.
+    static const int kX[] = {40, 160, 250, 340, 440, 540, 600, 660, 720};
+    static const char* const kHead[] = {"Pass", "Cmd", "MB/s", "Avg ms", "Worst ms", ">10", ">50", ">100", ">250"};
+    color(kDim);
+    for (int c = 0; c < 9; ++c) text(kX[c], 66, kFontSmall, Disp::kOptCenterY, kHead[c]);
+    for (int i = 0; i < SdTest::kPhases; ++i) {
+        const SdTest::Result& r = sdTest_.result(i);
+        const int y = 90 + i * 25;
+        const bool now = run && sdTest_.phase() == i;
+        if (now) mark(20, y - 9, y + 9);
+        // Read-back errors light the row: they are the one thing that must be 0.
+        const uint32_t cl = now || r.errors ? kInk : (r.cmds ? kSoft : kFaint);
+        color(cl);
+        text(kX[0], y, kFontSmall, Disp::kOptCenterY, SdTest::phaseName(i));
+        std::snprintf(buf, sizeof buf, "%lu KB", static_cast<unsigned long>(SdTest::cmdBytes(i) / 1024));
+        text(kX[1], y, kFontSmall, Disp::kOptCenterY, buf);
+        if (!r.cmds) continue;
+        const double s = double(r.totalUs) / 1e6;
+        std::snprintf(buf, sizeof buf, "%.1f", s > 0.0 ? double(r.bytes) / (1024.0 * 1024.0) / s : 0.0);
+        text(kX[2], y, kFontSmall, Disp::kOptCenterY, buf);
+        std::snprintf(buf, sizeof buf, "%.1f", double(r.totalUs) / 1000.0 / double(r.cmds));
+        text(kX[3], y, kFontSmall, Disp::kOptCenterY, buf);
+        // The worst command: bright when it is long enough to matter for streaming.
+        color(r.maxUs > 100000 ? kInk : cl);
+        std::snprintf(buf, sizeof buf, "%lu", static_cast<unsigned long>(r.maxUs / 1000));
+        text(kX[4], y, kFontSmall, Disp::kOptCenterY, buf);
+        color(cl);
+        for (int b = 0; b < SdTest::kBins; ++b) {
+            std::snprintf(buf, sizeof buf, "%lu", static_cast<unsigned long>(r.over[b]));
+            text(kX[5 + b], y, kFontSmall, Disp::kOptCenterY, buf);
+        }
+    }
+    if (sdTest_.dmaNote()[0]) {
+        color(kSoft);
+        text(40, 318, kFontSmall, Disp::kOptCenterY, sdTest_.dmaNote());
+    }
+    color(0x4A5563);
+    text(40, 342, kFontSmall, 0, "Writes a 16 MB file, overwrites it in 32 / 64 / 256 KB commands and reads it back,");
+    text(40, 360, kFontSmall, 0, "then the same at 256 KB with direct DMA to SDRAM (about 30 s). The worst overwrite");
+    text(40, 378, kFontSmall, 0, "sets the streaming buffers. Results: Looper/sdtest.txt. Track 4 empty, 16 MB free.");
 }
 
 // ---------------------------------------------------------------------------

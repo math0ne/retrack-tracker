@@ -149,6 +149,18 @@ bool HostStorage::mkdir(const char* path) {
     return ::mkdir(hp.c_str(), 0755) == 0 || isDir(hp);
 }
 
+bool HostStorage::preallocate(const char* path, uint32_t bytes) {
+    // A sparse host file of that size (the card's f_expand allocates without writing).
+    std::string hp;
+    bool ex = false;
+    if (!resolve(path, hp, &ex) || !bytes) return false;
+    if (ex && isDir(hp)) return false;
+    std::FILE* f = std::fopen(hp.c_str(), ex ? "rb+" : "wb");
+    if (!f) return false;
+    std::fclose(f);
+    return ::truncate(hp.c_str(), off_t(bytes)) == 0;
+}
+
 bool HostStorage::remove(const char* path) {
     std::string hp;
     bool ex = false;

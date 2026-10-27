@@ -1,0 +1,469 @@
+# Long takes: past ~19.5 s (its RAM less the 2 s ring) a take goes on to the
+# track's stream file on the card, up to 5 minutes. A 30 s take: 330 Hz bursts
+# for 15 s, then 660 Hz; the 660 Hz part from 19.5 s on plays from the card.
+wait 300
+opt all start 0
+# On bar (the default): 15 bars of 2 s, so the bar (120 bpm) is the tempo's.
+# A steady tone (the pitch probe counts over the whole window); the tap takes 20 ms.
+tone_shape steady
+tone 330
+tap 0
+wait 14980
+tone 660
+wait 15000
+tap 0
+tone off
+wait 50
+expect_stream 1 long 1
+expect_len 1 30.0
+expect_stream 1 over 0
+shot ../build/sim/check/stream_long.png
+
+# The first time round from the top: RAM (330 Hz), then the card part (660 Hz).
+wait 1000
+reset_levels
+wait 2000
+expect_pitch 330
+wait 20000
+reset_levels
+wait 2000
+expect_pitch 660
+expect_audio 0.1
+# A second loop, and nothing played as silence.
+wait 30000
+reset_levels
+wait 2000
+expect_pitch 660
+expect_stream 1 under 0
+
+# At 150 % tempo (tape) the card part is read 1.5x as fast: 990 Hz, still whole.
+hold F4
+enc 60
+release F4
+wait 30
+expect_opt 1 tempo 180
+reset_levels
+wait 300
+wait 20000
+reset_levels
+wait 1500
+expect_pitch 990
+hold F4
+enc -60
+release F4
+wait 30
+expect_opt 1 tempo 120
+
+# Reverse on a long take: the card part is read backwards (the ring fills
+# downwards). From the last eighth (26.25 s on) back: 660 Hz from the card.
+press F5
+press F2
+wait 50
+expect_mode 1 Reverse
+tap 11
+wait 300
+reset_levels
+wait 1500
+expect_pitch 660
+# From the first eighth backwards it wraps to the loop's end, read ahead from
+# the card while it was still in the RAM part: no silence there.
+tap 4
+wait 200
+reset_stream 1
+wait 5000
+reset_levels
+wait 1000
+expect_pitch 660
+expect_stream 1 under 0
+# Ping-pong for a whole cycle (60 s: forwards through the card part, the turn,
+# backwards through it and the RAM part, the turn at the start): no silence.
+press F5
+press F3
+wait 50
+expect_mode 1 Ping-pong
+wait 500
+reset_stream 1
+wait 61000
+expect_stream 1 under 0
+expect_stream 1 over 0
+press F5
+press F1
+wait 50
+expect_mode 1 Forward
+shot ../build/sim/check/stream_hint.png
+press F5
+press F4
+wait 50
+expect_mode 1 Halfspeed
+press F5
+press F1
+wait 50
+expect_mode 1 Forward
+
+# A jump into the card part: a moment of silence while the ring refills, then sound.
+tap 10
+wait 300
+reset_levels
+wait 1000
+expect_pitch 660
+expect_audio 0.1
+
+# Overdub on the card part: feedback 50 %, no input, a whole pass (and a bit):
+# every frame halves. The next loop reads the card again (the ring starts over
+# at the wrap), so it shows what went back to the file.
+press F6
+press F5
+press F5
+press F5
+press F8
+wait 30
+expect_opt 1 feedback 50
+tap 0
+wait 50
+expect_state 1 DUB
+wait 31000
+tap 0
+wait 50
+expect_state 1 PLAY
+# To the first eighth (the phase inside it stays), then on into the card part.
+tap 4
+wait 20500
+reset_levels
+wait 1500
+expect_audio 0.15
+reset_levels
+wait 1000
+expect_below 0.3
+wait 27500
+reset_levels
+wait 1500
+expect_audio 0.15
+reset_levels
+wait 1000
+expect_pitch 660
+expect_below 0.3
+
+# Replace (Shift + F1) with 880 Hz over a whole pass: the card part is 880 Hz,
+# at the tone's level again.
+press F6
+press F5
+press F8
+wait 30
+expect_opt 1 feedback 100
+tone 880
+hold SHIFT
+press F1
+release SHIFT
+wait 50
+expect_state 1 DUB
+wait 31000
+press F1
+tone off
+wait 50
+expect_state 1 PLAY
+tap 4
+wait 20500
+reset_levels
+wait 1500
+expect_pitch 880
+expect_audio 0.3
+expect_stream 1 over 0
+
+# Undo (F8) the replace: the pass before it is back, the halved 660 Hz on the
+# card part and the halved 330 Hz in the RAM part (reloaded from the card).
+press F8
+wait 1500
+expect_state 1 PLAY
+tap 4
+wait 1000
+reset_levels
+wait 1500
+expect_pitch 330
+reset_levels
+wait 1000
+expect_below 0.3
+wait 17000
+reset_levels
+wait 1500
+expect_pitch 660
+reset_levels
+wait 1000
+expect_below 0.3
+shot ../build/sim/check/stream_undo.png
+# Redo (F8 again): the replace is back, 880 Hz at the tone's level.
+press F8
+wait 1500
+tap 4
+wait 20500
+reset_levels
+wait 1500
+expect_pitch 880
+expect_audio 0.3
+tap 4
+wait 1000
+reset_levels
+wait 1500
+expect_pitch 880
+
+# Cleared, the track takes an ordinary short loop again.
+tap 3
+wait 500
+expect_state 1 EMPTY
+expect_stream 1 long 0
+tone 330
+tap 0
+wait 1980
+tap 0
+tone off
+wait 100
+expect_len 1 2.0
+expect_stream 1 long 0
+reset_levels
+wait 2000
+expect_pitch 330
+
+# A mono take (Mono L on track 2): twice the frames per byte, so it goes to the
+# card past ~39 s. 50 s: 440 Hz, then 880 Hz from 30 s on.
+tap 2
+tone 440
+tone_ch left
+opt 2 input 1
+opt 2 stop 0
+tap 12
+wait 29980
+tone 880
+wait 20000
+tap 12
+tone off
+tone_ch both
+wait 50
+expect_stream 2 long 1
+expect_len 2 50.0
+expect_stream 2 over 0
+wait 1000
+reset_levels
+wait 2000
+expect_pitch 440
+wait 40000
+reset_levels
+wait 2000
+expect_pitch 880
+expect_stream 2 under 0
+shot ../build/sim/check/stream_mono.png
+
+# The mono take in Reverse: replace (Shift + F1) a whole pass with 550 Hz, read
+# and written backwards. From the last eighth (43.75 s on) back: 550 Hz from
+# the card; undo (F8): the 880 Hz there again.
+tap 14
+tap 14
+press F5
+press F2
+wait 50
+expect_mode 2 Reverse
+tone 550
+tone_ch left
+hold SHIFT
+press F1
+release SHIFT
+wait 50
+expect_state 2 DUB
+wait 51000
+press F1
+tone off
+tone_ch both
+wait 50
+expect_state 2 PLAY
+tap 23
+wait 300
+reset_levels
+wait 1500
+expect_pitch 550
+expect_stream 2 over 0
+press F8
+wait 2000
+expect_state 2 PLAY
+tap 23
+wait 300
+reset_levels
+wait 1500
+expect_pitch 880
+
+# Save the project (track 2's 50 s mono take is long: 2 bytes x 50 s x 44.1 kHz
+# in its WAV), load it back: long again, its RAM part (440 Hz, played backwards
+# from 12.5 s) and its card part (880 Hz, from 43.75 s back) as they were.
+press FILE
+press F1
+wait 4000
+expect_file /Looper/Projects/001/track2.wav 4400000
+press F3
+press F3
+wait 8000
+press NOTE
+expect_stream 2 long 1
+expect_len 2 50.0
+expect_mode 2 Reverse
+# A load leaves the transport stopped: Play starts it.
+press PLAY
+wait 300
+tap 18
+wait 300
+reset_levels
+wait 1500
+expect_pitch 440
+tap 23
+wait 300
+reset_levels
+wait 1500
+expect_pitch 880
+# Export it: the whole 50 s as a WAV.
+press FILE
+press F6
+wait 4000
+expect_file /Looper/Export/001/track2.wav 4400000
+press NOTE
+
+# The loop editor on a long take (track 2: 440 Hz to 30 s, 880 Hz to 50 s),
+# Forward again. Markers move a beat (0.5 s) a detent.
+press F5
+press F1
+wait 50
+expect_mode 2 Forward
+press INSTR
+wait 100
+shot ../build/sim/check/stream_editor.png
+# Trim to 30..50 s: 20 s of 880 Hz (its RAM part, then the card).
+press F1
+enc 60
+press F4
+wait 300
+expect_len 2 20.0
+press NOTE
+tap 16
+wait 300
+reset_levels
+wait 1500
+expect_pitch 880
+tap 22
+wait 300
+reset_levels
+wait 1500
+expect_pitch 880
+# Undo the trim (F7): 50 s again.
+press INSTR
+wait 100
+press F7
+wait 300
+expect_len 2 50.0
+# Erase 40..50 s (the card part): silence there, the rest untouched.
+press NOTE
+press INSTR
+wait 100
+press F1
+enc 80
+press F6
+press F6
+wait 3000
+press NOTE
+tap 23
+wait 300
+reset_levels
+wait 1500
+expect_below 0.01
+tap 21
+wait 300
+reset_levels
+wait 1500
+expect_pitch 880
+# Cut 0..20 s: the rest moves up over it (the card part into the RAM part):
+# 30 s, 440 Hz to 10 s, 880 Hz to 20 s, then the erased silence.
+press INSTR
+wait 100
+press F2
+enc -60
+press F5
+press F5
+wait 4000
+expect_len 2 30.0
+press NOTE
+tap 16
+wait 300
+reset_levels
+wait 1500
+expect_pitch 440
+tap 19
+wait 300
+reset_levels
+wait 1500
+expect_pitch 880
+tap 22
+wait 300
+reset_levels
+wait 1500
+expect_below 0.01
+
+# Granular on a long take: track 3, 30 s of 660 Hz (the others cleared: track
+# 2 is long too). Grains read the RAM part or the ring, never across; Spread
+# keeps them in the ring.
+tap 3
+tap 15
+wait 500
+expect_state 1 EMPTY
+expect_state 2 EMPTY
+expect_stream 2 long 0
+reset_levels
+wait 300
+expect_silent
+tone_shape steady
+tone 660
+opt 3 stop 0
+tap 24
+wait 29980
+tap 24
+tone off
+wait 100
+expect_stream 3 long 1
+expect_len 3 30.0
+press F5
+press F8
+press F4
+wait 50
+expect_mode 3 Granular
+# The RAM part (second eighth), then the card part (from 22.5 s).
+tap 29
+wait 500
+reset_levels
+wait 1500
+expect_pitch 660 6
+expect_audio 0.1
+tap 34
+wait 800
+reset_levels
+wait 1500
+expect_pitch 660 6
+expect_audio 0.1
+shot ../build/sim/check/stream_granular.png
+# Pitch +12: 1320 Hz from the card part. Then Spread all the way (anywhere in
+# the loop on a RAM loop; here the grains stay in the ring): still sounding.
+hold F5
+wait 300
+release F5
+press F4
+enc 12
+wait 50
+expect_grain 3 4 36
+tap 34
+wait 800
+reset_levels
+wait 1500
+expect_pitch 1320 6
+expect_audio 0.05
+press F1
+enc 50
+press F5
+wait 50
+expect_grain 3 1 100
+tap 34
+wait 800
+reset_levels
+wait 1500
+expect_audio 0.05

@@ -1,5 +1,7 @@
 #include "looper/files.h"
 
+#include "looper/stream.h"
+
 #include <cstdio>
 #include <cstring>
 
@@ -300,7 +302,8 @@ void Files::postSettings(const ProjectFile& pf, bool tracks) {
         mix(t, MixParam::kSend2, pt.send2);
         e.post(Engine::kSetMute, uint8_t(t), pt.muted);
         if (!pt.len || !((loaded_ >> t) & 1)) continue;
-        e.post(Engine::kInstall, uint8_t(t), int16_t((pt.mono ? 1 : 0) | (pt.stopped ? 2 : 0)), pt.len, pt.phase);
+        e.post(Engine::kInstall, uint8_t(t),
+               int16_t((pt.mono ? 1 : 0) | (pt.stopped ? 2 : 0) | (((long_ >> t) & 1) ? 4 : 0)), pt.len, pt.phase);
         e.post(Engine::kMode, uint8_t(t), pt.mode);
     }
 }
@@ -399,6 +402,7 @@ bool Files::load(int number) {
     phase_ = 0;
     h_ = -1;
     loaded_ = 0;
+    long_ = 0;
     std::snprintf(status_, sizeof status_, "Loading project %03d...", number_);
     return true;
 }
@@ -429,6 +433,10 @@ bool Files::writeStep() {
     const uint32_t n = total_ - done_ < kChunk ? total_ - done_ : kChunk;
     const uint32_t fb = mono_ ? 2 : 4;
     const int16_t* src = engine_->memory(track_).frames + (mono_ ? size_t(start_ + done_) : size_t(start_ + done_) * 2);
+    if (engine_->longTake(track_)) {   // a long take: RAM, ring and card, as it plays now
+        if (!stream_ || !stream_->read(track_, start_ + done_, p_->scratch, n)) return false;
+        src = reinterpret_cast<const int16_t*>(p_->scratch);
+    }
     if (n && p_->storage->write(h_, src, n * fb) != int32_t(n * fb)) return false;
     done_ += n;
     jobDone_ += n;
@@ -438,20 +446,28 @@ bool Files::writeStep() {
 bool Files::readStep() {
     // Load: the next chunk of track_'s WAV straight into its (empty) buffer,
     // and the peak cells it fills.
+    // A long take: its RAM part goes to RAM and to the card, the rest to the
+    // card through the staging buffer (steps never straddle head: both are
+    // whole multiples of a step).
     const TrackMemory& m = engine_->memory(track_);
     const uint32_t n = total_ - done_ < kChunk ? total_ - done_ : kChunk;
     const uint32_t fb = mono_ ? 2 : 4;
-    int16_t* dst = m.frames + (mono_ ? size_t(done_) : size_t(done_) * 2);
+    const bool isLong = (long_ >> track_) & 1, card = isLong && done_ >= head_;
+    int16_t* dst = card ? reinterpret_cast<int16_t*>(p_->scratch)
+                        : m.frames + (mono_ ? size_t(done_) : size_t(done_) * 2);
     if (p_->storage->read(h_, dst, n * fb) != int32_t(n * fb)) return false;
+    if (isLong && (!stream_ || !stream_->write(track_, mono_, done_, reinterpret_cast<const uint8_t*>(dst), n)))
+        return false;
     for (uint32_t c = done_ / kPeakFrames; c * kPeakFrames < done_ + n; ++c) {
         uint8_t pl = 0, pr = 0;
         const uint32_t f1 = (c + 1) * kPeakFrames < done_ + n ? (c + 1) * kPeakFrames : done_ + n;
         for (uint32_t f = c * kPeakFrames; f < f1; ++f) {
+            const uint32_t j = f - done_;   // into dst
             if (mono_) {
-                const uint8_t p = peak8(m.frames[f]);
+                const uint8_t p = peak8(dst[j]);
                 if (p > pl) pl = p;
             } else {
-                const uint8_t a = peak8(m.frames[2 * f]), b = peak8(m.frames[2 * f + 1]);
+                const uint8_t a = peak8(dst[2 * j]), b = peak8(dst[2 * j + 1]);
                 if (a > pl) pl = a;
                 if (b > pr) pr = b;
             }
@@ -551,7 +567,14 @@ void Files::service() {
                 }
                 total_ = pf_.track[t].len;
                 if (total_ > bytes / fb) total_ = bytes / fb;
-                if (total_ > cap) total_ = cap;
+                // Longer than its RAM: the rest goes to the card, if its stream file is there.
+                head_ = engine_->headFor(t, mono_);
+                const uint32_t cardCap = stream_ ? stream_->capacity(t, mono_) : 0;
+                if (total_ > cap && head_ && cardCap > cap) {
+                    if (total_ > cardCap) total_ = cardCap;
+                    long_ |= uint8_t(1u << t);
+                }
+                if (!((long_ >> t) & 1) && total_ > cap) total_ = cap;
                 pf_.track[t].len = total_;
             }
             if (!readStep()) {
