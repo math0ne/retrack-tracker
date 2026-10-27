@@ -15,5 +15,8 @@ python3 - <<'EOF'
 import glob
 from PIL import Image
 for p in glob.glob("docs/img/*.png"):
+    if p.endswith("controls.png"): continue   # tools/label_panel.py, below
     Image.open(p).convert("RGB").quantize(256, method=Image.Quantize.MEDIANCUT).save(p, optimize=True)
 EOF
+# The controls picture: the Tracker with the home screen, its keys labelled.
+python3 tools/label_panel.py docs/img/src/tracker.png docs/img/home.png docs/img/controls.png
