@@ -29,14 +29,17 @@ wait 1000
 expect_pitch 330
 expect_audio 0.1
 
-# Hold F5: the grain knobs. F4 = pitch, +12 semitones -> 660 Hz.
+# Hold F5: the grain submenu opens, and stays open after the release.
 hold F5
 wait 300
+release F5
+wait 30
 shot ../build/sim/check/granular_panel.png
+# F6..F8 are blank in it: F6 does not open the Input page (whose F4 would be
+# the metronome). F4 = pitch, +12 semitones -> 660 Hz.
+press F6
 press F4
 enc 12
-wait 30
-release F5
 wait 30
 expect_grain 1 4 36
 expect_mode 1 Granular
@@ -45,15 +48,13 @@ wait 1000
 # Overlapping grains read at different phases and partly cancel, so a few
 # cycles fall under the probe's threshold: a wider tolerance.
 expect_pitch 660 6
-# Back to 0, then size and density.
-hold F5
+# Still open: back to 0, then size and density.
 press F4
 enc -12
 press F2
 enc 10
 press F3
 enc 20
-release F5
 wait 30
 expect_grain 1 4 24
 expect_grain 1 2 60
@@ -62,7 +63,16 @@ reset_levels
 wait 1000
 expect_pitch 330 4
 expect_audio 0.1
-# A quick F5 tap still opens the mode bar (no panel).
+# A tap on F5 closes it, without the mode bar: the encoder is the volume again.
+press F5
+wait 30
+shot ../build/sim/check/granular_closed.png
+enc 2
+wait 30
+expect_opt 1 volume 84
+expect_grain 1 3 90
+enc -2
+# Closed, a quick F5 tap opens the mode bar (no panel).
 press F5
 wait 30
 shot ../build/sim/check/granular_tap_bar.png

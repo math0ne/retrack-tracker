@@ -36,6 +36,10 @@ constexpr int kKeyY0 = 436, kKeyY1 = 476, kKeyW = 100;   // F1..F8 cells, each o
 // luminance), so the accents below are just brighter or darker greys.
 constexpr uint32_t kBg = 0x101010;
 constexpr uint32_t kInk = 0xEEEEEE, kDim = 0x828282, kFaint = 0x3A3A3A;
+// The selection is full white (kInk); the values that are not selected a
+// little dimmer (kSoft), their bars, faders and arcs at kUnsel of their colour.
+constexpr uint32_t kSoft = 0xA8A8A8;
+constexpr float kUnsel = 0.6f;
 constexpr uint32_t kRed = 0xFFFFFF, kAmber = 0xC6C6C6;   // recording = the brightest; the page accent
 constexpr uint32_t kTrackColor[kTracks] = {0xF4F4F4, 0xDCDCDC, 0xC4C4C4, 0xACACAC};
 
@@ -172,6 +176,13 @@ void App::loop() {
         if (p_.cpuLoad) haveCpu_ = p_.cpuLoad(cpuAvg_, cpuMax_);
         telemetry();
     }
+    // F5 held on a Granular track: the grain submenu opens and stays open.
+    if (f5Held_ && !f5Used_ && !grainMenu_ && engine_.mode(selected_) == PlayMode::kGranular &&
+        now - f5DownMs_ >= 250) {
+        grainMenu_ = true;
+        f5Used_ = true;   // its release is not a tap
+    }
+    if (grainMenu_ && engine_.mode(selected_) != PlayMode::kGranular) grainMenu_ = false;
     if (now - lastFrameMs_ >= kFrameMs && d_->frameReady()) {
         lastFrameMs_ = now;
         if (edit_) {
@@ -304,7 +315,7 @@ void App::undoDub(bool redo) {
 
 bool App::shiftLayer() const {
     return (shift_ || shiftHold_ >= 0) && !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ &&
-           !manual_ && !modeBar_ && !f5Held_ && !f6Held_ && !f7Held_;
+           !manual_ && !modeBar_ && !grainMenu_ && !f5Held_ && !f6Held_ && !f7Held_;
 }
 
 void App::shiftKeyUp(uint32_t ms) {
@@ -405,12 +416,11 @@ void App::onInput(const ot::InputEvent& ev) {
             shiftTurned_ = true;
             return;
         }
-        if (grainPanel()) {   // F5 held on a Granular track: the selected grain knob
+        if (grainPanel()) {   // the grain submenu: the selected grain knob
             const GrainKnob& gk = kGrainKnobInfo[grainSel_];
             int v = int(engine_.grainParam(selected_, grainSel_)) + ev.delta * (grainSel_ == 3 || shift_ ? 1 : 2);
             v = v < 0 ? 0 : (v > gk.max ? gk.max : v);
             engine_.post(Engine::kGrainParam, uint8_t(selected_), int16_t((grainSel_ << 8) | v));
-            f5Used_ = true;
             return;
         }
         if (f7Held_) {   // F7 held: the selected track's volume
@@ -516,6 +526,20 @@ void App::onInput(const ot::InputEvent& ev) {
         if (!down) shiftKeyUp(ev.timeMs);
         return;
     }
+    if (grainMenu_ && b::isFKey(ev.id)) {   // the grain submenu has the F-keys
+        if (ev.id == b::F5) {
+            if (down) {   // closes it; the release is not a tap (no mode bar)
+                grainMenu_ = false;
+                f5Held_ = true;
+                f5Used_ = true;
+            } else {
+                f5Held_ = false;
+            }
+        } else if (down && ev.id <= b::F4) {
+            grainSel_ = ev.id - b::F1;
+        }
+        return;
+    }
     if (home && shift_ && b::isFKey(ev.id) && ev.id != b::F4 && !f5Held_ && !f6Held_ && !f7Held_) {
         if (down) {
             const int k = ev.id - b::F1;
@@ -534,7 +558,7 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     // Home page F5: a tap opens the mode bar; held on a Granular track, the
-    // grain knobs (F1..F4 pick one while it is held).
+    // grain submenu (it stays open: see grainMenu_).
     if (ev.id == b::F5 && (home || f5Held_)) {
         if (down) {
             f5Held_ = true;
@@ -549,13 +573,6 @@ void App::onInput(const ot::InputEvent& ev) {
         }
         return;
     }
-    if (f5Held_ && down && ev.id >= b::F1 && ev.id <= b::F4 &&
-        engine_.mode(selected_) == PlayMode::kGranular) {
-        grainSel_ = ev.id - b::F1;
-        f5Used_ = true;
-        return;
-    }
-    if (f5Held_ && ev.id >= b::F1 && ev.id <= b::F4) return;   // their release too
     // Home page F7: hold + encoder sets the selected track's volume (the
     // encoder alone does too; holding shows the knob).
     if (ev.id == b::F7 && (home || f7Held_)) {
@@ -747,7 +764,7 @@ void App::closePerf() {
 }
 
 void App::goHome() {
-    mixer_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = manual_ = false;
+    mixer_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = manual_ = grainMenu_ = false;
     midi_.learn(-1);
     fxPage_ = -1;
     fxBar_ = modeBar_ = false;
@@ -1481,10 +1498,18 @@ void App::drawFKeys() {
                     std::snprintf(val[i], sizeof val[i], "%s", engine_.opt(OptParam::kStretch, selected_) ? "Stretch" : "Tape");
                     break;
             }
-        } else if (grainPanel() && i < kGrainKnobs) {   // F5 held: F1..F4 pick a grain knob
-            title[i] = kGrainKnobInfo[i].name;
-            grainText(i, val[i], sizeof val[i]);
-            hot = grainSel_ == i;
+        } else if (grainPanel()) {   // the grain submenu: F1..F4 its knobs, F5 closes it
+            if (i < kGrainKnobs) {
+                title[i] = kGrainKnobInfo[i].name;
+                grainText(i, val[i], sizeof val[i]);
+                hot = grainSel_ == i;
+            } else if (i == 4) {
+                title[i] = "GRAIN";
+                std::snprintf(val[i], sizeof val[i], "Close");
+            } else {
+                title[i] = "";
+                val[i][0] = '\0';
+            }
         } else if (fxPage_ >= 0 && fxBar_) {   // the effect types: the key under one picks it
             title[i] = "";
             std::snprintf(val[i], sizeof val[i], "%s", i < kFxTypeCount ? kFxTypes[i].name : "");
@@ -1701,7 +1726,8 @@ void App::drawFKeys() {
     }
     // Home page: the input level inside the INPUT cell, the track's level inside VOLUME
     // (not under the Shift layer, where those keys do other things).
-    if (!modeBar_ && !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !shiftLayer()) {
+    if (!modeBar_ && !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !shiftLayer() &&
+        !grainPanel()) {
         const int x0 = 5 * kKeyW + 10, x1 = 6 * kKeyW - 10;
         for (int c = 0; c < 2; ++c) {
             const float m = inMeter_[c];
@@ -1844,7 +1870,8 @@ void App::drawStrip(int s) {
         int t, k;
         if (!mixParam(s, row, p, t, k)) continue;
         const int by0 = 52 + row * 64, by1 = by0 + 58;
-        if (sel && row_ == row) mark(x0 + 2, by0 + 8, by1 - 8);
+        const bool on = sel && row_ == row;
+        if (on) mark(x0 + 2, by0 + 8, by1 - 8);
         const char* label;
         float fr;
         if (k >= 0) {
@@ -1861,14 +1888,14 @@ void App::drawStrip(int s) {
         if (k < 0 && p == MixParam::kChain2 && engine_.mix(MixParam::kChain1) > 0 && engine_.mix(p) > 0)
             std::snprintf(buf, sizeof buf, "off");   // one way at a time: FX 1 -> 2 is up
         // Label, value, bar with the same margin above and below (8 px in a 58 px cell).
-        color(kDim);
+        color(on ? kInk : kDim);
         text(cx, by0 + 15, kFontSmall, Disp::kOptCenter, label);
-        color(kInk);
+        color(on ? kInk : kSoft);
         text(cx, by0 + 33, kFontSmall, Disp::kOptCenter, buf);
         const uint32_t bc = s < kTracks ? (row == 0 ? kDelayColor : kReverbColor) : sc;
         color(kFaint);
         fillRect(x0 + 12, by0 + 46, x1 - 12, by0 + 50, 2);
-        color(scale(bc, emptyTrack ? 0.4f : 1.0f));
+        color(scale(bc, (emptyTrack ? 0.4f : 1.0f) * (on ? 1.0f : kUnsel)));
         fillRect(x0 + 12, by0 + 46, x0 + 16 + int((x1 - x0 - 28) * fr), by0 + 50, 2);
     }
 
@@ -1879,17 +1906,18 @@ void App::drawStrip(int s) {
     auto valueText = [&](uint8_t v) { std::snprintf(buf, sizeof buf, "%u", unsigned(v)); };
     auto frac = [](uint8_t v) { return float(v) / 100.0f; };
     const int fy0 = 184, fy1 = 424;
-    if (sel && row_ == 2) mark(x0 + 2, fy0 + 8, fy1 - 8);
-    color(kDim);
+    const bool on = sel && row_ == 2;
+    if (on) mark(x0 + 2, fy0 + 8, fy1 - 8);
+    color(on ? kInk : kDim);
     text(cx, fy0 + 15, kFontSmall, Disp::kOptCenter, s < kTracks || s == 6 ? "Level" : "Return");
     const uint8_t v = engine_.mix(p, t);
     const int sy0 = fy0 + 32, sy1 = fy1 - 32;           // slot, centred between the label and the value
     const int ky = sy1 - int((sy1 - sy0) * frac(v));     // knob
     color(kFaint);
     fillRect(cx - 4, sy0, cx + 4, sy1, 4);
-    color(scale(sc, emptyTrack ? 0.4f : 1.0f));
+    color(scale(sc, (emptyTrack ? 0.4f : 1.0f) * (on ? 1.0f : kUnsel)));
     fillRect(cx - 4, ky, cx + 4, sy1, 4);
-    color(kInk);
+    color(on ? kInk : kSoft);
     fillRect(cx - 14, ky - 4, cx + 14, ky + 4, 3);
     // Meters: one for a track or a return, left and right for the master.
     auto meter = [&](int mx, float m) {
@@ -1907,7 +1935,7 @@ void App::drawStrip(int s) {
         meter(x1 - 16, outMeter_[1]);
     }
     valueText(v);
-    color(kInk);
+    color(on ? kInk : kSoft);
     text(cx, fy1 - 15, kFontSmall, Disp::kOptCenter, buf);
 }
 
@@ -2258,14 +2286,14 @@ void App::drawInput() {
                 const int bx0 = x1 - 150, bx1 = x1 - 16;
                 color(kFaint);
                 fillRect(bx0, y1 - 9, bx1, y1 - 6, 2);
-                color(kAmber);
+                color(scale(kAmber, sel ? 1.0f : kUnsel));
                 fillRect(bx0, y1 - 9, bx0 + 2 + int(float(bx1 - bx0 - 2) * frac), y1 - 6, 2);
                 if (meter > 0.005f) {   // the live input level just above it
                     color(meter > 0.9f ? kRed : (meter > 0.6f ? kAmber : 0x3DDC97));
                     fillRect(bx0, y1 - 13, bx0 + int(float(bx1 - bx0) * (meter > 1.0f ? 1.0f : meter)), y1 - 11, 1);
                 }
             }
-            color(dim ? kDim : kInk);
+            color(dim ? kDim : (sel ? kInk : kSoft));
             text(x1 - 16, frac >= 0.0f ? cy - 4 : cy, kFontBody, Disp::kOptRightX | Disp::kOptCenterY, v);
         }
     }
@@ -2490,7 +2518,7 @@ void App::drawMidi() {
     if (sel0) mark(20, 56, 80);
     color(sel0 ? kInk : kDim);
     text(36, 68, kFontBody, Disp::kOptCenterY, "Clock");
-    color(kInk);
+    color(sel0 ? kInk : kSoft);
     text(324, 68, kFontBody, Disp::kOptRightX | Disp::kOptCenterY, kClock[cfg_.midiClock % 3]);
     color(kDim);
     const MidiClock mc = MidiClock(cfg_.midiClock);
@@ -2522,7 +2550,7 @@ void App::drawMidi() {
         else if (mb.type == 1) std::snprintf(buf, sizeof buf, "Note %u", unsigned(mb.num));
         else if (mb.type == 2) std::snprintf(buf, sizeof buf, "CC %u", unsigned(mb.num));
         else std::snprintf(buf, sizeof buf, "-");
-        color(waiting ? kInk : (mb.type ? kInk : kDim));
+        color(waiting || sel ? kInk : (mb.type ? kSoft : kDim));
         text(764, cy, kFontBody, Disp::kOptRightX | Disp::kOptCenterY, buf);
     }
 }
@@ -2611,10 +2639,10 @@ void App::drawConfig() {
         if (frac >= 0.0f) {
             color(kFaint);
             fillRect(420, (y0 + y1) / 2 - 3, 640, (y0 + y1) / 2 + 3, 3);
-            color(off ? kDim : kAmber);
+            color(off ? kDim : scale(kAmber, sel ? 1.0f : kUnsel));
             fillRect(420, (y0 + y1) / 2 - 3, 426 + int(214.0f * frac), (y0 + y1) / 2 + 3, 3);
         }
-        color(off ? kDim : kInk);
+        color(off ? kDim : (sel ? kInk : kSoft));
         text(760, (y0 + y1) / 2, kFontBody, Disp::kOptRightX | Disp::kOptCenterY, buf);
     }
     // About
@@ -2922,7 +2950,7 @@ void App::arc(int cx, int cy, float r, float a0, float a1, int segs) {
 }
 
 void App::drawKnob(int cx, int cy, int r, float frac, float shown, uint32_t col, bool sel, float glow,
-                   const char* name, const char* value) {
+                   const char* name, const char* value, bool dimmable) {
     // 270-degree knob from lower left to lower right. `shown` is the eased
     // value (the arc glides to `frac`); `glow` 0..1 lights a halo (the effect's
     // output level).
@@ -2946,14 +2974,15 @@ void App::drawKnob(int cx, int cy, int r, float frac, float shown, uint32_t col,
     d_->lineWidth(5 * 16);
     color(0x262E3A);
     arc(cx, cy, float(r), kA0, kA0 + kSpan, 24);
+    const bool lit = sel || !dimmable;   // full brightness
     if (shown > 0.005f) {
-        color(col);
+        color(lit ? col : scale(col, kUnsel));
         arc(cx, cy, float(r), kA0, kA0 + kSpan * shown, 2 + int(22.0f * shown));
     }
     words_ += 1;
     // The pointer (no body: the arcs carry it)
     const float a = kA0 + kSpan * shown;
-    color(kInk);
+    color(lit ? kInk : kSoft);
     d_->lineWidth(3 * 16);
     d_->begin(Disp::kLines);
     d_->vertex2f(int32_t((float(cx) + float(r - 24) * std::cos(a)) * 16.0f),
@@ -2963,18 +2992,17 @@ void App::drawKnob(int cx, int cy, int r, float frac, float shown, uint32_t col,
     d_->end();
     words_ += 5;
     if (name) {
-        color(sel ? col : kDim);
+        color(sel ? kInk : kDim);
         text(cx, cy - r - 20, kFontSmall, Disp::kOptCenter, name);
     }
     if (value) {
-        color(kInk);
+        color(lit ? kInk : kSoft);
         text(cx, cy + r + 8, kFontSmall, Disp::kOptCenter, value);
     }
 }
 
 bool App::grainPanel() const {
-    if (!f5Held_ || engine_.mode(selected_) != PlayMode::kGranular) return false;
-    return f5Used_ || p_.clock->millis() - f5DownMs_ >= 250;   // a tap does not flash it
+    return grainMenu_ && engine_.mode(selected_) == PlayMode::kGranular;
 }
 
 void App::grainText(int knob, char* buf, size_t n) const {
@@ -3007,7 +3035,7 @@ void App::drawGrainPanel() {
         drawKnob(205 + i * 130, 236, 44, fr, grainShown_[i], tc, grainSel_ == i, 0.0f, gk.name, buf);
     }
     color(kDim);
-    text(400, 336, kFontSmall, Disp::kOptCenter, "F1-F4: knob   Encoder: value   Release F5: done");
+    text(400, 336, kFontSmall, Disp::kOptCenter, "F1-F4: knob   Encoder: value   F5: close");
 }
 
 void App::drawPopupKnob(const char* title, const char* value, float frac, float& shown, uint32_t col, float meter) {
@@ -3020,7 +3048,7 @@ void App::drawPopupKnob(const char* title, const char* value, float frac, float&
     panel(270, 90, 530, 360, 16, 0x2A2A2A);
     color(col);
     text(400, 112, kFontBig, Disp::kOptCenter, title);
-    drawKnob(400, 226, 72, frac, shown, col, false, meter, nullptr, nullptr);
+    drawKnob(400, 226, 72, frac, shown, col, false, meter, nullptr, nullptr, false);
     color(kInk);
     text(400, 330, kFontBig, Disp::kOptCenter, value);
 }

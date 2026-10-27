@@ -55,7 +55,8 @@ mode and a switch carries on from where it is.
 | ![Mode bar, page 1](docs/img/modes.png) | ![Mode bar, page 2](docs/img/modes2.png) |
 
 **Granular** plays the loop through Clouds grains around the playhead. Hold
-F5 for its four knobs (Spread, Size, Density, Pitch). The lane draws every
+F5 for the grain menu with its four knobs (Spread, Size, Density, Pitch); it
+stays open until F5 again. The lane draws every
 grain where it reads, as long as it is and as bright as it sounds. Below,
 track 2 plays in Half rev (the trail on the right of its playhead) and track 4
 is Granular, its grains scattered by Spread:
@@ -202,7 +203,7 @@ while it is muted.
 | F2 PLAY | Stop: the track goes silent and back to its start. Play: it starts again from its start on the next bar line (press again to cancel) |
 | F3 MUTE | Mute on/off |
 | F4 TEMPO | Tap: metronome on/off (the label is bright while it is on). Hold + encoder: tempo, 1 bpm a step (a knob shows while held). Shift + hold + encoder: click level. Delete clears tracks |
-| F5 MODE | Tap: the mode bar, two pages of playback modes; the key under one picks it, F8 in the bar turns the page (it opens on the page with the track's mode). Any other key closes it. Hold on a Granular track: its grain knobs (F1–F4 pick one, the encoder turns it) |
+| F5 MODE | Tap: the mode bar, two pages of playback modes; the key under one picks it, F8 in the bar turns the page (it opens on the page with the track's mode). Any other key closes it. Hold on a Granular track: the grain menu, which stays open (F1–F4 pick a knob, the encoder turns it, F6–F8 are blank, F5 closes it) |
 | F6 INPUT | Tap: the Input page (the cell shows the source and the input level). Hold + encoder: input gain (a knob with the input level shows while held) |
 | F7 VOLUME | The selected track's volume, with its output level in the cell. Hold + encoder: a volume knob (the encoder alone sets it too) |
 | F8 UNDO | Undo the last overdub or replace; after an undo it reads REDO and brings it back |
@@ -379,7 +380,10 @@ short, double long.
 Instruments' grain and window code), each centred on where the loop is now.
 The lane draws each sounding grain where it reads, as wide as it is long,
 taller and brighter as it gets louder, higher the more it is panned left.
-Hold **F5** on a Granular track for its four knobs: **Spread** (0 %: at the
+Hold **F5** on a Granular track for the grain menu: it stays open after the
+release, F1–F4 pick one of its four knobs, F6–F8 are blank and a tap on F5
+closes it (so do Note, the page keys and selecting a track that is not
+Granular). The knobs: **Spread** (0 %: at the
 playhead … 100 %: anywhere in the loop), **Size** (20–500 ms), **Density**
 (1–8 grains overlapping) and **Pitch** (±24 semitones). With the track's Tempo
 option on Tape, a tempo change moves the grains' pitch too; on Stretch it

@@ -138,7 +138,7 @@ constexpr ModeInfo kModes[kModeCount] = {
     {"Double rev", ModeInfo::kTape, 131072, 131072, false, true, false},
 };
 
-// Granular mode's knobs (per track, hold F5): grains scattered around the
+// Granular mode's knobs (per track, the grain submenu: hold F5): grains scattered around the
 // playhead, so the loop keeps its time.
 constexpr int kGrainKnobs = 4;
 constexpr int kLoopGrains = 8;          // grains per track at most (each reads the SDRAM)

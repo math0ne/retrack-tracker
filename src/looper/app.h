@@ -157,8 +157,9 @@ private:
     void fxEncoder(int delta);
     void drawFxPage(uint32_t now);
     void drawFxVisual(int slot, uint32_t now);
+    // dimmable: one of a row of knobs, drawn dimmer unless it is the selected one.
     void drawKnob(int cx, int cy, int r, float frac, float shown, uint32_t col, bool sel, float glow,
-                  const char* name, const char* value);
+                  const char* name, const char* value, bool dimmable = true);
     void arc(int cx, int cy, float r, float a0, float a1, int segs);   // a LINE_STRIP arc, radians
     int fxPage_ = -1;             // slot shown, -1 = none
     bool fxBar_ = false;          // F1: the labels show the effect types
@@ -254,6 +255,9 @@ private:
     int grainSel_ = 1;
     float grainShown_[kGrainKnobs] = {};
     bool grainPanel() const;     // the panel is up
+    // The grain knobs as a submenu: a hold of F5 on a Granular track opens it
+    // and it stays; F1..F4 pick a knob, F5 closes it, F6..F8 are blank.
+    bool grainMenu_ = false;
     void drawGrainPanel();
     void grainText(int knob, char* buf, size_t n) const;
     bool mixer_ = false;         // mixer page shown
