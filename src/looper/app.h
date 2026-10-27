@@ -123,6 +123,7 @@ private:
     // sunken one (dark top edge, lit bottom edge).
     void panel(int x0, int y0, int x1, int y1, int radius, uint32_t fill);
     void well(int x0, int y0, int x1, int y1, int radius, uint32_t fill);
+    void mark(int x, int y0, int y1);   // the selection: a short bright bar left of a row
     void hline(int x0, int x1, int y, int width16 = 16);
     void vline(int x, int y0, int y1, int width16 = 16);
     void dot(int x, int y, int radius);

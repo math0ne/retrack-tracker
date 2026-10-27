@@ -185,9 +185,10 @@ mouse wheel = encoder. The panel is clickable.
 
 The screen is the four track lanes and, along the bottom, the labels of the
 eight screen keys, each centred over its key as on the stock Tracker. The whole
-interface is greyscale: shades of grey for depth (a soft light from the top,
-raised panels with shadows and lit edges, waveforms set into the lanes), the
-four tracks told apart by slightly different greys. The lanes
+interface is greyscale and minimal: every page is plain black with no cards or
+boxes, the selected row or strip marked by a short bright bar at its left and
+brighter text, the four tracks told apart by slightly different greys (only
+the popups over the lanes keep a backing, to stay readable). The lanes
 are waveforms only, the full width of the screen; a tag in each lane's corner
 gives its number and, when they apply, its length, mode (other than Forward)
 and Muted. The selected track's state is on the keys: REC lights up while it
