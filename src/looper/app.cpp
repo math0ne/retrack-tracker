@@ -247,10 +247,15 @@ namespace {
 constexpr int kModeMore = -1, kModeNone = -2;
 constexpr int kModeBarKeys[2][8] = {
     {int(PlayMode::kForward), int(PlayMode::kReverse), int(PlayMode::kPingPong), int(PlayMode::kHalfSpeed),
-     kModeMore, int(PlayMode::kDoubleSpeed), int(PlayMode::kStretch), int(PlayMode::kOctaveUp)},
-    {int(PlayMode::kOctaveDown), int(PlayMode::kGranular), kModeNone, kModeNone, kModeMore, kModeNone, kModeNone,
-     kModeNone},
+     kModeMore, int(PlayMode::kDoubleSpeed), int(PlayMode::kHalfReverse), int(PlayMode::kDoubleReverse)},
+    {int(PlayMode::kStretch), int(PlayMode::kOctaveUp), int(PlayMode::kOctaveDown), int(PlayMode::kGranular),
+     kModeMore, kModeNone, kModeNone, kModeNone},
 };
+bool onModePage2(PlayMode m) {
+    for (int k : kModeBarKeys[1])
+        if (k == int(m)) return true;
+    return false;
+}
 }  // namespace
 
 void App::onFKey(int key) {
@@ -269,6 +274,7 @@ void App::onFKey(int key) {
         case 0: record(selected_); break;
         case 1: engine_.post(Engine::kPlayStop, t); break;
         case 2: engine_.post(Engine::kMute, t); break;
+        case 7: undoDub(engine_.view(selected_).dubUndo.load() == 2); break;   // undo, or redo after an undo
         // F4 (metronome / tempo), F5 (mode), F6 (input) and F7 (volume) are tap / hold keys: onInput
         default: break;
     }
@@ -287,19 +293,6 @@ void App::undoDub(bool redo) {
     }
     engine_.post(Engine::kDubUndo, uint8_t(selected_), int16_t(redo ? 1 : 0));
     hint(selected_, redo ? "Redo" : "Undo: the overdub is gone (redo brings it back)", now);
-}
-
-void App::multiply(bool halve) {
-    const TrackView& v = engine_.view(selected_);
-    const uint32_t len = v.len.load();
-    if (!len) return;
-    const uint32_t cap = engine_.memory(selected_).capacity * (v.mono.load() ? 2u : 1u);
-    if (!halve && v.start.load() + 2 * len > cap) {
-        hint(selected_, "Too long to double", p_.clock->millis());
-        return;
-    }
-    engine_.post(Engine::kMultiply, uint8_t(selected_), int16_t(halve ? 0 : 1));
-    hint(selected_, halve ? "Halved" : "Doubled: it plays twice, overdub the copy", p_.clock->millis());
 }
 
 void App::shiftFKey(int key) {
@@ -321,10 +314,6 @@ void App::shiftFKey(int key) {
             }
             break;
         }
-        case 4: undoDub(false); break;
-        case 5: undoDub(true); break;
-        case 6: multiply(false); break;
-        case 7: multiply(true); break;
         default: break;
     }
 }
@@ -499,9 +488,7 @@ void App::onInput(const ot::InputEvent& ev) {
             f5Held_ = false;
             if (!f5Used_ && ev.timeMs - f5DownMs_ < kTapMs) {
                 modeBar_ = true;
-                modePage_ = engine_.mode(selected_) == PlayMode::kOctaveDown ||
-                                    engine_.mode(selected_) == PlayMode::kGranular
-                                ? 1 : 0;   // the page with the track's mode
+                modePage_ = onModePage2(engine_.mode(selected_)) ? 1 : 0;   // the page with the track's mode
             }
         }
         return;
@@ -640,7 +627,6 @@ void App::onInput(const ot::InputEvent& ev) {
     }
     switch (ev.id) {
         case b::Insert: undoDub(shift_); break;     // undo the last overdub / replace (Shift: redo it)
-        case b::Copy: multiply(shift_); break;      // double the loop (Shift: halve it)
         case b::Rec: record(selected_); break;
         case b::Play:
             if (shift_) {   // Shift + Play: metronome on / off
@@ -1121,7 +1107,6 @@ void App::drawLane(int t, uint32_t now) {
 
     // Waveform inset
     const int wx = kWaveX, wy = y0 + kWaveDy, wx1 = wx + kWaveW, wy1 = wy + kWaveH;
-    well(wx - 2, wy - 2, wx1 + 2, wy1 + 2, 6, 0x050505);
     if (s == TrackState::kRecording || s == TrackState::kCountIn || s == TrackState::kArmed) {
         color(s == TrackState::kRecording ? kRed : kAmber);
         alpha(uint8_t(80 + 150 * pulse(now, 700)));
@@ -1168,9 +1153,10 @@ void App::drawLane(int t, uint32_t now) {
     } else if (empty) {
         color(kFaint);
         hline(wx + 8, wx1 - 8, wy + kWaveH / 2, 16);
-        color(kDim);
-        text(wx + kWaveW / 2, wy + kWaveH / 2, kFontSmall, Disp::kOptCenter,
-             s == TrackState::kClearing ? "clearing..." : "pad 1 or REC to record");
+        if (s == TrackState::kClearing) {
+            color(kDim);
+            text(wx + kWaveW / 2, wy + kWaveH / 2, kFontSmall, Disp::kOptCenter, "clearing...");
+        }
     } else if (waveValid_[t]) {
         // Played part bright, the rest dimmed: the same bitmap twice under two
         // scissors. Reverse reads right to left, so its "played" side is the right.
@@ -1179,7 +1165,7 @@ void App::drawLane(int t, uint32_t now) {
         if (s == TrackState::kRecording) px = wx + int(uint64_t(kWaveW) * written / span);
         const uint32_t ramg = kWaveRamG + uint32_t(t) * kWaveBytes;
         const float dim = muted || s == TrackState::kStopped || s == TrackState::kQueued ? 0.35f : 1.0f;
-        const bool rev = mode == PlayMode::kReverse && s != TrackState::kRecording;
+        const bool rev = modeInfo(mode).reverse && s != TrackState::kRecording;
         const float leftK = rev ? 0.45f * dim : dim, rightK = rev ? dim : 0.45f * dim;
         if (px > wx) {
             scissor(wx, wy, px - wx, kWaveH);
@@ -1217,8 +1203,30 @@ void App::drawLane(int t, uint32_t now) {
             text(wx1 - 24, wy + 2, kFontSmall, Disp::kOptRightX, buf);
         }
 
-        // Playhead with a glow
+        // Playhead with a glow, and a fading trail behind it: as long as the
+        // read speed (half speed short, double long), on the side it came
+        // from (backwards modes, ping-pong's way back: the right).
         const uint32_t head = s == TrackState::kRecording ? kRed : (s == TrackState::kOverdubbing ? kAmber : kInk);
+        if (s == TrackState::kPlaying || s == TrackState::kOverdubbing) {
+            const ModeInfo& mi = modeInfo(mode);
+            int dir = mi.reverse ? -1 : 1;
+            if (mi.pingPong) {   // which way it went since the last frame
+                const int d = int(pos) - int(lastPos_[t]);
+                if (d != 0) pingDir_[t] = int8_t(d > 0 ? 1 : -1);
+                dir = pingDir_[t];
+            }
+            lastPos_[t] = pos;
+            const float sp = float(mi.time16) / 65536.0f * engine_.speed();
+            const float step = 6.0f * sp;   // pixels between the trail's steps
+            static const uint8_t kTrail[4] = {90, 55, 30, 12};
+            color(head);
+            for (int i = 0; i < 4; ++i) {
+                const int tx = px - dir * int(step * float(i + 1));
+                if (tx <= wx || tx >= wx1) break;
+                alpha(kTrail[i]);
+                vline(tx, wy + 6, wy1 - 6, 24);
+            }
+        }
         color(head);
         alpha(60);
         vline(px, wy - 1, wy1 + 1, 96);
@@ -1291,9 +1299,7 @@ void App::drawFKeys() {
         } else if (shift_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ &&
                    !f5Held_ && !f6Held_ && !f7Held_) {
             // The Shift layer of the home page.
-            const uint8_t u = v.dubUndo.load();
-            const bool loop = v.len.load() != 0;
-            const bool dubbable = loop && modeInfo(mode).canDub;
+            const bool dubbable = v.len.load() != 0 && modeInfo(mode).canDub;
             switch (i) {
                 case 0:
                     title[i] = "REPLACE";
@@ -1313,21 +1319,9 @@ void App::drawFKeys() {
                     title[i] = "CLICK";   // hold + encoder
                     std::snprintf(val[i], sizeof val[i], "%u", unsigned(engine_.opt(OptParam::kClick)));
                     break;
-                case 4:
-                    title[i] = "UNDO";
-                    std::snprintf(val[i], sizeof val[i], "%s", u == 1 ? "Overdub" : "-");
-                    break;
-                case 5:
-                    title[i] = "REDO";
-                    std::snprintf(val[i], sizeof val[i], "%s", u == 2 ? "Overdub" : "-");
-                    break;
-                case 6:
-                    title[i] = "DOUBLE";
-                    std::snprintf(val[i], sizeof val[i], "%s", loop ? "x2" : "-");
-                    break;
-                default:
-                    title[i] = "HALVE";
-                    std::snprintf(val[i], sizeof val[i], "%s", loop ? "1/2" : "-");
+                default:   // F5..F8: free under Shift
+                    title[i] = "";
+                    val[i][0] = '\0';
                     break;
             }
         } else if (grainPanel() && i < kGrainKnobs) {   // F5 held: F1..F4 pick a grain knob
@@ -1504,10 +1498,12 @@ void App::drawFKeys() {
                     title[i] = "VOLUME";
                     std::snprintf(val[i], sizeof val[i], "%u", unsigned(engine_.volume(selected_)));
                     break;
-                default:   // F8: free
-                    title[i] = "";
-                    val[i][0] = '\0';
+                default: {   // F8: undo the last overdub; after an undo, redo it
+                    const uint8_t u = v.dubUndo.load();
+                    title[i] = u == 2 ? "REDO" : "UNDO";
+                    std::snprintf(val[i], sizeof val[i], "%s", u ? "Overdub" : "-");
                     break;
+                }
             }
         }
         uint32_t hc = tc;
@@ -1530,11 +1526,11 @@ void App::drawFKeys() {
             else if (!modeBar_ && i == 3) tcol = engine_.opt(OptParam::kMetronome) ? kAmber : kDim;   // F4 is global
             else if (!modeBar_ && (i < 5 || i == 6)) tcol = scale(tc, 0.9f);
             color(tcol);
-            text(cx, kKeyY0 + 10, kFontSmall, Disp::kOptCenter, title[i]);
+            text(cx, kKeyY0 + 8, kFontSmall, Disp::kOptCenter, title[i]);
         }
         const bool bar = modeBar_ || (fxPage_ >= 0 && fxBar_);   // one-line labels
         color(hot ? kBg : kInk);
-        text(cx, bar ? (kKeyY0 + kKeyY1) / 2 + 4 : kKeyY0 + 28, kFontSmall, Disp::kOptCenter, val[i]);
+        text(cx, bar ? (kKeyY0 + kKeyY1) / 2 + 4 : kKeyY0 + 26, kFontSmall, Disp::kOptCenter, val[i]);
     }
     // Home page: the input level inside the INPUT cell, the track's level inside VOLUME
     if (!modeBar_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_) {
@@ -1543,11 +1539,11 @@ void App::drawFKeys() {
             const float m = inMeter_[c];
             if (m < 0.005f) continue;
             color(m > 0.9f ? kRed : (m > 0.6f ? kAmber : 0x3DDC97));
-            hline(x0, x0 + int((x1 - x0) * m), kKeyY1 - 5 + c * 2, 16);
+            hline(x0, x0 + int((x1 - x0) * m), kKeyY1 + c * 2, 16);
         }
         // The selected track's volume inside the VOLUME cell, its output level over it
         // (not under the Shift layer, where F7 is DOUBLE).
-        const int vx0 = 6 * kKeyW + 10, vx1 = shift_ ? vx0 : 7 * kKeyW - 10, vy = kKeyY1 - 5;
+        const int vx0 = 6 * kKeyW + 10, vx1 = shift_ ? vx0 : 7 * kKeyW - 10, vy = kKeyY1 + 1;   // under the value, with room
         const uint8_t vol = engine_.volume(selected_);
         color(kFaint);
         hline(vx0, vx1, vy, 16);
@@ -1677,10 +1673,6 @@ void App::drawStrip(int s) {
     fillRect(x0 + 4, 10, x1 - 4, 36, 6);
     color(emptyTrack ? kDim : kBg);
     text(cx, 23, kFontSmall, Disp::kOptCenter, kStripName[s]);
-    if (s == 4 || s == 5) {   // which effect is in the slot
-        color(sc);
-        text(cx, 41, kFontSmall, Disp::kOptCenter, fxTypeInfo(engine_.fxType(s - 4)).name);
-    }
 
     auto outline = [&](int bx0, int by0, int bx1, int by1) {
         color(sc);
@@ -1710,15 +1702,16 @@ void App::drawStrip(int s) {
         }
         if (k < 0 && p == MixParam::kChain2 && engine_.mix(MixParam::kChain1) > 0 && engine_.mix(p) > 0)
             std::snprintf(buf, sizeof buf, "off");   // one way at a time: FX 1 -> 2 is up
+        // Label, value, bar with the same margin above and below (8 px in a 58 px cell).
         color(kDim);
-        text(cx, by0 + 12, kFontSmall, Disp::kOptCenter, label);
+        text(cx, by0 + 15, kFontSmall, Disp::kOptCenter, label);
         color(kInk);
-        text(cx, by0 + 30, kFontSmall, Disp::kOptCenter, buf);
+        text(cx, by0 + 33, kFontSmall, Disp::kOptCenter, buf);
         const uint32_t bc = s < kTracks ? (row == 0 ? kDelayColor : kReverbColor) : sc;
         color(kFaint);
-        fillRect(x0 + 12, by0 + 45, x1 - 12, by0 + 49, 2);
+        fillRect(x0 + 12, by0 + 46, x1 - 12, by0 + 50, 2);
         color(scale(bc, emptyTrack ? 0.4f : 1.0f));
-        fillRect(x0 + 12, by0 + 45, x0 + 16 + int((x1 - x0 - 28) * fr), by0 + 49, 2);
+        fillRect(x0 + 12, by0 + 46, x0 + 16 + int((x1 - x0 - 28) * fr), by0 + 50, 2);
     }
 
     // The fader: level, return or master, with its meter beside it.
@@ -1731,9 +1724,9 @@ void App::drawStrip(int s) {
     if (sel && row_ == 2) outline(x0 + 4, fy0, x1 - 4, fy1);
     well(x0 + 4, fy0, x1 - 4, fy1, 6, kCell);
     color(kDim);
-    text(cx, fy0 + 12, kFontSmall, Disp::kOptCenter, s < kTracks || s == 6 ? "Level" : "Return");
+    text(cx, fy0 + 15, kFontSmall, Disp::kOptCenter, s < kTracks || s == 6 ? "Level" : "Return");
     const uint8_t v = engine_.mix(p, t);
-    const int sy0 = fy0 + 30, sy1 = fy1 - 34;           // slot
+    const int sy0 = fy0 + 32, sy1 = fy1 - 32;           // slot, centred between the label and the value
     const int ky = sy1 - int((sy1 - sy0) * frac(v));     // knob
     color(kFaint);
     fillRect(cx - 4, sy0, cx + 4, sy1, 4);
@@ -1758,7 +1751,7 @@ void App::drawStrip(int s) {
     }
     valueText(v);
     color(kInk);
-    text(cx, fy1 - 16, kFontSmall, Disp::kOptCenter, buf);
+    text(cx, fy1 - 15, kFontSmall, Disp::kOptCenter, buf);
 }
 
 // ---------------------------------------------------------------------------

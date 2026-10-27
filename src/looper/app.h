@@ -11,10 +11,10 @@
 //                The page: source, gain, the track's stereo / mono, monitor,
 //                overdub feedback, and the metronome (on, click, tempo, beats / bar)
 //   F7 Volume    the selected track's volume (and level); hold + encoder: a knob
-//   Shift + F1..F8 (home): Replace, Play / stop all, Solo, Click (hold + encoder),
-//                Undo, Redo, Double, Halve. The labels change while Shift is held.
+//   F8 Undo      undo the last overdub / replace; after an undo it is Redo
+//   Shift + F1..F4 (home): Replace, Play / stop all, Solo, Click (hold + encoder).
+//                The labels change while Shift is held.
 //   Encoder push tap tempo (three taps or more; before a loop the bar, after it the tape speed)
-//   F8           free
 //   The lanes are waveforms only; REC, PLAY and MUTE light up for the selected
 //   track's state, and a corner tag on each lane gives its number and length.
 // Other keys
@@ -202,9 +202,10 @@ private:
     void tapTempo(uint32_t ms);
     // Shift + F-key on the home page: the second layer.
     void shiftFKey(int key);
-    void undoDub(bool redo);          // Insert / Shift + F5, F6
-    void multiply(bool halve);        // Copy / Shift + F7, F8
+    void undoDub(bool redo);          // F8 / Insert (Shift + Insert: redo)
     int solo_ = -1;                   // the soloed track (Shift + F3), -1 none
+    uint32_t lastPos_[kTracks] = {};  // the playhead trail: last frame's read position
+    int8_t pingDir_[kTracks] = {1, 1, 1, 1};   // ping-pong: the way it is going
     // F7 on the home page: hold + encoder = the selected track's volume
     bool f7Held_ = false;
     float volShown_ = 0.8f;

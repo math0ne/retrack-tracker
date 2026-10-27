@@ -1419,7 +1419,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                 } else if (keep) {
                     for (Grain& gr : k.grain) {
                         if (gr.age >= kGrainFrames) {
-                            if (mi.reader == ModeInfo::kDirect) {   // the read position and direction now
+                            if (mi.reader == ModeInfo::kDirect || mi.reverse) {   // the read position and direction now
                                 const bool back = mi.reverse || (mi.pingPong && (ph >> 16) >= k.len);
                                 gr = Grain{uint64_t(posOfPhase(k, ph)) << 16, 0, back};
                             } else {
@@ -1481,10 +1481,16 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                         }
                         break;
                     }
-                    case ModeInfo::kTape: {     // varispeed: pitch follows speed
-                        const uint32_t i = uint32_t(ph >> 16), j = i + 1 < k.len ? i + 1 : 0;
+                    case ModeInfo::kTape: {     // varispeed: pitch follows speed (backwards: the reversed modes)
+                        const uint32_t p = uint32_t(ph >> 16);
                         const float fr = float(uint32_t(ph & 0xFFFFu)) * (1.0f / 65536.0f);
-                        interp(i, j, fr, sl, sr);
+                        if (mi.reverse) {
+                            const uint32_t i = k.len - 1 - p, j = i > 0 ? i - 1 : k.len - 1;
+                            interp(i, j, fr, sl, sr);
+                        } else {
+                            const uint32_t j = p + 1 < k.len ? p + 1 : 0;
+                            interp(p, j, fr, sl, sr);
+                        }
                         break;
                     }
                     case ModeInfo::kGrains: {   // tempo from the phase, pitch from the grain read rate

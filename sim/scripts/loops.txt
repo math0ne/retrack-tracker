@@ -1,4 +1,4 @@
-# Loop features: the loop-point crossfade, stop fade, monitor through the FX, replace, multiply, undo / redo, the Shift layer.
+# Loop features: the loop-point crossfade, stop fade, monitor through the FX, replace, undo / redo, the Shift layer.
 wait 300
 opt all start 0
 # Monitor off (Input page, F2), so only the loops reach the output.
@@ -131,7 +131,7 @@ reset_levels
 wait 1300
 expect_below 0.01
 
-# Multiply (the take is 1.02 s: the taps add a little): Copy doubles track 3's loop (1 s -> 2 s), Shift + Copy halves it.
+# Track 3: a free 1 s take of the tone (1.02 s: the taps add a little).
 opt 3 stop 0
 tone 330
 tap 24
@@ -140,19 +140,7 @@ tap 24
 wait 300
 tone off
 expect_len 3 1.02
-press COPY
-wait 500
-expect_len 3 2.04
-shot ../build/sim/check/loops_doubled.png
 expect_state 3 PLAY
-reset_levels
-wait 2000
-expect_audio 0.2
-hold SHIFT
-press COPY
-release SHIFT
-wait 50
-expect_len 3 1.02
 
 # Undo: track 3 (1.02 s of tone, playing) gets a replace with silence, then
 # Insert brings the tone back, Shift + Insert takes it away again (track 3 is selected).
@@ -184,20 +172,24 @@ reset_levels
 wait 1100
 expect_audio 0.2
 
-# The Shift layer on the home page: Shift + F7 doubles, Shift + F8 halves,
-# Shift + F5 / F6 undo / redo, Shift + F3 solo.
+# F8 on the home page: undo, and after an undo, redo (the tone is back now).
+press F8
+wait 300
+reset_levels
+wait 1100
+expect_below 0.01
+shot ../build/sim/check/loops_f8_redo.png
+press F8
+wait 300
+reset_levels
+wait 1100
+expect_audio 0.2
+
+# The Shift layer on the home page: Shift + F3 solo.
 hold SHIFT
 wait 30
 shot ../build/sim/check/loops_shift_layer.png
-press F7
 release SHIFT
-wait 500
-expect_len 3 2.04
-hold SHIFT
-press F8
-release SHIFT
-wait 50
-expect_len 3 1.02
 # Solo track 3: track 1 muted (it is already), track 3 plays; again: unmuted.
 hold SHIFT
 press F3

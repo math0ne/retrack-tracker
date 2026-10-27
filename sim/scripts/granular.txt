@@ -18,10 +18,10 @@ wait 200
 tone off
 expect_state 1 PLAY
 
-# Granular: F5, F5 (page 2), F2.
+# Granular: F5, F5 (page 2), F4.
 press F5
 press F5
-press F2
+press F4
 expect_mode 1 Granular
 wait 300
 reset_levels

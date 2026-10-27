@@ -72,7 +72,7 @@ while it is muted.
 | F5 MODE | Tap: the mode bar, two pages of playback modes; the key under one picks it, F5 in the bar turns the page (it opens on the page with the track's mode). Any other key closes it. Hold on a Granular track: its grain knobs (F1–F4 pick one, the encoder turns it) |
 | F6 INPUT | Tap: the Input page (the cell shows the source and the input level). Hold + encoder: input gain (a knob with the input level shows while held) |
 | F7 VOLUME | The selected track's volume, with its output level in the cell. Hold + encoder: a volume knob (the encoder alone sets it too) |
-| F8 | Free |
+| F8 UNDO | Undo the last overdub or replace; after an undo it reads REDO and brings it back |
 
 **Input page** (F6): two cards. Up/Down pick a setting, Left/Right the card, the
 encoder sets it (Shift: fine steps); F6 or F8 closes it.
@@ -96,7 +96,7 @@ encoder sets it (Shift: fine steps); F6 or F8 closes it.
 Quick keys on the page: F1 next source, F2 monitor on/off, F3 next channel
 mode, F4 metronome on/off, F5 feedback 100 / 90 / 75 / 50 %.
 
-**Shift layer.** Holding Shift on the home page relabels the eight keys:
+**Shift layer.** Holding Shift on the home page relabels F1–F4:
 
 | Shift + | Action (selected track) |
 |---|---|
@@ -104,10 +104,6 @@ mode, F4 metronome on/off, F5 feedback 100 / 90 / 75 / 50 %.
 | F2 ALL | Play / stop all (the transport, as Play) |
 | F3 SOLO | Mute every other track; again: everything back |
 | F4 CLICK | Hold + encoder: click level |
-| F5 UNDO | Undo the last overdub or replace |
-| F6 REDO | Bring it back |
-| F7 DOUBLE | Multiply: the loop twice as long, a copy after it (overdub across both) |
-| F8 HALVE | Keep the first half |
 
 | Other control | Action |
 |---|---|
@@ -117,7 +113,6 @@ mode, F4 metronome on/off, F5 feedback 100 / 90 / 75 / 50 %.
 | Pad column 4 | Clear |
 | Pad columns 5–12 | Jump to that eighth of the loop, keeping the phase (stays in time) |
 | Rec | Record / overdub the selected track; Shift + Rec: replace |
-| Copy | Double the selected loop (Shift: halve it) |
 | Insert | Undo the last overdub / replace (Shift: redo) |
 | Encoder push | Tap tempo: three taps or more (before a loop: the bar; after: the tape speed) |
 | Play | Transport: everything stops, or starts from bar 1 (what was playing plays, stopped tracks stay stopped); Shift + Play: metronome on / off |
@@ -181,14 +176,11 @@ keep going.
   punch points.
 - **Replace** (Shift + REC / pad 1 / F1) records over the loop; the REC key
   lights brightest while it does.
-- **Undo / redo** (Shift + F5 / F6, or Insert / Shift + Insert) take back the
+- **Undo / redo** (F8, or Insert / Shift + Insert) take back the
   last overdub or replace and bring it back, as often as you like. The audio
   under an overdub is kept at the end of the track's own memory, so undo works
   for loops up to half the track's memory (about 11 s stereo, 22 s mono);
-  trims, cuts, erases and doubling clear it.
-- **Double / halve** (Shift + F7 / F8, Copy / Shift + Copy): doubling copies
-  the loop after itself (a moment's work in the background, it keeps
-  playing), so an overdub can go across both halves.
+  trims, cuts and erases clear it.
 - **Stop fade** (options page, Tempo column, last row): Stop fades the track
   over 1 beat, 1 bar or 2 bars, then stops it; a second press stops at once.
 
@@ -231,14 +223,19 @@ position instead of jumping.
 | Ping-pong | Forwards then backwards (one cycle = two loop lengths) | yes |
 | Half speed | Tape style: half tempo, an octave down | no |
 | Double | Tape style: double tempo, an octave up | no |
-| Half time | Time-stretched: half tempo, same pitch (two cross-faded 46 ms grains) | no |
-| Octave up | Pitch-shifted: same tempo, an octave up (grains) | no |
-| Octave dn | Pitch-shifted: same tempo, an octave down (grains); page 2 of the bar | no |
+| Half rev | Tape style, backwards: half tempo, an octave down | no |
+| Double rev | Tape style, backwards: double tempo, an octave up | no |
+| Half time | Time-stretched: half tempo, same pitch (two cross-faded 46 ms grains); page 2 | no |
+| Octave up | Pitch-shifted: same tempo, an octave up (grains); page 2 | no |
+| Octave dn | Pitch-shifted: same tempo, an octave down (grains); page 2 | no |
 | Granular | Clouds grains read around the playhead, so the loop keeps its time; page 2 | no |
 
-Page 1 of the mode bar: F1 Forward, F2 Reverse, F3 Ping-pong, F4 Half speed,
-F5 More, F6 Double, F7 Half time, F8 Octave up. Page 2: F1 Octave dn,
-F2 Granular, F5 Back.
+Page 1 of the mode bar, the playback modes: F1 Forward, F2 Reverse,
+F3 Ping-pong, F4 Half speed, F5 More, F6 Double, F7 Half rev, F8 Double rev.
+Page 2, the grain modes: F1 Half time, F2 Octave up, F3 Octave dn,
+F4 Granular, F5 Back. The playhead trails a fading tail on the side it came
+from, as long as its speed: backwards modes show it on the right, half speed
+short, double long.
 
 **Granular** plays the loop through up to eight Clouds grains (Mutable
 Instruments' grain and window code), each centred on where the loop is now.

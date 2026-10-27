@@ -108,7 +108,8 @@ inline float lowPassHz(uint8_t v) { return 80.0f * __builtin_powf(100.0f, float(
 inline float highPassHz(uint8_t v) { return 100.0f * __builtin_powf(80.0f, float(v) / 100.0f); }   // 100 Hz..8 kHz
 
 enum class PlayMode : uint8_t {
-    kForward, kReverse, kPingPong, kHalfSpeed, kDoubleSpeed, kStretch, kOctaveUp, kOctaveDown, kGranular, kCount
+    kForward, kReverse, kPingPong, kHalfSpeed, kDoubleSpeed, kStretch, kOctaveUp, kOctaveDown, kGranular,
+    kHalfReverse, kDoubleReverse, kCount   // new modes go last: projects store the number
 };
 constexpr int kModeCount = int(PlayMode::kCount);
 
@@ -133,6 +134,8 @@ constexpr ModeInfo kModes[kModeCount] = {
     {"Octave up", ModeInfo::kGrains, 65536, 131072, false, false, false},
     {"Octave dn", ModeInfo::kGrains, 65536, 32768, false, false, false},
     {"Granular", ModeInfo::kCloud, 65536, 65536, false, false, false},     // knobs: kGrainKnobInfo
+    {"Half rev", ModeInfo::kTape, 32768, 32768, false, true, false},       // tape style, backwards
+    {"Double rev", ModeInfo::kTape, 131072, 131072, false, true, false},
 };
 
 // Granular mode's knobs (per track, hold F5): grains scattered around the

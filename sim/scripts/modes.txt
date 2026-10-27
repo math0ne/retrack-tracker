@@ -59,35 +59,51 @@ wait 200
 reset_levels
 wait 1000
 expect_audio 0.2
+# Half speed and double speed backwards (tape style).
 press F5
 press F7
+expect_mode 1 Halfrev
+wait 200
+reset_levels
+wait 1500
+expect_audio 0.2
+shot ../build/sim/check/modes_half_rev.png
+press F5
+press F8
+expect_mode 1 Doublerev
+wait 200
+reset_levels
+wait 1500
+expect_audio 0.2
+# Page 2, the grain modes: F5 in the bar turns to it.
+press F5
+press F5
+wait 50
+shot ../build/sim/check/modes_bar_page2.png
+press F1
 expect_mode 1 Halftime
 wait 200
 reset_levels
 wait 1500
 expect_audio 0.2
 shot ../build/sim/check/modes_half_time.png
+# The bar opens on the page with the track's mode.
 press F5
-press F8
+press F2
 expect_mode 1 Octaveup
 wait 200
 reset_levels
 wait 1500
 expect_audio 0.2
-# Page 2: F5 in the bar turns to it (Octave dn, Granular).
 press F5
-press F5
-wait 50
-shot ../build/sim/check/modes_bar_page2.png
-press F1
+press F3
 expect_mode 1 Octavedn
 wait 200
 reset_levels
 wait 1500
 expect_audio 0.2
-# The bar opens on the page with the track's mode.
 press F5
-press F2
+press F4
 expect_mode 1 Granular
 wait 300
 reset_levels
