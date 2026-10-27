@@ -1,0 +1,80 @@
+# Build the firmware and run the simulator checks on every push and pull
+# request. A tag vX.Y (one digit each: the image name must be 24 characters)
+# also builds version X.Y and publishes a GitHub release with the image.
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # the release
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib \
+            g++ make pkg-config libsdl2-dev python3
+          arm-none-eabi-gcc --version | head -1
+
+      - name: Version
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF_NAME#v}"
+            if [[ ! "$v" =~ ^[0-9]\.[0-9]$ ]]; then
+              echo "::error::tag $GITHUB_REF_NAME: use vX.Y with one digit each (the image name must be 24 characters)"
+              exit 1
+            fi
+          else
+            v=0.1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "ptf=PolyendTracLooperv${v//./}.ptf" >> "$GITHUB_OUTPUT"
+
+      - name: Firmware
+        run: make -j"$(nproc)" VERSION=${{ steps.ver.outputs.version }}
+
+      - name: Simulator checks
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: make -C sim -j"$(nproc)" check
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp build/${{ steps.ver.outputs.ptf }} dist/
+          (cd build/sdcard && zip -qr ../../dist/tracker-looper-${{ steps.ver.outputs.version }}-sdcard.zip Firmware)
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tracker-looper-${{ steps.ver.outputs.version }}
+          path: dist/
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'EOF'
+          **Very beta**: expect bugs and performance issues. Keep the stock firmware on the card as the way back.
+
+          Install: unzip the `-sdcard.zip` onto the SD card's root (it holds `Firmware/` with the image and an
+          `ot_restore.txt` that flashes it at the next power-on), or copy the `.ptf` into `/Firmware` and flash it
+          from Config > F1 Firmware (or the stock updater).
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "Tracker Looper ${{ steps.ver.outputs.version }}" \
+            --notes-file notes.md --generate-notes --verify-tag

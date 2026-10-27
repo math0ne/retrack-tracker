@@ -519,6 +519,19 @@ the right channel below it.
 Every take starts in phase with the bar grid; how it ends is the Stop option
 (Shift + F5; on bar by default).
 
+## Releases
+
+GitHub Actions (`.github/workflows/build.yml`) builds the firmware and runs
+the simulator checks on every push to main and every pull request; the image
+is attached to the run as an artifact. Pushing a tag `vX.Y` (one digit each,
+since the image name must be exactly 24 characters) builds version X.Y and
+publishes a release with `PolyendTracLooperv<XY>.ptf` and an SD-card zip:
+
+```
+git tag v0.2
+git push origin v0.2
+```
+
 ## Install on a Tracker
 
 First run on hardware: follow `docs/DEVICE_TEST.md` (way back, serial
