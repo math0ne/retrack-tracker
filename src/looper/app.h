@@ -107,8 +107,12 @@ private:
     void hint(int t, const char* msg, uint32_t now);
     void updateLeds(uint32_t now);
     void updateWaves(uint32_t now);
-    void renderWave(int t, uint32_t span);
-    void renderBitmap(int t, uint32_t span, int w, int h, uint32_t ramg);
+    void renderWave(int t, uint32_t span, bool partial);
+    void renderColumns(int t, uint32_t span, int w, int mid, uint8_t* hl, uint8_t* hr);
+    // prevL / prevR: the column heights RAM_G holds (kept up to date); unless
+    // `whole`, only the columns that differ are drawn and sent.
+    void renderBitmap(int t, uint32_t span, int w, int h, uint32_t ramg, uint8_t* prevL = nullptr,
+                      uint8_t* prevR = nullptr, bool whole = true);
     void render(uint32_t now);
 
     // drawing helpers (count display-list words for the readout)
@@ -310,6 +314,8 @@ private:
     uint32_t waveSpan_[kTracks] = {};
     uint32_t waveDrawnMs_[kTracks] = {};
     bool waveValid_[kTracks] = {};
+    using WaveCols = uint8_t[2][kWaveW];   // the half-heights a lane's bitmap shows (L, R)
+    WaveCols* waveCol_ = nullptr;          // per lane, in SDRAM (init)
     int waveNext_ = 0;           // lane that gets the next upload turn
     uint32_t waveUploads_ = 0, lastWaveUploads_ = 0;   // per second, for the telemetry
 

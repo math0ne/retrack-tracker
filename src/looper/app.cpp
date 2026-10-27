@@ -93,7 +93,13 @@ bool App::init(const Platform& p) {
     p_ = p;
     d_ = p.display;
     if (!d_ || !p_.audio || !p_.input || !p_.leds || !p_.clock || !p_.loopMem || !p_.fxMem) return false;
-    if (!p_.scratch || p_.scratchBytes < uint32_t(kEditW) * 16) return false;   // bitmaps go up in bands of rows
+    // The lanes' column heights (partial waveform uploads) live at the top of
+    // the staging buffer, in SDRAM rather than internal RAM; the bands use the rest.
+    constexpr uint32_t kColBytes = uint32_t(sizeof(WaveCols)) * kTracks;
+    if (!p_.scratch || p_.scratchBytes < uint32_t(kEditW) * 16 + kColBytes) return false;   // bands of rows
+    p_.scratchBytes -= kColBytes;
+    waveCol_ = reinterpret_cast<WaveCols*>(p_.scratch + p_.scratchBytes);
+    std::memset(waveCol_, 0, kColBytes);
 
     // Split the loop memory into four tracks: frames (4 B) plus two peak bytes
     // (left, right) per kPeakFrames.
@@ -856,25 +862,21 @@ void App::updateLeds(uint32_t now) {
 // ---------------------------------------------------------------------------
 // Waveform bitmaps (L8 intensity, tinted by COLOR_RGB at draw time)
 
-void App::renderWave(int t, uint32_t span) {
-    renderBitmap(t, span, kWaveW, kWaveH, kWaveRamG + uint32_t(t) * kWaveBytes);
+void App::renderWave(int t, uint32_t span, bool partial) {
+    renderBitmap(t, span, kWaveW, kWaveH, kWaveRamG + uint32_t(t) * kWaveBytes, waveCol_[t][0], waveCol_[t][1],
+                 !partial);
 }
 
-void App::renderBitmap(int t, uint32_t span, int w, int h, uint32_t ramg) {
-    // The waveform of `span` loop frames as a w x h L8 (luminance) bitmap
-    // (tinted at draw time), sent to RAM_G in bands of rows that fit the
-    // staging buffer.
+void App::renderColumns(int t, uint32_t span, int w, int mid, uint8_t* hl, uint8_t* hr) {
+    // Half-heights per column, left and right (mono: the same); 0 where the
+    // loop has no audio yet.
     const TrackMemory& m = engine_.memory(t);
     const TrackView& v = engine_.view(t);
     const uint32_t start = v.start.load();   // loop frame 0 in the buffer (trim)
     const uint32_t written = v.written.load();
     const bool mono = v.mono.load();
-    const int mid = h / 2;
     const uint32_t cellEnd = (start + written + kPeakFrames - 1) / kPeakFrames;
-    // Half-heights per column, left and right (mono: the same).
-    static uint8_t hl[1024], hr[1024];
-    bool content[1024];
-    for (int x = 0; x < w && x < 1024; ++x) {
+    for (int x = 0; x < w; ++x) {
         const uint32_t c0 = uint32_t((uint64_t(start) + uint64_t(span) * x / uint32_t(w)) / kPeakFrames);
         uint32_t c1 = uint32_t((uint64_t(start) + uint64_t(span) * (x + 1) / uint32_t(w)) / kPeakFrames);
         if (c1 <= c0) c1 = c0 + 1;
@@ -884,31 +886,91 @@ void App::renderBitmap(int t, uint32_t span, int w, int h, uint32_t ramg) {
             if (a > pl) pl = a;
             if (bb > pr) pr = bb;
         }
-        content[x] = c0 < cellEnd;
         hl[x] = uint8_t(pl ? 1 + pl * (mid - 2) / 255 : 0);
         hr[x] = uint8_t(pr ? 1 + pr * (mid - 2) / 255 : 0);
+    }
+}
+
+void App::renderBitmap(int t, uint32_t span, int w, int h, uint32_t ramg, uint8_t* prevL, uint8_t* prevR,
+                       bool whole) {
+    // The waveform of `span` loop frames as a w x h L8 (luminance) bitmap
+    // (tinted at draw time), sent to RAM_G in bands of rows that fit the
+    // staging buffer. With the heights RAM_G already holds (prevL / prevR,
+    // kept up to date) and not `whole`, only the runs of columns that changed
+    // are drawn and sent: an overdub or a growing take changes a few columns,
+    // not the 68 KB of the whole lane.
+    const int mid = h / 2;
+    static uint8_t hl[1024], hr[1024];
+    if (w > 1024) return;
+    renderColumns(t, span, w, mid, hl, hr);
+    // Runs of changed columns [x0, x1), 4-byte aligned (RAM_G writes), gaps
+    // under 16 columns merged; too many runs: the whole width.
+    constexpr int kMaxRuns = 4;
+    int run0[kMaxRuns], run1[kMaxRuns], runs = 0;
+    if (!prevL || whole) {
+        run0[0] = 0;
+        run1[0] = w;
+        runs = 1;
+        if (prevL) {
+            std::memcpy(prevL, hl, size_t(w));
+            std::memcpy(prevR, hr, size_t(w));
+        }
+    } else {
+        for (int x = 0; x < w; ++x) {
+            if (hl[x] == prevL[x] && hr[x] == prevR[x]) continue;
+            prevL[x] = hl[x];
+            prevR[x] = hr[x];
+            const int a = x & ~3, b = (x + 4) & ~3;
+            if (runs && a <= run1[runs - 1] + 16) {
+                run1[runs - 1] = b;
+            } else if (runs < kMaxRuns) {
+                run0[runs] = a;
+                run1[runs++] = b;
+            } else {   // scattered: everything
+                run0[0] = 0;
+                run1[0] = w;
+                runs = 1;
+                for (int y = x; y < w; ++y) {
+                    prevL[y] = hl[y];
+                    prevR[y] = hr[y];
+                }
+                break;
+            }
+        }
+        if (!runs) return;   // nothing changed on screen
+        if (run1[runs - 1] > w) run1[runs - 1] = w;
     }
     // Intensity per distance from the centre line: bright core, darker edges.
     // L8 (one byte of luminance), so the greys stay neutral when tinted.
     auto shade = [&](int d) { return uint8_t(255 - d * 150 / (mid ? mid : 1)); };
     const uint8_t baseline = 0x2C;
     // Stereo: the left channel grows up from the centre line, the right one down.
-    const int bandRows = int(p_.scratchBytes / uint32_t(w));
-    for (int y0 = 0; y0 < h; y0 += bandRows) {
-        const int y1 = y0 + bandRows < h ? y0 + bandRows : h;
-        uint8_t* px = p_.scratch;
-        std::memset(px, 0, size_t(y1 - y0) * size_t(w));
-        for (int y = y0; y < y1; ++y) {
-            uint8_t* row = px + size_t(y - y0) * size_t(w);
-            const int d = y < mid ? mid - y : y - mid;
-            const uint8_t s = shade(d);
-            for (int x = 0; x < w; ++x) {
-                if (y == mid) row[x] = baseline;
-                else if (content[x] && ((y < mid && d <= hl[x]) || (y > mid && d <= hr[x]))) row[x] = s;
+    for (int r = 0; r < runs; ++r) {
+        const int x0 = run0[r], cw = run1[r] - run0[r];
+        const int bandRows = int(p_.scratchBytes / uint32_t(cw));
+        for (int y0 = 0; y0 < h; y0 += bandRows) {
+            const int y1 = y0 + bandRows < h ? y0 + bandRows : h;
+            uint8_t* px = p_.scratch;
+            std::memset(px, 0, size_t(y1 - y0) * size_t(cw));
+            for (int y = y0; y < y1; ++y) {
+                uint8_t* row = px + size_t(y - y0) * size_t(cw);
+                const int d = y < mid ? mid - y : y - mid;
+                const uint8_t s = shade(d);
+                const uint8_t* hh = y < mid ? hl : hr;
+                for (int x = x0; x < x0 + cw; ++x) {
+                    if (y == mid) row[x - x0] = baseline;
+                    else if (d <= hh[x]) row[x - x0] = s;   // 0 where there is no audio
+                }
             }
+            if (cw == w) {   // whole rows: one write per band
+                d_->writeRamG(ramg + uint32_t(y0) * uint32_t(w), px, uint32_t(y1 - y0) * uint32_t(w));
+            } else {
+                for (int y = y0; y < y1; ++y)
+                    d_->writeRamG(ramg + uint32_t(y) * uint32_t(w) + uint32_t(x0), px + size_t(y - y0) * size_t(cw),
+                                  uint32_t(cw));
+            }
+            uploadBytes_ += uint32_t(y1 - y0) * uint32_t(cw);
         }
-        d_->writeRamG(ramg + uint32_t(y0) * uint32_t(w), px, uint32_t(y1 - y0) * uint32_t(w));
-        uploadBytes_ += uint32_t(y1 - y0) * uint32_t(w);
     }
     ++waveUploads_;
 }
@@ -942,7 +1004,8 @@ void App::updateWaves(uint32_t now) {
         const uint32_t ver = v.peakVersion.load();
         if (waveValid_[t] && ver == waveVersion_[t] && span == waveSpan_[t]) continue;
         if (s == TrackState::kOverdubbing && waveValid_[t] && now - waveDrawnMs_[t] < kRecWaveMs) continue;
-        renderWave(t, span);
+        // Same span over a bitmap that is on screen: only the changed columns.
+        renderWave(t, span, waveValid_[t] && span == waveSpan_[t]);
         waveVersion_[t] = ver;
         waveSpan_[t] = span;
         waveDrawnMs_[t] = now;
