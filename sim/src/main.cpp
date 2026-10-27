@@ -51,6 +51,7 @@
 //   expect_below MAX              fail unless the output peak since the last reset < MAX, then reset
 //   expect_perf TRACK FX on|off   performance effect FX (1..8, pad columns 5..12) running
 //   shot PATH          PNG of the front panel; screen PATH = the 800x480 screen only
+#include <random>
 #include <SDL.h>
 
 #include <cmath>
@@ -88,6 +89,9 @@ struct Options {
     bool telemetry = false;   // print the app's once-a-second telemetry line
     std::string sd;           // the SD card: a host folder (default: "sd" next to the program)
     std::string script, wav, shot;
+    long soakSeed = -1;       // --soak SEED: a long random session instead of a script
+    long soakMinutes = 60;
+    std::string soakLog;      // every action, timed (default: none)
 };
 
 bool parseArgs(int argc, char** argv, Options& o) {
@@ -105,9 +109,13 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--script" && (v = next())) o.script = v;
         else if (a == "--wav" && (v = next())) o.wav = v;
         else if (a == "--shot" && (v = next())) o.shot = v;
+        else if (a == "--soak" && (v = next())) o.soakSeed = std::atol(v);
+        else if (a == "--minutes" && (v = next())) o.soakMinutes = std::atol(v);
+        else if (a == "--soak-log" && (v = next())) o.soakLog = v;
         else {
             std::fprintf(stderr, "usage: %s [--line-in] [--tone HZ] [--tone-ch left|right|both] [--scale N] [--quit-after MS] "
-                                 "[--script FILE [--wav OUT] [--shot OUT.png]]\n", argv[0]);
+                                 "[--script FILE [--wav OUT] [--shot OUT.png]] [--soak SEED [--minutes N] [--soak-log FILE]]\n",
+                         argv[0]);
             return false;
         }
     }
@@ -125,6 +133,37 @@ struct ToneIn {
     int16_t buf[128 * 2] = {};
     std::vector<int16_t> wav;   // input_wav: stereo frames, looped
     size_t wavPos = 0;
+    // loopback: the output back into the input, loopDelay frames later (a
+    // cable from out to in, with the codec's round trip).
+    uint32_t loopDelay = 0;
+    float loopGain = 0.0f;
+    std::vector<int16_t> loopBuf = std::vector<int16_t>(2 * 8192);
+    uint64_t outFrames = 0, inFrames = 0;
+    void pushOut(const int16_t* out, uint32_t frames) {
+        for (uint32_t i = 0; i < frames; ++i, ++outFrames) {
+            const size_t j = 2 * (outFrames % 8192);
+            loopBuf[j] = out[2 * i];
+            loopBuf[j + 1] = out[2 * i + 1];
+        }
+    }
+    const int16_t* withLoop(const int16_t* src) {
+        // src (or silence) plus the output loopDelay frames ago.
+        const uint64_t base = inFrames;
+        inFrames += 128;
+        if (!loopDelay) return src;
+        for (int i = 0; i < 128; ++i) {
+            int32_t l = src ? src[2 * i] : 0, r = src ? src[2 * i + 1] : 0;
+            const uint64_t at = base + uint64_t(i);
+            if (at >= loopDelay && at - loopDelay < outFrames && outFrames - (at - loopDelay) <= 8192) {
+                const size_t j = 2 * ((at - loopDelay) % 8192);
+                l += int32_t(float(loopBuf[j]) * loopGain);
+                r += int32_t(float(loopBuf[j + 1]) * loopGain);
+            }
+            buf[2 * i] = int16_t(l < -32768 ? -32768 : (l > 32767 ? 32767 : l));
+            buf[2 * i + 1] = int16_t(r < -32768 ? -32768 : (r > 32767 ? 32767 : r));
+        }
+        return buf;
+    }
     bool loadWav(const std::string& path) {
         std::ifstream f(path, std::ios::binary);
         std::vector<char> d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
@@ -154,7 +193,8 @@ struct ToneIn {
         }
         return false;
     }
-    const int16_t* block() {
+    const int16_t* block() { return withLoop(source()); }
+    const int16_t* source() {
         if (!wav.empty()) {
             for (int i = 0; i < 128; ++i) {
                 buf[2 * i] = wav[wavPos];
@@ -180,6 +220,9 @@ struct ToneIn {
 class ChannelProbe final : public ot::IAudioOut {
 public:
     explicit ChannelProbe(ManualAudio& a) : a_(a) {}
+    ToneIn* loop = nullptr;   // gets every output block (loopback)
+    // Onsets on the left output since reset: |x| over 0.05 after 300 quiet frames.
+    uint32_t onsets() const { return onsets_; }
     void setCallback(FillFn fn, void* ctx) override {
         fn_ = fn;
         ctx_ = ctx;
@@ -192,6 +235,7 @@ public:
         peak_[0] = peak_[1] = 0.0f;
         rises_ = frames_ = 0;
         maxStep_ = 0.0f;
+        onsets_ = 0;
     }
     float maxStep() const { return maxStep_; }   // largest |x[n] - x[n-1]|, left, since reset
     // The left output's frequency since the last reset: rising crossings
@@ -202,6 +246,15 @@ private:
     static void fill(int16_t* out, uint32_t frames, void* ctx) {
         ChannelProbe* p = static_cast<ChannelProbe*>(ctx);
         if (p->fn_) p->fn_(out, frames, p->ctx_);
+        if (p->loop) p->loop->pushOut(out, frames);
+        for (uint32_t f = 0; f < frames; ++f) {
+            if (std::fabs(float(out[2 * f]) / 32768.0f) > 0.05f) {
+                if (p->quiet_ >= 300) ++p->onsets_;
+                p->quiet_ = 0;
+            } else {
+                ++p->quiet_;
+            }
+        }
         for (uint32_t i = 0; i < frames * 2; ++i) {
             const float v = std::fabs(float(out[i]) / 32768.0f);
             if (v > p->peak_[i & 1]) p->peak_[i & 1] = v;
@@ -227,6 +280,7 @@ private:
     uint32_t rises_ = 0, frames_ = 0;
     bool high_ = false;
     float last_ = 0.0f, maxStep_ = 0.0f;
+    uint32_t onsets_ = 0, quiet_ = 1000;
 };
 
 // MIDI: script bytes in (DIN), everything sent kept for expect_midi_out.
@@ -270,6 +324,7 @@ struct Machine {
 
     bool start(const Options& o, bool headless) {
         clock.setVirtual(headless);
+        probe.loop = &tone;   // the loopback hears every output block
         tone.hz = o.tone;
         tone.ch = o.toneCh == "left" ? ToneIn::kLeft : (o.toneCh == "right" ? ToneIn::kRight : ToneIn::kBoth);
         looper::Platform p;
@@ -441,7 +496,42 @@ struct Headless {
                 if (id >= 0) m.input.button(uint8_t(id), cmd == "hold");
             } else if (cmd == "enc") m.input.encoder(std::atoi(arg.c_str()));
             else if (cmd == "tone") m.tone.hz = arg == "off" ? 0.0f : float(std::atof(arg.c_str()));
-            else if (cmd == "tone_ch") {
+            else if (cmd == "loopback") {
+                // loopback FRAMES GAIN | loopback off: the output into the input, FRAMES later
+                std::string g;
+                in >> g;
+                m.tone.loopDelay = arg == "off" ? 0 : uint32_t(std::atol(arg.c_str()));
+                m.tone.loopGain = g.empty() ? 1.0f : float(std::atof(g.c_str()));
+            } else if (cmd == "expect_latency") {
+                // expect_latency FRAMES TOLERANCE: the measured round trip (Config > F3)
+                std::string tol;
+                in >> tol;
+                const looper::Engine& e = m.app.engine();
+                const int got = e.measureState() == 2 ? int(e.measured()) : -1;
+                const bool pass = got >= 0 && std::abs(got - std::atoi(arg.c_str())) <= std::atoi(tol.c_str());
+                std::printf("%s:%d: expect_latency %s %s (%d frames, state %d)\n", path.c_str(), lineNo, arg.c_str(),
+                            pass ? "PASS" : "FAIL", got, int(e.measureState()));
+                ok = ok && pass;
+            } else if (cmd == "expect_baroffset") {
+                // expect_baroffset TRACK FRAMES: where the first bar line falls in its loop
+                std::string want;
+                in >> want;
+                const int t = std::atoi(arg.c_str()) - 1;
+                const long got = t >= 0 && t < looper::kTracks ? long(m.app.engine().view(t).barOffset.load()) : -1;
+                const bool pass = got == std::atol(want.c_str());
+                std::printf("%s:%d: expect_baroffset %s %s %s (%ld)\n", path.c_str(), lineNo, arg.c_str(), want.c_str(),
+                            pass ? "PASS" : "FAIL", got);
+                ok = ok && pass;
+            } else if (cmd == "expect_onsets") {
+                // expect_onsets MIN MAX: clicks heard on the left output since the levels were reset
+                std::string mx;
+                in >> mx;
+                const uint32_t n = m.probe.onsets();
+                const bool pass = n >= uint32_t(std::atoi(arg.c_str())) && n <= uint32_t(std::atoi(mx.c_str()));
+                std::printf("%s:%d: expect_onsets %s %s %s (%u)\n", path.c_str(), lineNo, arg.c_str(), mx.c_str(),
+                            pass ? "PASS" : "FAIL", n);
+                ok = ok && pass;
+            } else if (cmd == "tone_ch") {
                 if (arg == "left") m.tone.ch = ToneIn::kLeft;
                 else if (arg == "right") m.tone.ch = ToneIn::kRight;
                 else m.tone.ch = ToneIn::kBoth;
@@ -889,6 +979,279 @@ int runInteractive(Machine& m, const Options& o) {
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Soak: a long random session. A seeded "user" presses keys and pads, turns
+// the encoder, changes the input, records long takes on a slow card, saves
+// and loads; after every action the engine's state is checked, and every
+// ten minutes a project is saved, loaded back and compared. The same seed
+// replays the same session (virtual time), so a failure can be run again.
+
+bool soak(Headless& h, uint32_t seed, uint32_t minutes, const std::string& logPath) {
+    Machine& m = h.m;
+    std::mt19937 rng(seed);
+    auto rnd = [&](uint32_t lo, uint32_t hi) { return lo + uint32_t(rng() % (hi - lo + 1)); };   // [lo, hi]
+    auto chance = [&](uint32_t perMille) { return rnd(0, 999) < perMille; };
+    FILE* log = logPath.empty() ? nullptr : std::fopen(logPath.c_str(), "w");
+    std::vector<std::string> recent;   // the last actions, for a failure report
+    auto act = [&](const std::string& what) {
+        char t[32];
+        std::snprintf(t, sizeof t, "%9.3f ", double(m.clock.nowUs()) / 1e6);
+        recent.push_back(t + what);
+        if (recent.size() > 40) recent.erase(recent.begin());
+        if (log) std::fprintf(log, "%s%s\n", t, what.c_str());
+    };
+    auto btn = [&](const char* n) { return uint8_t(buttonByName(n)); };
+    auto press = [&](const char* n) {
+        act(std::string("press ") + n);
+        m.input.button(btn(n), true);
+        h.advance(30);
+        m.input.button(btn(n), false);
+    };
+    auto tap = [&](int pad) {
+        act("tap " + std::to_string(pad));
+        m.input.pad(uint8_t(pad), true, 100);
+        h.advance(20);
+        m.input.pad(uint8_t(pad), false);
+    };
+    auto enc = [&](int d) {
+        act("enc " + std::to_string(d));
+        m.input.encoder(d);
+        h.advance(5);
+    };
+    // A slow card, like the 8 GB test card (h.ioHook is installed by card_speed).
+    h.wMBs = 8;
+    h.rMBs = 16;
+    h.latMs = 1;
+    h.stallMs = 150;
+    h.stallEvery = 64;
+    m.storage.ioHook = &Headless::ioHook;
+    m.storage.ioCtx = &h;
+    m.tone.steady = true;
+    const char* wavs[] = {"../build/demo/drums.wav", "../build/demo/bass.wav", "../build/demo/chords.wav",
+                          "../build/demo/pad.wav"};
+
+    std::string why;
+    auto fail = [&](const std::string& w) {
+        if (!why.empty()) return;
+        why = w;
+        if (!logPath.empty()) panelShot(m, logPath + ".png", false);   // the screen as it failed
+    };
+    auto check = [&]() {
+        const looper::Engine& e = m.app.engine();
+        for (int t = 0; t < looper::kTracks; ++t) {
+            const looper::TrackView& v = e.view(t);
+            const int s = int(v.state.load());
+            const uint32_t len = v.len.load(), start = v.start.load();
+            const bool mono = v.mono.load(), lng = e.longTake(t);
+            const uint32_t ram = (mono ? 2 : 1) * e.memory(t).capacity;
+            const uint32_t most = lng ? (mono ? 2 : 1) * looper::kStreamFrames : ram;
+            char b[160];
+            if (s < 0 || s > 8) {
+                std::snprintf(b, sizeof b, "track %d: state %d", t + 1, s);
+                fail(b);
+            }
+            const bool loop = s == 5 || s == 6 || s == 7 || s == 8;   // PLAY DUB STOP QUEUED
+            if (loop && !len) {
+                std::snprintf(b, sizeof b, "track %d: state %d with no loop", t + 1, s);
+                fail(b);
+            }
+            if (len && uint64_t(start) + len > most) {
+                std::snprintf(b, sizeof b, "track %d: loop [%u, %u) past its %s (%u)", t + 1, start, start + len,
+                              lng ? "stream file" : "RAM", most);
+                fail(b);
+            }
+        }
+        if (m.app.streamer().errors()) fail("card command errors: " + std::to_string(m.app.streamer().errors()));
+        if (h.maxWords > 2048) fail("display list over 2048 words: " + std::to_string(h.maxWords));
+    };
+    auto waitIdle = [&](uint32_t maxMs) {   // a File job done
+        for (uint32_t w = 0; w < maxMs && m.app.files().busy(); w += 100) h.advance(100);
+    };
+    // Save a new project, load it back, compare the loops' lengths and channels.
+    auto roundTrip = [&]() {
+        act("-- save and load back");
+        press("NOTE");
+        waitIdle(120000);
+        press("FILE");
+        press("F2");
+        h.advance(200);
+        waitIdle(300000);
+        const int saved = m.app.files().current();
+        if (!saved) {
+            act(std::string("   (not saved: ") + m.app.files().status() + ")");
+            press("NOTE");
+            return;
+        }
+        uint32_t len[looper::kTracks];
+        bool mono[looper::kTracks];
+        for (int t = 0; t < looper::kTracks; ++t) {
+            len[t] = m.app.engine().view(t).len.load();
+            mono[t] = m.app.engine().view(t).mono.load();
+        }
+        press("F3");
+        press("F3");
+        h.advance(200);
+        waitIdle(300000);
+        h.advance(1500);
+        if (m.app.files().current() == saved) {
+            for (int t = 0; t < looper::kTracks; ++t) {
+                const uint32_t l = m.app.engine().view(t).len.load();
+                if (l != len[t] || (l && m.app.engine().view(t).mono.load() != mono[t])) {
+                    char b[120];
+                    std::snprintf(b, sizeof b, "project %d: track %d came back %u frames%s, saved %u", saved, t + 1, l,
+                                  m.app.engine().view(t).mono.load() ? " mono" : "", len[t]);
+                    fail(b);
+                }
+            }
+        } else {
+            act(std::string("   (loaded something else: ") + m.app.files().status() + ")");
+        }
+        press("NOTE");
+    };
+
+    // Silence a listener hears: underruns on a track playing (or overdubbing),
+    // unmuted, at both ends of an action; by mode, to see where they come from.
+    uint64_t audible = 0, audibleBy[16] = {};
+    uint32_t underAt[looper::kTracks] = {};
+    auto playing = [&](int t) {
+        const looper::TrackView& v = m.app.engine().view(t);
+        const int s = int(v.state.load());
+        return (s == 5 || s == 6) && !v.muted.load() && m.app.engine().longTake(t);
+    };
+    bool wasPlaying[looper::kTracks] = {};
+    auto noteUnder = [&](bool before) {
+        for (int t = 0; t < looper::kTracks; ++t) {
+            const uint32_t u = m.app.engine().stream(t).underruns.load();
+            if (!before && wasPlaying[t] && playing(t) && u > underAt[t]) {
+                audible += u - underAt[t];
+                audibleBy[m.app.engine().view(t).mode.load() & 15] += u - underAt[t];
+            }
+            underAt[t] = u;
+            wasPlaying[t] = playing(t);
+        }
+    };
+    const uint64_t endUs = m.clock.nowUs() + uint64_t(minutes) * 60000000u;
+    uint64_t nextTrip = m.clock.nowUs() + 600000000u;   // every 10 minutes
+    uint32_t actions = 0;
+    bool shift = false;
+    while (m.clock.nowUs() < endUs && why.empty()) {
+        ++actions;
+        noteUnder(true);
+        const uint32_t r = rnd(0, 999);
+        if (r < 170) {   // a pad: record, play, mute, clear, the jumps / performance effects
+            const int row = int(rnd(0, 3));
+            const uint32_t c = rnd(0, 99);
+            const int col = c < 35 ? 0 : c < 55 ? 1 : c < 65 ? 2 : c < 67 ? 3 : int(rnd(4, 11));
+            tap(row * 12 + col);
+        } else if (r < 220) {   // a pad held (a performance effect, its knob)
+            const int pad = int(rnd(0, 3)) * 12 + int(rnd(4, 11));
+            act("hold pad " + std::to_string(pad));
+            m.input.pad(uint8_t(pad), true, 100);
+            h.advance(rnd(100, 1500));
+            if (chance(500)) enc(int(rnd(0, 8)) - 4);
+            h.advance(rnd(50, 800));
+            m.input.pad(uint8_t(pad), false);
+        } else if (r < 330) {   // a screen key
+            static const char* const kF[] = {"F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8"};
+            press(kF[rnd(0, 7)]);
+        } else if (r < 370) {   // a screen key held, the encoder turned (tempo, grain menu, gain, volume)
+            static const char* const kH[] = {"F4", "F5", "F6", "F7"};
+            const char* k = kH[rnd(0, 3)];
+            act(std::string("hold ") + k);
+            m.input.button(btn(k), true);
+            h.advance(rnd(400, 900));
+            for (uint32_t i = 0, n = rnd(1, 4); i < n; ++i) enc(int(rnd(0, 12)) - 6);
+            m.input.button(btn(k), false);
+            act(std::string("release ") + k);
+        } else if (r < 450) {
+            enc(int(rnd(0, 20)) - 10);
+        } else if (r < 480) {
+            shift = !shift;
+            act(shift ? "hold SHIFT" : "release SHIFT");
+            m.input.button(btn("SHIFT"), shift);
+        } else if (r < 520) {
+            press("REC");
+        } else if (r < 550) {
+            press("PLAY");
+        } else if (r < 570) {
+            press("INSERT");
+        } else if (r < 576) {
+            press("DELETE");
+        } else if (r < 600) {
+            press(chance(500) ? "UP" : "DOWN");
+        } else if (r < 615) {
+            press(chance(500) ? "LEFT" : "RIGHT");
+        } else if (r < 735) {   // pages
+            static const char* const kP[] = {"NOTE", "NOTE", "NOTE", "MASTER", "INSTR", "INSTR", "FX1",
+                                             "FX2", "FILE", "SONG", "PERFORMANCE", "PATTERN", "HELP"};
+            press(kP[rnd(0, 12)]);
+        } else if (r < 745) {   // tap tempo
+            for (int i = 0; i < 4; ++i) {
+                press("ENCPUSH");
+                h.advance(rnd(380, 700));
+            }
+        } else if (r < 800) {   // the input
+            const uint32_t k = rnd(0, 9);
+            if (k < 3) {
+                const float hz = float(rnd(110, 990));
+                m.tone.wav.clear();
+                m.tone.hz = hz;
+                act("tone " + std::to_string(int(hz)));
+            } else if (k < 6) {
+                const char* w = wavs[rnd(0, 3)];
+                if (m.tone.loadWav(w)) act(std::string("input_wav ") + w);
+            } else {
+                m.tone.wav.clear();
+                m.tone.hz = 0;
+                act("tone off");
+            }
+        } else if (r < 812) {   // a long take on one track: past its RAM, onto the card
+            const int row = int(rnd(0, 3));
+            tap(row * 12);
+            h.advance(rnd(21000, 45000));
+            tap(row * 12);
+        } else if (r < 830) {
+            const uint32_t ms = rnd(3000, 20000);
+            act("wait " + std::to_string(ms));
+            h.advance(ms);
+        } else {
+            // nothing: just time passing below
+        }
+        h.advance(rnd(30, 1200));
+        noteUnder(false);
+        check();
+        if (why.empty() && m.clock.nowUs() >= nextTrip) {
+            nextTrip += 600000000u;
+            if (shift) {
+                m.input.button(btn("SHIFT"), false);
+                shift = false;
+            }
+            roundTrip();
+            check();
+        }
+    }
+    if (shift) m.input.button(btn("SHIFT"), false);
+    const looper::Engine& e = m.app.engine();
+    uint32_t under = 0, over = 0, dropped = 0;
+    for (int t = 0; t < looper::kTracks; ++t) {
+        under += e.stream(t).underruns.load();
+        over += e.stream(t).overruns.load();
+        dropped += e.stream(t).dropped.load();
+    }
+    std::printf("soak seed %u: %.1f min, %u actions, display list max %u words, stream under %u (heard %.1f s) "
+                "over %u dropped %u: %s\n",
+                seed, double(m.clock.nowUs()) / 60e6, actions, h.maxWords, under, double(audible) / 44100.0, over,
+                dropped, why.empty() ? "PASS" : "FAIL");
+    for (int md = 0; md < 16; ++md)
+        if (audibleBy[md]) std::printf("  heard silence in mode %d: %.1f s\n", md, double(audibleBy[md]) / 44100.0);
+    if (!why.empty()) {
+        std::printf("  %s\n  the last actions:\n", why.c_str());
+        for (const std::string& a : recent) std::printf("    %s\n", a.c_str());
+    }
+    if (log) std::fclose(log);
+    return why.empty();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -899,7 +1262,7 @@ int main(int argc, char** argv) {
         const size_t slash = self.find_last_of('/');
         o.sd = (slash == std::string::npos ? std::string(".") : self.substr(0, slash)) + "/sd";
     }
-    const bool headless = !o.script.empty();
+    const bool headless = !o.script.empty() || o.soakSeed >= 0;
     static Machine m;   // 16 MB of loop memory: keep it off the stack
     if (!m.start(o, headless)) return 1;
     if (!headless) return runInteractive(m, o);
@@ -908,7 +1271,7 @@ int main(int argc, char** argv) {
     // The scripts are timed at 120 bpm (a 2 s bar), not the device's default tempo.
     m.app.scriptOpt(0, looper::OptParam::kTempo, 120);
     h.advance(10);
-    const bool ok = h.run(o.script);
+    const bool ok = o.soakSeed >= 0 ? soak(h, uint32_t(o.soakSeed), uint32_t(o.soakMinutes), o.soakLog) : h.run(o.script);
     h.advance(50);
     if (!o.shot.empty()) panelShot(m, o.shot, false);
     if (m.audio) m.audio->stop();

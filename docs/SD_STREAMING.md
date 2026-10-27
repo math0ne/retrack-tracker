@@ -107,10 +107,10 @@ spare (a loop under half its share).
 
 ## First step: measure the card
 
-Built: **Config > F3 SD test** (`src/looper/sdtest.*`). It writes a 16 MB
-file once (256 KB commands, allocating it), then overwrites it in place and
-reads it back in 32 / 64 / 256 KB commands, every word verified, and leaves
-`Looper/sdtest.txt`. It goes through FatFs and the SDRAM bounce buffer, as
+Done with an SD test screen (Config > F3 in builds up to v0.1, since removed). It wrote a 16 MB
+file once (256 KB commands, allocating it), then overwrote it in place and
+read it back in 32 / 64 / 256 KB commands, every word verified, and left
+`Looper/sdtest.txt`. It went through FatFs and the SDRAM bounce buffer, as
 streaming would today; `kSdDmaToSdram` is not tried yet (a compile-time HAL
 constant, and a wrong guess there could corrupt or hang).
 
@@ -121,7 +121,7 @@ uses the existing `benchmark()` and raw transfers, and it can also try
 `kSdDmaToSdram` with a verify pass. A few minutes with your cards gives the
 numbers the ring sizes depend on, before any of the streaming is built.
 
-## Measured (Config > F3 SD test, one 8 GB card)
+## Measured (the SD test, one 8 GB card)
 
 | Card format | Overwrite in place, 256 KB requests | Read | Worst overwrite |
 |---|---|---|---|

@@ -183,6 +183,7 @@ constexpr uint32_t kStreamFrames = kStreamSeconds * kSampleRate;   // stereo fra
 constexpr uint32_t kStreamBlockBytes = 32768;                      // a card command, a block of the files
 constexpr uint32_t kStreamBlocks = (kStreamFrames * 4u + kStreamBlockBytes - 1) / kStreamBlockBytes;
 constexpr uint32_t kStreamRingFrames = 11 * (kStreamBlockBytes / 4);   // ~2 s: 11 blocks
+constexpr uint32_t kMaxLatencyFrames = kSampleRate * 30 / 1000;   // latency compensation up to 30 ms
 constexpr uint32_t kStreamBehind = kSampleRate / 2;                // the ring keeps 0.5 s behind the playhead
 
 struct TrackMemory {
@@ -214,9 +215,13 @@ struct StreamView {
     std::atomic<bool> back{false};          // audio: the playhead reads backwards (reverse, ping-pong's way back)
     std::atomic<uint32_t> underruns{0};     // audio: frames played as silence (not in the ring)
     std::atomic<uint32_t> overruns{0};      // audio: takes cut short (the card fell a ring behind)
-    std::atomic<uint32_t> dirty[kBlockWords];   // audio: blocks an overdub changed (main writes them back)
+    // audio: blocks an overdub changed (main writes them back), one map per
+    // pass by session parity, so a pass's blocks stay its own for undo even
+    // when the next pass starts before they are back on the card.
+    std::atomic<uint32_t> dirty[2][kBlockWords];
     std::atomic<uint32_t> dropped{0};       // audio: overdub frames the ring did not hold (lost)
     std::atomic<uint32_t> session{0};       // audio: a new overdub pass began (a new undo set)
+    std::atomic<bool> loopPoint{false};     // audio: the loop-point blend changed the take's first frames
     std::atomic<uint8_t> undoReq{0};        // audio: 1 undo, 2 redo the last pass (the Streamer swaps it)
     std::atomic<bool> undoDone{false};      // main: the swap is in (the track plays again)
     // A cut or erase of loop frames [editA, editB) on a long take, done on the
@@ -285,6 +290,8 @@ public:
         kDubUndo,      // arg 0: undo the last overdub / replace, 1: redo it (main loop job, silent)
         kExtTempo,     // a = tempo in bpm, 16.16 (MIDI clock in): the bar before a loop, the tape speed after
         kClockOut,     // arg 0/1: send MIDI clock (24 a beat), start and stop
+        kLatency,      // arg = round-trip latency in output frames (0..kMaxLatencyFrames)
+        kMeasure,      // arg 1: measure the round-trip latency (a cable from out to in), 0: stop
     };
 
     // fxMem: kFxMemBytes, 4-byte aligned.
@@ -292,6 +299,10 @@ public:
     void post(Cmd c, uint8_t track = 0, int16_t arg = 0, uint32_t a = 0, uint32_t b = 0);   // main loop only
     void service();   // main loop: zero cleared buffers, run edit jobs
     bool editBusy() const { return job_.state.load(std::memory_order_acquire) != 0; }
+    // Latency measurement (kMeasure): 0 idle, 1 running, 2 done (measured(),
+    // output frames), 3 no click came back.
+    uint8_t measureState() const { return measState_.load(std::memory_order_acquire); }
+    uint16_t measured() const { return measFrames_.load(std::memory_order_relaxed); }
     void render(int16_t* out, const int16_t* in, uint32_t frames);   // audio thread
 
     const TrackView& view(int t) const { return view_[t]; }
@@ -412,6 +423,7 @@ private:
         // Overdub undo: a session runs from an overdub's start to its end.
         bool dubSession = false;     // an overdub session is open (its cells are being saved)
         bool undoOk = false;         // the loop fits twice: this session can be undone
+        bool undoUsed = false;       // cells were saved at the end of the buffer (a clear zeroes it all)
         uint8_t dubUndo = 0;         // 0 nothing, 1 can undo, 2 can redo (TrackView::dubUndo)
         float dubX = 0.0f;           // overdub / replace ramp, 0..1 (it ramps out after the stop too)
         uint32_t fadeAt = 0xFFFFFFFFu;   // the take's first frame after silence: it fades in from here
@@ -490,7 +502,14 @@ private:
     uint64_t phase16(const Track& k) const;           // current phase at t_
     uint32_t posOfPhase(const Track& k, uint64_t phase16) const;   // read position, frames
     uint64_t phaseOfPos(const Track& k, uint32_t pos, bool secondHalf) const;
-    uint32_t posOf(const Track& k) const { return posOfPhase(k, phase16(k)); }
+    // What plays now: the read position, ahead of the clock by the latency.
+    uint32_t posOf(const Track& k) const { return posOfPhase(k, readPhase16(k)); }
+    // Input arrives the round-trip latency after the output it was played
+    // against, so takes land that late in their buffers. Playback reads that
+    // far ahead of the clock to put them back in time; an overdub writes at
+    // the clock (that far behind the read position).
+    uint64_t latShift16(const Track& k) const;   // the latency as phase, 16.16
+    uint64_t readPhase16(const Track& k) const;  // phase16 + the latency
     void restartGrains(Track& k, uint64_t pos16);
     bool allEmpty() const;
     void publish();
@@ -527,6 +546,19 @@ private:
     bool running_ = false;
     bool monitor_ = true;
     uint8_t feedback_ = 100;
+    uint32_t lat_ = 0;               // round-trip latency compensation, output frames (kLatency)
+
+    // Latency measurement: a click out every kMeasGap frames, timed back at
+    // the input; the median of kMeasPings.
+    static constexpr uint32_t kMeasGap = 13230, kMeasWindow = 4410;
+    static constexpr int kMeasPings = 7;
+    bool meas_ = false, measWait_ = false;
+    uint32_t measClock_ = 0, measAt_ = 0;
+    int measPing_ = 0, measHits_ = 0;
+    uint16_t measGot_[kMeasPings] = {};
+    std::atomic<uint8_t> measState_{0};
+    std::atomic<uint16_t> measFrames_{0};
+    void measure(int16_t* out, const int16_t* in, uint32_t n);
 
     // recording options, tempo and metronome (kept across track clears)
     TrackOpts opts_[kTracks];

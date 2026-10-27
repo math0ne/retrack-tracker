@@ -72,7 +72,6 @@
 
 #include "looper/engine.h"
 #include "looper/files.h"
-#include "looper/sdtest.h"
 #include "looper/stream.h"
 #include "looper/platform.h"
 
@@ -83,6 +82,8 @@ public:
     bool init(const Platform& p);
     void loop();
     const Engine& engine() const { return engine_; }   // read-only, for the simulator's checks
+    const Files& files() const { return files_; }
+    const Streamer& streamer() const { return streamer_; }
     uint8_t inputGain() const { return cfg_.gain; }
     uint32_t lastWords() const { return lastWords_; }   // the last frame's display list
     void postMix(MixParam p, int track, int v) {        // the simulator's mix command
@@ -274,15 +275,6 @@ private:
     // Settings kept on the card (Config page; input source and gain too)
     Files files_;
     Streamer streamer_;   // long takes on the card
-    // Config > F3: the SD card test. It borrows the last 256 KB of track 4's
-    // memory, so it runs only while track 4 is empty (and stops if it is not).
-    SdTest sdTest_;
-    bool sdPage_ = false;
-    bool sdBufDirty_ = false;          // the borrowed memory still holds the test's pattern
-    const char* sdMsg_ = nullptr;      // why the test did not start
-    uint8_t* sdBuffer() const;
-    void sdKey(uint8_t id);
-    void drawSdTest();
     Config cfg_;
     bool cfgDirty_ = false;
     uint32_t cfgDirtyMs_ = 0;
@@ -304,6 +296,9 @@ private:
     int fwCount_ = 0, fwSel_ = 0;
     FwImage fw_[kMaxImages];
     const char* fwMsg_ = nullptr;   // why the last flash was refused
+    // Config > F3: measuring the latency; the last result (Engine::measureState()).
+    bool measPending_ = false;
+    uint8_t measResult_ = 0;
     void fwScan();
     // Config > MIDI (F2): the MIDI clock and the learned controls.
     Midi midi_;

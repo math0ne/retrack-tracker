@@ -1,0 +1,49 @@
+# Latency compensation. Config > F3 measures the round trip through a
+# cable from out to in (here the simulator's loopback, 400 frames); then a
+# take of the metronome, recorded back through that cable, has to play on
+# the beat: its clicks land on the live ones and add up (1.8x one click),
+# where 400 frames late they would barely touch (about 1.2x).
+wait 300
+# Monitoring off: with the cable in, the input would feed back.
+press CONFIG
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+enc -1
+loopback 400 1.0
+press F3
+wait 3000
+expect_latency 400 2
+shot ../build/sim/check/latency_config.png
+press NOTE
+
+# One bar of the metronome, recorded through the cable after its count-in.
+opt all metronome 1
+tap 0
+wait 4600
+tap 0
+wait 4000
+expect_state 1 PLAY
+loopback off
+# Clicks alone: one beat's worth, between bars.
+reset_levels
+wait 2600
+expect_audio 0.27
+
+# Overdub: track 1 muted (only the metronome goes out), the clicks dubbed
+# over it back through the cable. On the beat they stack on the recorded
+# ones: 1 + 0.8 * 2 clicks (2.6x); 400 frames late about 2.1x.
+tap 2
+loopback 400 1.0
+tap 0
+wait 2400
+tap 0
+wait 100
+loopback off
+tap 2
+reset_levels
+wait 2600
+expect_audio 0.40
+expect_state 1 PLAY

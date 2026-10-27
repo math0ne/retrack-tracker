@@ -65,7 +65,9 @@ private:
     void closeAll();
     bool serviceTrack(int t);
     bool drain(int t, const Ctx& c);
-    bool writeBlock(int t, const Ctx& c, uint32_t b);   // a changed block back to the card
+    // A changed block of pass parity par back to the card; true when a card
+    // command ran or must run again (a failed write stays marked).
+    bool writeBlock(int t, const Ctx& c, int par, uint32_t b);
     bool writeBack(int t, const Ctx& c, uint32_t pos, bool all, uint32_t lo, uint32_t hi);
     bool undoStep(int t, const Ctx& c);
     bool editStep(int t, const Ctx& c);   // a cut or erase on the card
@@ -81,7 +83,8 @@ private:
     bool tried_[kTracks] = {}, triedB_[kTracks] = {};
     // Per track: which file holds each block now (1: B), which blocks this
     // overdub pass has moved to the other file, the pass they belong to.
-    uint32_t cur_[kTracks][kWords] = {}, sess_[kTracks][kWords] = {};
+    // sess_ per pass parity: the pass now (session_) and the one before.
+    uint32_t cur_[kTracks][kWords] = {}, sess_[kTracks][2][kWords] = {};
     uint32_t session_[kTracks] = {};
     uint32_t take_[kTracks] = {};   // the take the maps below belong to (StreamView::take)
     // The ring is being moved: its changed blocks in [pendS_, pendE_) go back first.

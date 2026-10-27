@@ -38,7 +38,6 @@ expect_len 4 4.0
 # Home: four loops playing.
 wait 1300
 screen ../docs/img/home.png
-shot ../docs/img/panel.png
 
 # The Shift layer.
 hold SHIFT
@@ -114,7 +113,8 @@ screen ../docs/img/perform.png
 up 8
 press PERFORMANCE
 
-# Pages: Input, the loop editor, the manual, projects, settings, MIDI.
+# Pages: Input, the loop editor, the manual, projects, settings, MIDI,
+# firmware.
 press F6
 wait 50
 screen ../docs/img/input.png
@@ -122,6 +122,11 @@ press NOTE
 tap 2
 tap 2
 press INSTR
+wait 100
+press F1
+enc 1
+press F2
+enc -2
 wait 100
 screen ../docs/img/editor.png
 press NOTE
@@ -131,6 +136,8 @@ screen ../docs/img/manual.png
 press NOTE
 press FILE
 wait 50
+press F1
+wait 6000
 screen ../docs/img/file.png
 press NOTE
 press CONFIG
@@ -140,3 +147,21 @@ press F2
 wait 50
 screen ../docs/img/midi.png
 press NOTE
+sd_file /Firmware/PolyendTracker_1.9.2.ptf 4096
+sd_file /Firmware/PolyendTracLooperv01.ptf 4096
+press CONFIG
+press F1
+wait 100
+screen ../docs/img/firmware.png
+press NOTE
+
+# Track 4 cleared (its pad in column 4), then armed to start on sound.
+tap 39
+wait 300
+expect_state 4 EMPTY
+opt 4 start 2
+tap 36
+wait 400
+expect_state 4 ARMED
+screen ../docs/img/armed.png
+tap 36

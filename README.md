@@ -14,31 +14,45 @@ way [SIDTracker](https://github.com/sandlbn/SidTracker) does it. See
 > [Install on a Tracker](#install-on-a-tracker)), and don't trust it with
 > anything you can't afford to lose.
 
-![The looper in the simulator: four loops playing](docs/img/panel.png)
+![Four loops playing](docs/img/home.png)
 
-The screenshots are from the simulator, with four example loops (drums,
-bass, chord stabs, a stereo pad) synthesized by `tools/demo_sounds.py` and
-recorded through the looper's input by `sim/demo/readme_shots.txt`.
-`tools/readme_shots.sh` makes them again.
+- A looper: four stereo tracks, locked to one bar clock
+- Record, overdub, replace (punch in), undo and redo
+- Recording latency compensation, measured with a patch cable
+- Takes up to 5 minutes per track, streamed from the SD card
+- Count-in, start on sound, stop on the bar or beat, fixed lengths
+- Click-free loop points
+- Playback modes: reverse, ping-pong, half and double speed, half time, octave up / down
+- Granular playback, with the grains drawn on the waveform
+- Tempo changes as tape varispeed or time-stretch, tap tempo
+- Two send effects: delay, ping-pong, reverb, chorus, flanger, Mutable Instruments Clouds
+- A mixer with sends, returns, FX chaining and meters
+- Performance mode: beat repeats, filters, sweeps, vibrato, tape stop on the pads
+- A loop editor: trim, cut, erase
+- Projects saved to the SD card, WAV export
+- MIDI clock in and out, learnable footswitch actions
+- Metronome, input monitoring through the effects
+- An on-device manual, and a firmware flasher back to stock
 
 ## Features
 
 ### Four stereo tracks on one bar clock
 
-Each track records up to about 21 s of stereo (42 s mono) in the Tracker's
+Each track records up to about 21.5 s of stereo (43 s mono) in the Tracker's
 16 MB SDRAM, and with an SD card up to **5 minutes** (10 mono): a longer take
 goes on to the card (see Long takes below). The first take sets the bar; every later take, every playback
 mode and every effect follows the same bar clock, so nothing drifts. Takes
 start with a count-in (or at once, or when sound arrives), stop on the bar
 line, and blend their end into their start so the loop point does not click.
-Overdub (with feedback), replace (punch in), undo and redo.
+Overdub (with feedback), replace (punch in), undo and redo. Takes and
+overdubs are placed back by the codec's round-trip delay (Config > Rec
+latency, measured with a cable from an output into the input), so layers
+land where they were played and do not drift.
 
 The home page is the four waveforms, left channel above the line and right
 below, with the bar and beat lines. The playhead leaves a fading trail as
 long as its speed, on the side it came from. The eight screen keys act on
 the selected track and show its state.
-
-![Four loops playing](docs/img/home.png)
 
 A take in progress, a pulsing dot by the lane's tag, the REC key showing what a press does:
 
@@ -87,6 +101,11 @@ fixed length in bars), Start (now / count-in / on sound, with its threshold),
 After rec (play / overdub / stop) and Tempo (Tape or Stretch).
 
 ![The Shift layer](docs/img/shift.png)
+
+A track set to start on sound waits armed (a ring by its tag), showing the
+input level against the threshold:
+
+![A track armed to start on sound](docs/img/armed.png)
 
 ### Tempo, volume and input, under your fingers
 
@@ -141,8 +160,8 @@ bar / beat / 1/16 grid: trim (instant, with undo), cut and erase.
 
 File saves and loads projects (every loop as a WAV plus all settings) and
 exports tracks as WAVs, in the background while the loops play. Config holds
-the settings, a firmware flasher (the way back to the stock firmware) and
-MIDI: clock out or follow, and eight learnable footswitch actions. Song opens
+the settings, the recording latency, a firmware flasher (the way back to the
+stock firmware) and MIDI: clock out or follow, and eight learnable footswitch actions. Song opens
 a seven-chapter manual on the device.
 
 | File | Config |
@@ -152,6 +171,8 @@ a seven-chapter manual on the device.
 | MIDI | Manual |
 |---|---|
 | ![MIDI](docs/img/midi.png) | ![The on-device manual](docs/img/manual.png) |
+
+![The firmware page: the way back to the stock firmware](docs/img/firmware.png)
 
 # Reference
 
@@ -163,7 +184,6 @@ a seven-chapter manual on the device.
 | `src/looper/app.*` | Input, pad LEDs and the screen, drawn straight on the FT81x display list. |
 | `src/looper/stream.*` | Long takes on the SD card, the main loop's side: the stream files, read-ahead, write-back, undo, edit jobs. |
 | `src/looper/files.*` | Settings, projects (save / load) and WAV export, as background jobs. |
-| `src/looper/sdtest.*` | Config > F3: the SD card speed test. |
 | `src/looper/manual.h` | The on-device manual (Song). |
 | `src/looper/platform.h` | Everything the app needs from outside (display, audio, input, LEDs, clock, memory). |
 | `src/device_main.cpp` | Device glue: HAL drivers + 16 MB SDRAM into `looper::Platform`. |
@@ -179,7 +199,19 @@ make                 # build/PolyendTracLooperv01.ptf, also in build/sdcard/Firm
 make SELFTEST=1      # OpenTracker hardware selftest image
 make sim             # build/sim/looper-sim
 make -C sim check    # headless test scripts (sim/scripts), screenshots in build/sim/check/
+make -C sim asan     # build/sim-asan/looper-sim: the simulator with AddressSanitizer + UBSan
+make -C sim soak     # long random sessions on the asan build (SEEDS="1 2 3" MINUTES=60)
 ```
+
+**Soak.** `looper-sim --soak SEED --minutes N` plays a random user for N
+minutes of simulated time (about 30x faster than real time): pads, keys,
+the encoder, held keys and pads, the input changing, long takes on a slow
+simulated card, tap tempo, every page, and every ten minutes a project saved,
+loaded back and compared. After every action it checks each track's state
+and loop bounds, card errors and the display-list size; the asan build stops
+at the first bad memory access. The same seed replays the same session, and
+`--soak-log FILE` lists every action with its time. Run a few seeds before a
+release.
 
 `sim/scripts/stereo.txt` checks that left and right stay separate through
 record, playback and overdub; `--tone-ch left|right|both` puts the simulator's
@@ -211,8 +243,8 @@ in dimmer greys; on the lanes only the selected track's waveform (or its line,
 when empty) turns yellow. The four tracks are told apart by slightly different greys (only
 the popups over the lanes keep a backing, to stay readable). The lanes
 are waveforms only, the full width of the screen; a tag in each lane's corner
-gives its number and, when they apply, its length, mode (other than Forward)
-and Muted. A lane that records has a pulsing dot before its tag (a ring
+gives its length and, when they apply, **card** (a long take), its mode
+(other than Forward) and Muted. A lane that records has a pulsing dot before its tag (a ring
 while it is armed or counting in). The selected track's state is on the keys: REC lights up while it
 records (brightest, pulsing; a softer pulse for an overdub, dim during a count-in
 or while armed), PLAY lights while it plays (dim while it waits for its bar line), MUTE
@@ -283,7 +315,7 @@ are the selected track's options (see Track options below):
 | Master | Mixer page on / off |
 | Instr | Loop editor for the selected track |
 | FX1 / FX2 | That effect slot's page on / off |
-| Config | Settings page (F1 firmware, F2 MIDI, F3 SD card test) |
+| Config | Settings page (F1 firmware, F2 MIDI, F3 measure the recording latency) |
 | File | Projects (save / load) and WAV export |
 | Shift + Config | Show / hide the CPU, frame-rate and display-list readout (Help too, if the panel has one) |
 | Shift + File | Stress preset (Shift + Help too) |
@@ -295,9 +327,18 @@ are the selected track's options (see Track options below):
 **Config** opens the settings; Up/Down pick one, the encoder sets it. They are
 saved to `Looper/config.bin` on the card a second after a change and loaded at
 start-up: display brightness (low / medium / high), pad brightness, headphone
-level, input source, input gain and input monitoring (the last three are the
-same settings as on the Input page). The page also shows the version and the recording
-time per track.
+level, input source, input gain, input monitoring (these three are the same
+settings as on the Input page) and **Rec latency**. The page also shows the
+version and the recording time per track.
+
+**Rec latency** (Config, last row; **F3** measures it): what comes in at the
+input is late by the codec's round trip, so a take or an overdub played in
+time would land that much late, and layers would drift. Playback reads that
+far ahead of the bar clock and overdubs write at the clock, which puts them
+back. Off by default. To set it, patch an output (line out or headphones)
+into the input and press **F3**: the outputs go quiet but for seven short
+clicks, the input times them, and the median is set and saved. The encoder
+also sets it by hand, 0.5 ms a step (Shift: a frame), up to 30 ms.
 
 **Config > F1 Firmware** lists the update images in `/Firmware` (the names the
 update bootloader takes: `PolyendTrac*.ptf`, `mt*.hex`), with this looper's
@@ -323,9 +364,19 @@ bar, each track's length, place on the bar grid, play / stop, mode, level,
 mute, sends and options, both FX slots, returns, master, the performance knobs,
 the metronome and the feedback. Loading clears the tracks, reads the WAVs back
 (progress bar) and leaves the transport stopped: Play starts everything from
-bar 1. Exports go to a new folder `Looper/Export/NNN` each time. Saving and
-exporting run in the background in 16 KB steps, so the audio and the screen
-keep going.
+bar 1. Exports go to a new folder `Looper/Export/NNN` each time (the highest
+number on the card plus one, up to 999). Saving and exporting run in the
+background in 16 KB steps, so the audio and the screen keep going.
+
+A save writes new files next to the old ones (`trackN.tmp`, `project.tmp`)
+and swaps them in only when all of them are written, so a save that fails
+(a full card, the card pulled) leaves the last good save as it was; a power
+cut during the swap is finished at the next load. While a job runs, the
+tracks it still needs are held: recording is refused during a load, and
+clearing, undo and the editor's edits on a track being saved or exported.
+A load that has to leave a track out (an unreadable or non-44.1 kHz WAV, a
+long take with no card ready) says which, and F1 then saves a new project
+instead of overwriting the original.
 
 ### Long takes (on the SD card)
 
@@ -351,9 +402,24 @@ rest in its stream file. One difference: in **Granular**, grains on the card
 part stay inside the 2 s buffer around the playhead, so Spread reaches about
 a second either way there instead of the whole loop.
 
-The card matters: format it FAT32 with **32 KB clusters** (the SD Card
-Formatter's default). With small clusters every card command is small and
-writing gets too slow. Config > F3 SD test measures a card.
+The card matters: see [The SD card](#the-sd-card) below.
+
+### The SD card
+
+- **FAT32.** exFAT is not supported (the build leaves it out), and cards over
+  32 GB come formatted exFAT: reformat them FAT32 (the SD Card Formatter only
+  does exFAT on those, so use a tool that can, or a card of 32 GB or less).
+- **32 KB clusters** (allocation unit). The SD Card Formatter's default for
+  8 to 32 GB cards. FatFs sends at most one cluster per card command, so with
+  small clusters (4 KB) writing is too slow for long takes: measured on an
+  8 GB card, 1.7 MB/s against 8 MB/s with 32 KB clusters.
+- **Room:** 424 MB for the stream files (two of 53 MB per track), allocated
+  once in one contiguous run each, so a freshly formatted card is best; then
+  the projects and exports. With no room the looper still works, with takes
+  up to the RAM's 21.5 s (Config shows the recording time).
+- **Speed:** a decent card (Class 10 / U1 or better). Four tracks playing long
+  takes need about 0.7 MB/s, four overdubbing 1.4 MB/s.
+- Keep `PolyendTracker_1.9.2.ptf` in `/Firmware` as the way back.
 
 ### How the SD card streaming works
 
@@ -460,23 +526,14 @@ failed card commands).
   lights brightest while it does.
 - **Undo / redo** (F8, or Insert / Shift + Insert) take back the
   last overdub or replace and bring it back, as often as you like. The audio
-  under an overdub is kept at the end of the track's own memory, so undo works
-  for loops up to half the track's memory (about 11 s stereo, 22 s mono);
-  trims, cuts and erases clear it.
+  under an overdub is kept at the end of the track's own memory, so in RAM undo
+  works for loops up to half the track's memory (about 10.8 s stereo, 21.5 s
+  mono); a long take's undo uses the card's second file. Trims, cuts and
+  erases clear it.
 - **Stop fade** (Input page, Tempo card, last row): Stop fades the track
   over 1 beat, 1 bar or 2 bars, then stops it; a second press stops at once.
 
 ### MIDI
-
-**Config > F3 SD test** measures the card for streaming loops from it
-(`docs/SD_STREAMING.md`). **F1** starts it: a 16 MB file in `/Looper` is
-written once in 256 KB commands (which allocates it), then overwritten in place
-and read back in 32, 64 and 256 KB commands, every word checked. Each command
-is timed; the table shows MB/s, the average and the worst command, and how many
-took over 10, 50, 100 and 250 ms. It takes about 20 s, needs 16 MB free and
-track 4 empty (it borrows the end of that track's memory; recording on track 4
-stops it), and leaves `Looper/sdtest.txt` with the results (also on the serial
-log). The test file is deleted afterwards. F1 again stops it, F7 back.
 
 **Config > F2 MIDI.** The **Clock** row: Off, **Send** (24 ticks a beat on the
 bar clock, so it follows the tape speed; Start and Stop with the transport; DIN
@@ -495,7 +552,8 @@ clears it. The bindings and the clock setting are saved with the settings.
 - **Mute** keeps a track running in time, silently: unmute and it carries on
   where the loop is.
 - **Stop** puts a track back to its start. **Play** starts it from there on the
-  next bar line, so it comes in on the beat; **Rec** on a stopped track does the
+  next bar line (in its own place in the bar, if it starts off the line), so it
+  comes in on the beat; with the transport stopped it starts at once, alone; **Rec** on a stopped track does the
   same and overdubs from that bar.
 - **Starting one thing starts only that thing.** With the transport stopped,
   recording a track, or pressing a track's Play, starts the bar clock for that
@@ -558,7 +616,7 @@ are on the Input page; the tempo settings below are on its Tempo card.
 | Stop | **Free**: the take ends when you press. **On bar** / **On beat**: it records on to the next bar / beat line (a press less than an eighth of a unit late stops on the line it just passed). Default On bar. |
 | Length | Off, or a fixed length in whole bars (up to 64 beats): recording stops by itself. A fixed length shows in place of the Stop value. |
 | Start | **Count-in** (default): one bar of click, then the take starts on the bar line; with loops running it waits for the next bar line at least half a bar away. **Now**: at once. **On sound**: the track arms and starts when the input crosses the threshold, keeping the 6 ms before it so the attack is not cut; with no loop yet the bar clock starts there. The armed lane shows the input level against the threshold. Press again to cancel. |
-| Channels (Input page) | Stereo, Mono L, Mono R, Mono sum. Mono uses half the memory, so a track holds about 44 s. Only while the track is empty. |
+| Channels (Input page) | Stereo, Mono L, Mono R, Mono sum. Mono uses half the memory, so a track holds about 43 s in RAM (10 minutes with long takes on the card). Only while the track is empty. |
 | After rec | Play, Overdub or Stop when the take ends. |
 | Tempo | **Tape** (default): a tempo change speeds the track up or down and its pitch follows. **Stretch**: it keeps its pitch, played through two cross-faded 46 ms grains while the tempo is not 100 % (at 100 % it plays as recorded). Stretch tracks do not overdub off 100 %; a take recorded on one off 100 % is still resampled like tape. |
 
@@ -710,20 +768,25 @@ copying that folder onto the card and power-cycling installs the build.
 
 - **Memory:** 16 MB SDRAM = about 21.5 s of stereo audio per track (after the
   1 MB of the two FX slots' delay lines and the long-take waveforms); a RAM
-  loop's undo needs it to fit in half of that. Mono tracks double it. Longer
-  takes go to the SD card (5 minutes stereo), undo included (it uses the
-  card's second file). Internal SRAM: about 242 of 256 KB in use.
+  loop's undo needs it to fit in half of that, so loops between about 10.8 s
+  and 19.5 s have no overdub undo. Mono tracks double it. Longer takes go to
+  the SD card (5 minutes stereo), undo included (it uses the card's second
+  file). Internal SRAM: about 243 of 256 KB in use.
 - **Long takes:** up to 5 minutes (the stream files' size). Granular's Spread
   on the card part reaches about the 2 s ring around the playhead. Cut and
-  erase on a long take take a few seconds. A card with small clusters (4 KB)
-  is too slow: format with 32 KB clusters.
-- **Display list:** the FT81x runs at most 2048 words (8 KB) per frame. This
-  screen uses about 900. Waveforms are RGB332 bitmaps in the display's 1 MB
-  RAM_G (13 words each to draw), so detail does not cost display-list space.
+  erase on a long take take a few seconds. A long take trimmed to start past
+  its RAM part, and longer than the 2 s ring, has a few milliseconds of gap
+  at each loop wrap (the ring reloads there). A card with small clusters
+  (4 KB) is too slow: format with 32 KB clusters.
+- **Display list:** the FT81x runs at most 2048 words (8 KB) per frame; the
+  busiest pages (four lanes with performance cells, the effect pages) use
+  about 1700. Waveforms are L8 bitmaps in the display's 1 MB RAM_G (13 words
+  each to draw), so detail does not cost display-list space.
 - **SPI:** bitmaps reach RAM_G over a 30 MHz SPI link, a blocking write on
   the main loop. A recording or overdubbing lane sends only the columns that
   changed (tens of KB/s); a whole lane (68 KB) only when it comes on screen
   or its scale changes.
-- **Input latency:** recordings are not yet shifted to make up for the
-  codec's in → out delay (OpenTracker measured 10–14 ms on live resampling).
-- **Not yet:** per-track insert effects, latency compensation.
+- **Input latency:** compensated once Rec latency is set (Config > F3 with a
+  patch cable); off until then. The default will be the Tracker's measured
+  value once there is one.
+- **Not yet:** per-track insert effects.

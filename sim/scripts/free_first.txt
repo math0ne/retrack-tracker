@@ -1,0 +1,20 @@
+# A free first take after a count-in sets the bar to its own length, and its
+# loop starts on bar 1: the first bar line is its start, so the metronome,
+# later count-ins and Play all line up with it.
+wait 300
+opt all stop 0
+tone_shape steady
+tone 330
+tap 0
+wait 5100
+tap 0
+wait 500
+tone off
+expect_state 1 PLAY
+expect_baroffset 1 0
+# Everything from bar 1: the loop from its start.
+press PLAY
+wait 300
+press PLAY
+wait 50
+expect_baroffset 1 0

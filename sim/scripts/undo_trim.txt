@@ -1,0 +1,46 @@
+# Trim, overdub, trim undo. An 18 s loop trimmed to 4 s: an overdub's undo
+# cells go at the end of the buffer (21 s less 4 s), over the trimmed-away
+# part of the loop. Undoing the trim has to bring that part back as it was,
+# not with the cells in it (the cells hold the kept part: another pitch).
+wait 300
+tone_shape steady
+# 18 s (9 bars at 120 bpm; a count-in first): 330 Hz, then 550 Hz from 10 s.
+tone 330
+tap 0
+wait 12000
+tone 550
+wait 7500
+tap 0
+wait 1000
+tone off
+expect_state 1 PLAY
+expect_len 1 18.0
+# Keep the first 4 s, then replace a pass of it with 880 Hz.
+press INSTR
+press F2
+enc -28
+press F4
+wait 100
+press NOTE
+expect_len 1 4.0
+tone 880
+hold SHIFT
+press F1
+release SHIFT
+wait 4500
+press F1
+tone off
+wait 500
+# The trim undone: 18 s again, 17.5 s .. 18 s (under the cells) still 550 Hz.
+press INSTR
+press F7
+wait 100
+press NOTE
+expect_len 1 18.0
+press PLAY
+wait 500
+press PLAY
+wait 17550
+reset_levels
+wait 400
+expect_pitch 550

@@ -61,12 +61,6 @@ bool sdDirectDma(bool on) {
     return ot::hal::sdhc::sdramDma();
 }
 
-bool sdStats(looper::Platform::SdStats& s) {
-    const ot::hal::sdhc::Info& i = ot::hal::sdhc::info();
-    s = {i.bounced, i.sdramDirect, i.sdramFails, i.retries, i.degrades, i.clockHz};
-    return true;
-}
-
 bool storageReady() { return ot::hal::bootReport().sdMounted && ot::hal::storage().mounted(); }
 
 void setHeadphones(uint8_t level) { ot::hal::audio().setHeadphoneVolume(float(level > 100 ? 100 : level) / 100.0f); }
@@ -111,7 +105,6 @@ void otAppMain(ot::hal::HalSet& hal) {
     p.storage = hal.storage;
     p.storageReady = &storageReady;
     p.sdDirectDma = &sdDirectDma;
-    p.sdStats = &sdStats;
     p.setHeadphones = &setHeadphones;
     p.version = OT_VERSION;
     p.firmwareUpdate = &firmwareUpdate;

@@ -1,0 +1,79 @@
+# Edits on a long take after overdubs, on a card that takes time.
+# 1. A replace pass ends near the loop's end and the loop is trimmed at once,
+#    shorter than the blocks still to go back to the card: those blocks are
+#    written whole (they were sized by the new loop end: a 4 GB write).
+# 2. After a replace pass (its card blocks on file B), a cut near the end:
+#    the blocks before the cut keep the replaced audio, not the take's.
+card_speed 8 16 1 150 64
+wait 300
+tone_shape steady
+# A 15-bar take of 330 Hz (30 s at 120 bpm), from the card past 19.5 s.
+tone 330
+tap 0
+wait 31000
+tap 0
+wait 6000
+tone off
+expect_state 1 PLAY
+expect_stream 1 long 1
+# Everything from bar 1, then replace a whole pass with 880 Hz.
+press PLAY
+wait 500
+press PLAY
+tone 880
+hold SHIFT
+press F1
+release SHIFT
+wait 34000
+press F1
+tone off
+wait 2000
+# 1. From bar 1 again; replace from 28 s over the loop point, then trim the
+#    end back to beat 48 (24 s) straight away.
+press PLAY
+wait 500
+press PLAY
+wait 28000
+tone 880
+hold SHIFT
+press F1
+release SHIFT
+wait 3000
+press F1
+tone off
+press INSTR
+press F2
+enc -12
+press F4
+wait 100
+press NOTE
+wait 4000
+expect_state 1 PLAY
+expect_len 1 24.0
+# Trim undone: the whole loop again.
+press INSTR
+press F7
+wait 100
+press NOTE
+wait 2000
+expect_len 1 30.0
+# 2. Cut beats 44..56 (22 s .. 28 s), then from bar 1, into the card part
+#    just before the cut.
+press INSTR
+press F1
+enc 44
+press F2
+enc -4
+press F5
+press F5
+wait 15000
+press NOTE
+expect_len 1 24.0
+press PLAY
+wait 500
+press PLAY
+wait 21000
+reset_levels
+wait 1500
+expect_pitch 880
+expect_stream 1 over 0

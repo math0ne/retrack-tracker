@@ -40,13 +40,10 @@ shot ../build/sim/check/launch_queued.png
 wait 2100
 expect_state 1 PLAY
 
-# Transport stop, then Play on track 1 alone: the clock starts with it, from its
-# top (the left half first), and track 2 stays stopped.
+# Transport stop, then Play on track 1 alone (one press): the clock starts with
+# it, from its top (the left half first), and track 2 stays stopped.
 press PLAY
 wait 50
-tap 1
-wait 30
-expect_state 1 STOP
 tap 1
 wait 30
 expect_state 1 PLAY

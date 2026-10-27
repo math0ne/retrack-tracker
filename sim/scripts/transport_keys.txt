@@ -1,0 +1,38 @@
+# Track keys after the transport is stopped: the loops are still "playing"
+# but the clock stands. A track's Play starts that track (alone, from its
+# top), its Rec starts it overdubbing; neither stops it first.
+wait 300
+opt all start 0
+tone_shape steady
+tone 330
+tap 0
+wait 4000
+tap 0
+wait 300
+tone off
+expect_state 1 PLAY
+# The transport stops everything.
+press PLAY
+wait 300
+reset_levels
+wait 500
+expect_silent
+# Track 1's Play: it plays again at once.
+press F2
+wait 50
+expect_state 1 PLAY
+reset_levels
+wait 500
+expect_audio 0.1
+# Stopped again; Rec on it: it overdubs, from its top.
+press PLAY
+wait 300
+press F1
+wait 50
+expect_state 1 DUB
+reset_levels
+wait 500
+expect_audio 0.1
+press F1
+wait 50
+expect_state 1 PLAY

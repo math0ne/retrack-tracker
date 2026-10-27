@@ -29,7 +29,7 @@ bool readBlocks(uint32_t lba, uint8_t* dst, uint32_t count);
 bool writeBlocks(uint32_t lba, const uint8_t* src, uint32_t count);
 uint32_t lastError();               // IRQSTAT bits of the last failure (diagnostics)
 const Info& info();
-// Experimental (the looper's SD test): ADMA2 straight to / from SDRAM instead of
+// For the looper's long-take streaming: ADMA2 straight to / from SDRAM instead of
 // the SRAM bounce buffer, for as long as it is on. Whether the SDHC DMA master
 // reaches the SDRAM controller is unverified (board::kSdDmaToSdram), so a
 // failed chunk is not retried or degraded: the path turns itself off

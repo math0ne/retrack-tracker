@@ -1,0 +1,113 @@
+# File jobs that must not lose or mix audio: a save replaces the old one only
+# once it is whole, tracks being saved / exported / loaded refuse clears and
+# takes, a partial load does not save over its project, new folders go after
+# the highest number.
+wait 300
+opt all start 0
+
+# Track 1: 2 s stereo; track 2: 2 s mono.
+tone_shape steady
+tone 330
+tap 0
+wait 2000
+tap 0
+opt 2 input 3
+tap 12
+wait 2000
+tap 12
+wait 2100
+tone off
+expect_len 1 2.0
+expect_len 2 2.0
+
+# Save 001.
+press FILE
+press F1
+wait 1500
+expect_file Looper/Projects/001/project.bin 176
+expect_file Looper/Projects/001/track1.wav 352844
+expect_file Looper/Projects/001/track2.wav 176444
+
+# A slow card (0.2 MB/s): the save takes about 3 s. Save over 001 and try to
+# clear both tracks while it runs: refused, the save goes through whole.
+card_speed 0.2 0.2 2 0 0
+press F1
+wait 200
+tap 3
+tap 15
+wait 50
+expect_state 1 PLAY
+expect_state 2 PLAY
+wait 5000
+expect_file Looper/Projects/001/project.bin 176
+expect_file Looper/Projects/001/track1.wav 352844
+expect_file Looper/Projects/001/track2.wav 176444
+
+# Export both while trying to clear track 2 (selected by its pad above:
+# Delete) and Shift + Delete: refused.
+press F6
+wait 200
+press NOTE
+press DELETE
+hold SHIFT
+press DELETE
+release SHIFT
+wait 50
+expect_state 1 PLAY
+expect_state 2 PLAY
+wait 5000
+expect_file Looper/Export/001/track1.wav 352844
+expect_file Looper/Export/001/track2.wav 176444
+
+# Clear track 2 now (nothing running), save over 001: track 2 empty in it.
+press DELETE
+wait 600
+expect_state 2 EMPTY
+press FILE
+press F1
+wait 5000
+expect_file Looper/Projects/001/project.bin 176
+
+# Load 001 while pressing record on tracks 1 and 2: refused, the load is whole.
+press F3
+press F3
+wait 100
+tap 0
+tap 12
+wait 30
+tap 0
+wait 5000
+press NOTE
+expect_len 1 2.0
+expect_state 1 PLAY
+expect_state 2 EMPTY
+card_speed 0 0 0 0 0
+
+# Folders: a 500 on the card; the next new save is 501 (not the first gap).
+sd_file Looper/Projects/500/x.txt 1
+press FILE
+press F2
+wait 1500
+expect_file Looper/Projects/501/project.bin 176
+expect_file Looper/Projects/501/track1.wav 352844
+
+# A project whose track 1 WAV is broken: it loads without it, and F1 then
+# saves a new project (502) instead of over 501.
+sd_file Looper/Projects/501/track1.wav 100
+press NOTE
+press FILE
+press F3
+press F3
+wait 1500
+expect_state 1 EMPTY
+shot ../build/sim/check/files_safe_partial.png
+tone 440
+tap 0
+wait 1000
+tap 0
+wait 1100
+tone off
+press F1
+wait 1500
+expect_file Looper/Projects/502/project.bin 176
+expect_file Looper/Projects/502/track1.wav 176444

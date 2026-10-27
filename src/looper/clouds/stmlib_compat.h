@@ -16,7 +16,10 @@ namespace stmlib {
 
 // Table interpolation
 inline float Interpolate(const float* table, float index, float size) {
+    // The tables hold size + 1 entries: an index of 1.0 (or past it) is the last.
     index *= size;
+    if (index >= size) return table[static_cast<int32_t>(size)];
+    if (index < 0.0f) return table[0];
     MAKE_INTEGRAL_FRACTIONAL(index)
     float a = table[index_integral];
     float b = table[index_integral + 1];

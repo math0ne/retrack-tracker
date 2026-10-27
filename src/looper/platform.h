@@ -34,13 +34,9 @@ struct Platform {
     // WAV exports. storageReady() false = no card.
     ot::IStorage* storage = nullptr;
     bool (*storageReady)() = nullptr;
-    // The SD test's experimental direct DMA to / from SDRAM (null: no such
-    // path, e.g. the simulator). sdDirectDma(on) returns whether it is on now.
+    // Direct DMA between the SD card and SDRAM for the long-take streamer (null:
+    // no such path, e.g. the simulator). sdDirectDma(on) returns whether it is on now.
     bool (*sdDirectDma)(bool on) = nullptr;
-    struct SdStats {
-        uint32_t bounced, direct, directFails, retries, degrades, clockHz;
-    };
-    bool (*sdStats)(SdStats& s) = nullptr;
     // Headphone level 0..100 (device only; nullptr = not adjustable).
     void (*setHeadphones)(uint8_t level) = nullptr;
     const char* version = "dev";

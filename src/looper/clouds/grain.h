@@ -117,10 +117,10 @@ public:
         const int32_t first_sample = first_sample_;
         const float gain_l = gain_l_;
         const float gain_r = gain_r_;
-        int32_t phase = phase_;
+        int64_t phase = phase_;   // 16.16, wide: a long grain pitched up reads past 32767 frames
 
         while (size--) {
-            int32_t sample_index = first_sample + (phase >> 16);
+            int32_t sample_index = first_sample + int32_t(phase >> 16);
             // Wrap to buffer size
             while (sample_index >= buffer_size) sample_index -= buffer_size;
             while (sample_index < 0) sample_index += buffer_size;
@@ -169,7 +169,7 @@ public:
 
     // Accessors for UI visualization
     inline int32_t firstSample() const { return first_sample_; }
-    inline int32_t readIndex() const { return first_sample_ + (phase_ >> 16); }   // where it reads now (unwrapped)
+    inline int32_t readIndex() const { return first_sample_ + int32_t(phase_ >> 16); }   // where it reads now (unwrapped)
     inline int32_t width() const { return width_; }
     inline float envelopePhase() const { return envelope_phase_; }
     inline float gainL() const { return gain_l_; }
@@ -178,7 +178,7 @@ public:
 private:
     int32_t first_sample_;
     int32_t width_;
-    int32_t phase_;
+    int64_t phase_;
     int32_t phase_increment_;
     int32_t pre_delay_;
 

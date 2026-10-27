@@ -112,14 +112,6 @@ Then clear it and record a short loop. The serial telemetry line ends with `stre
 `over` takes cut short because the card fell behind, `err` failed card
 commands. All three should stay 0 in plain playback.
 
-## SD card test (for streaming)
-
-Config > F3 SD test, with track 4 empty and 16 MB free on the card, F1. It
-runs about 20 s (the screen freezes for a moment now and then: each card
-command blocks the main loop). Then send `Looper/sdtest.txt` from the card,
-ideally for each card you might use. The number that matters is the worst
-**Overwrite** time: under ~300 ms, 1 s streaming buffers are plenty.
-
 ## If something goes wrong
 
 - Hangs or crashes: the serial terminal shows the fault report. Copy it.

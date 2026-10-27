@@ -133,7 +133,6 @@ bool App::init(const Platform& p) {
     d_->bindFontSet(0);
     files_.init(&engine_, &p_);
     files_.setStreamer(&streamer_);
-    sdTest_.init(&p_);
     streamer_.init(&engine_, &p_);
     files_.loadConfig(cfg_);   // defaults when there is no card or no file yet
     midi_.init(&p_, &engine_);
@@ -168,20 +167,18 @@ void App::loop() {
         }
     }
     engine_.service();
-    streamer_.service();   // long takes: a card command per track at most (they cannot wait)
-    files_.service();   // one step of a save / load / export
-    if (sdTest_.running()) {
-        if (TrackState(engine_.view(3).state.load()) != TrackState::kEmpty) {   // track 4 is in use
-            sdTest_.stop();
-            sdMsg_ = "Stopped: track 4 is in use";
-        } else if (!files_.busy()) {
-            sdTest_.service();   // one command
+    if (measPending_ && engine_.measureState() >= 2) {   // Config > F3 is done
+        measPending_ = false;
+        measResult_ = engine_.measureState();
+        if (measResult_ == 2) {
+            const uint16_t m = engine_.measured();
+            cfg_.latency = m > kMaxLatencyFrames ? uint16_t(kMaxLatencyFrames) : m;
+            applyConfig();
+            markConfig();
         }
     }
-    if (sdBufDirty_ && !sdTest_.running()) {   // give track 4 its memory back clean
-        std::memset(sdBuffer(), 0, SdTest::kBufBytes);
-        sdBufDirty_ = false;
-    }
+    streamer_.service();   // long takes: a card command per track at most (they cannot wait)
+    files_.service();   // one step of a save / load / export
 
     const uint32_t now = p_.clock->millis();
     if (powerHeld_ && now - powerDownMs_ >= kPowerHoldMs && p_.powerOff) {
@@ -189,10 +186,11 @@ void App::loop() {
         p_.leds->show();
         p_.powerOff();
     }
-    // Settings go to the card a second after the last change (one write per edit burst).
-    if (cfgDirty_ && now - cfgDirtyMs_ >= 1000 && !files_.busy()) {
-        cfgDirty_ = false;
-        files_.saveConfig(cfg_);
+    // Settings go to the card a second after the last change (one write per edit
+    // burst); a write that fails (no card, card error) is tried again 10 s later.
+    if (cfgDirty_ && int32_t(now - cfgDirtyMs_) >= 1000 && !files_.busy()) {
+        if (files_.saveConfig(cfg_)) cfgDirty_ = false;
+        else cfgDirtyMs_ = now + 9000;
     }
     if (now - lastLedMs_ >= kLedMs) {
         lastLedMs_ = now;
@@ -282,6 +280,12 @@ void App::hint(int t, const char* msg, uint32_t now) {
 }
 
 void App::record(int t, bool replace) {
+    // A load fills the empty tracks: a take there would spoil it. (A save
+    // only reads: an overdub meanwhile is fine.)
+    if (files_.loading()) {
+        hint(t, files_.lockReason(), p_.clock->millis());
+        return;
+    }
     const TrackState s = TrackState(engine_.view(t).state.load());
     const ModeInfo& mi = modeInfo(engine_.mode(t));
     if (s == TrackState::kPlaying && !mi.canDub) {
@@ -337,6 +341,10 @@ void App::undoDub(bool redo) {
     const uint8_t u = v.dubUndo.load();
     const uint32_t now = p_.clock->millis();
     if (!v.len.load()) return;
+    if ((files_.lockedTracks() >> selected_) & 1) {   // the swap would land halfway through the save
+        hint(selected_, files_.lockReason(), now);
+        return;
+    }
     if (redo ? u != 2 : u != 1) {
         const uint32_t cap = engine_.memory(selected_).capacity * (v.mono.load() ? 2u : 1u);
         hint(selected_, v.start.load() + 2 * v.len.load() > cap ? "Too long to undo (over half the memory)"
@@ -747,6 +755,10 @@ void App::onInput(const ot::InputEvent& ev) {
             }
             break;
         case b::Delete:
+            if (files_.lockedTracks() & (shift_ ? 0xFF : 1u << selected_)) {   // being saved or loaded
+                hint(selected_, files_.lockReason(), p_.clock->millis());
+                break;
+            }
             engine_.post(shift_ ? Engine::kClearAll : Engine::kClear, uint8_t(selected_));
             break;
         case b::Up: selected_ = (selected_ + kTracks - 1) % kTracks; break;
@@ -798,8 +810,7 @@ void App::closePerf() {
 }
 
 void App::goHome() {
-    mixer_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = manual_ = grainMenu_ = sdPage_ = false;
-    sdTest_.stop();
+    mixer_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = manual_ = grainMenu_ = false;
     midi_.learn(-1);
     fxPage_ = -1;
     fxBar_ = modeBar_ = false;
@@ -852,7 +863,10 @@ void App::onPad(int pad, bool down) {
         case 0: record(t); break;
         case 1: engine_.post(Engine::kPlayStop, uint8_t(t)); break;
         case 2: engine_.post(Engine::kMute, uint8_t(t)); break;
-        case 3: engine_.post(Engine::kClear, uint8_t(t)); break;
+        case 3:
+            if ((files_.lockedTracks() >> t) & 1) hint(t, files_.lockReason(), p_.clock->millis());   // being saved or loaded
+            else engine_.post(Engine::kClear, uint8_t(t));
+            break;
         default: engine_.post(Engine::kJump, uint8_t(t), int16_t(col - 4)); break;
     }
 }
@@ -1139,6 +1153,10 @@ void App::dot(int x, int y, int radius) {
 }
 
 void App::text(int x, int y, uint8_t font, uint16_t opt, const char* s) {
+    // A last guard on the display list (2048 words, a glyph a word): text
+    // that would take the frame near its end is left out rather than the
+    // display going wrong.
+    if (words_ + uint32_t(std::strlen(s)) + 6 > 2048 - 64) return;
     // CMD_TEXT places glyphs with VERTEX2II, which only reaches x = 0..511: for
     // text further right, move the origin with VERTEX_TRANSLATE_X and keep the
     // local x where the glyphs fit for each alignment.
@@ -1360,7 +1378,9 @@ void App::drawLane(int t, uint32_t now) {
 
         // Granular: each sounding grain where it reads now, as long as it is,
         // as tall and bright as its envelope, higher the more it is panned left.
-        if (modeInfo(mode).reader == ModeInfo::kCloud && (s == TrackState::kPlaying || s == TrackState::kOverdubbing)) {
+        // (Not under the performance cells: like the grid, they would take the display list past its size.)
+        if (!perf_ && modeInfo(mode).reader == ModeInfo::kCloud &&
+            (s == TrackState::kPlaying || s == TrackState::kOverdubbing)) {
             Engine::LoopGrain lg[kLoopGrains];
             const int ng = engine_.loopGrains(t, lg);
             const int mid = (wy + wy1) / 2, gh = (wy1 - wy) / 2 - 6;
@@ -1408,7 +1428,8 @@ void App::drawLane(int t, uint32_t now) {
         vline(px, wy - 1, wy1 + 1, 24);
     }
 
-    if (perf_ && v.len.load()) drawPerfCells(t, wx, wy);   // effects need a loop
+    // Effects need a loop; with the grain menu over the lanes, the cells make way (display list).
+    if (perf_ && !grainMenu_ && v.len.load()) drawPerfCells(t, wx, wy);
 
     // Corner tag: what is not the default (length, mode, mute), no box. The
     // selected track's full state is on the F-keys.
@@ -1614,17 +1635,13 @@ void App::drawFKeys() {
             else if (i == 7) v = "Loops";
             std::snprintf(val[i], sizeof val[i], "%s", v);
             hot = i == 0 && act && midi_.learning() == midiRow_ - 1;
-        } else if (config_ && sdPage_) {   // F1 start / stop, F7 back, F8 home
-            static const char* const kT[8] = {"TEST", "", "", "", "", "", "BACK", "HOME"};
+        } else if (config_) {   // F1 firmware, F2 MIDI, F3 latency, F8 home: Up / Down pick a setting, the encoder sets it
+            static const char* const kT[8] = {"FIRMWARE", "MIDI", "LATENCY", "", "", "", "", "HOME"};
+            static const char* const kV[8] = {"Update", "Clock, map", "Measure", "", "", "", "", "Loops"};
+            const bool measuring = engine_.measureState() == 1;
             title[i] = kT[i];
-            const char* v = i == 0 ? (sdTest_.running() ? "Stop" : "Start") : (i == 6 ? "Config" : (i == 7 ? "Loops" : ""));
-            std::snprintf(val[i], sizeof val[i], "%s", v);
-            hot = i == 0 && sdTest_.running();
-        } else if (config_) {   // F1 firmware, F2 MIDI, F3 SD test, F8 home: Up / Down pick a setting, the encoder sets it
-            static const char* const kT[8] = {"FIRMWARE", "MIDI", "SD TEST", "", "", "", "", "HOME"};
-            static const char* const kV[8] = {"Update", "Clock, map", "Card speed", "", "", "", "", "Loops"};
-            title[i] = kT[i];
-            std::snprintf(val[i], sizeof val[i], "%s", kV[i]);
+            std::snprintf(val[i], sizeof val[i], "%s", i == 2 && measuring ? "Stop" : kV[i]);
+            hot = i == 2 && measuring;
         } else if (file_) {   // projects and export
             const bool armed = confirm_ == i && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0;
             switch (i) {
@@ -2104,6 +2121,7 @@ void App::applyConfig() {
     if (p_.setHeadphones) p_.setHeadphones(cfg_.phones);
     if (p_.selectInput) p_.selectInput(cfg_.source, cfg_.gain);
     engine_.post(Engine::kMonitor, 0, cfg_.monitor);
+    engine_.post(Engine::kLatency, 0, int16_t(cfg_.latency));
 }
 
 // ---------------------------------------------------------------------------
@@ -2359,9 +2377,9 @@ void App::drawInput() {
 }
 
 namespace {
-constexpr int kCfgRows = 6;
-const char* const kCfgName[kCfgRows] = {"Display brightness", "Pad brightness", "Headphones",
-                                        "Input",              "Input gain",     "Monitor input"};
+constexpr int kCfgRows = 7;
+const char* const kCfgName[kCfgRows] = {"Display brightness", "Pad brightness", "Headphones",   "Input",
+                                        "Input gain",         "Monitor input",  "Rec latency"};
 }  // namespace
 
 void App::configKey(uint8_t id) {
@@ -2373,17 +2391,16 @@ void App::configKey(uint8_t id) {
         midiKey(id);
         return;
     }
-    if (sdPage_) {
-        sdKey(id);
-        return;
-    }
-    if (id == b::F3) {   // the SD card test
-        sdPage_ = true;
-        sdMsg_ = nullptr;
-    } else if (id == b::F2) {   // the MIDI page
+    if (id == b::F2) {   // the MIDI page
         midiPage_ = true;
         midiRow_ = 0;
         midi_.learn(-1);
+    } else if (id == b::F3) {   // measure the latency (a cable from an output to the input)
+        const bool run = engine_.measureState() == 1;
+        engine_.post(Engine::kMeasure, 0, run ? 0 : 1);
+        measPending_ = !run;
+        measResult_ = run ? 0 : 1;
+        cfgRow_ = 6;
     } else if (id == b::F1) {   // the firmware screen
         fwPage_ = true;
         fwMsg_ = nullptr;
@@ -2429,6 +2446,11 @@ void App::configEncoder(int delta) {
         }
         case 4: step(cfg_.gain, shift_ ? 1 : 2, 0, 100); break;
         case 5: cfg_.monitor = delta > 0 ? 1 : 0; break;
+        case 6: {   // 0.5 ms a step (Shift: a frame)
+            const int x = int(cfg_.latency) + delta * (shift_ ? 1 : int(kSampleRate / 2000));
+            cfg_.latency = uint16_t(x < 0 ? 0 : (x > int(kMaxLatencyFrames) ? int(kMaxLatencyFrames) : x));
+            break;
+        }
         default: return;
     }
     applyConfig();
@@ -2665,15 +2687,11 @@ void App::drawConfig() {
         drawMidi();
         return;
     }
-    if (sdPage_) {
-        drawSdTest();
-        return;
-    }
     char buf[96];
     color(kAmber);
     text(20, 22, kFontBig, Disp::kOptCenterY, "CONFIG");
     for (int r = 0; r < kCfgRows; ++r) {
-        const int y0 = 46 + r * 46, y1 = y0 + 40;
+        const int y0 = 46 + r * 40, y1 = y0 + 36;
         const bool sel = cfgRow_ == r;
         color(sel ? kSel : kDim);
         text(40, (y0 + y1) / 2, kFontBody, Disp::kOptCenterY, kCfgName[r]);
@@ -2693,7 +2711,12 @@ void App::drawConfig() {
                 break;
             case 3: std::snprintf(buf, sizeof buf, "%s", sourceName(cfg_.source)); break;
             case 4: std::snprintf(buf, sizeof buf, "%u", unsigned(cfg_.gain)); frac = cfg_.gain / 100.0f; break;
-            default: std::snprintf(buf, sizeof buf, "%s", cfg_.monitor ? "On" : "Off"); break;
+            case 5: std::snprintf(buf, sizeof buf, "%s", cfg_.monitor ? "On" : "Off"); break;
+            default:
+                if (engine_.measureState() == 1) std::snprintf(buf, sizeof buf, "Measuring...");
+                else if (!cfg_.latency) std::snprintf(buf, sizeof buf, "Off");
+                else std::snprintf(buf, sizeof buf, "%.1f ms", double(cfg_.latency) * 1000.0 / kSampleRate);
+                break;
         }
         if (frac >= 0.0f) {
             color(kFaint);
@@ -2720,97 +2743,15 @@ void App::drawConfig() {
     text(40, 384, kFontSmall, 0, files_.cardReady() ? "SD card ready" : "No SD card: settings are not saved");
     color(kHelp);
     text(760, 362, kFontSmall, Disp::kOptRightX, "Up / Down: setting   Encoder: value");
-}
-
-// ---------------------------------------------------------------------------
-// SD card test (Config > F3)
-
-uint8_t* App::sdBuffer() const {
-    // The last 256 KB of track 4's memory: a take starts at the other end.
-    const TrackMemory& m = engine_.memory(3);
-    return reinterpret_cast<uint8_t*>(m.frames) + size_t(m.capacity) * 4 - SdTest::kBufBytes;
-}
-
-void App::sdKey(uint8_t id) {
-    switch (id) {
-        case b::F1:
-            sdMsg_ = nullptr;
-            if (sdTest_.running()) {
-                sdTest_.stop();
-            } else if (TrackState(engine_.view(3).state.load()) != TrackState::kEmpty) {
-                sdMsg_ = "Clear track 4 first: the test borrows its memory";
-            } else if (files_.busy()) {
-                sdMsg_ = "Wait for the File job to finish";
-            } else if (streamer_.active()) {
-                sdMsg_ = "Not while a long loop plays from the card";
-            } else if (!files_.cardReady()) {
-                sdMsg_ = "No SD card";
-            } else if (sdTest_.start(sdBuffer())) {
-                sdBufDirty_ = true;
-            }
-            break;
-        case b::F7:
-            sdTest_.stop();
-            sdPage_ = false;
-            break;
-        case b::F8: goHome(); break;
-        default: break;
+    // Rec latency: how to measure it, and the last result.
+    if (cfgRow_ == 6 || measResult_) {
+        const char* m = measResult_ == 1   ? "Measuring: the outputs click, the input listens"
+                        : measResult_ == 3 ? "No click came back: patch an output into the input"
+                        : measResult_ == 2 ? "Measured and set"
+                                           : "F3: patch an output into the input, then measure";
+        color(measResult_ == 3 ? kInk : kHelp);
+        text(760, 384, kFontSmall, Disp::kOptRightX, m);
     }
-}
-
-void App::drawSdTest() {
-    char buf[64];
-    color(kAmber);
-    text(20, 22, kFontBig, Disp::kOptCenterY, "SD TEST");
-    const bool run = sdTest_.running();
-    color(sdMsg_ ? kRed : (run ? kInk : kDim));
-    const char* st = sdMsg_ ? sdMsg_ : (run || sdTest_.ran() || sdTest_.status()[0] ? sdTest_.status() : "");
-    text(780, 22, kFontSmall, Disp::kOptRightX | Disp::kOptCenterY, st);
-    if (run) {
-        color(kFaint);
-        fillRect(20, 44, 780, 48, 2);
-        color(kInk);
-        fillRect(20, 44, 22 + int(758.0f * sdTest_.progress()), 48, 2);
-    }
-    // The table: one row per pass, the worst command is what matters.
-    static const int kX[] = {40, 160, 250, 340, 440, 540, 600, 660, 720};
-    static const char* const kHead[] = {"Pass", "Cmd", "MB/s", "Avg ms", "Worst ms", ">10", ">50", ">100", ">250"};
-    color(kDim);
-    for (int c = 0; c < 9; ++c) text(kX[c], 66, kFontSmall, Disp::kOptCenterY, kHead[c]);
-    for (int i = 0; i < SdTest::kPhases; ++i) {
-        const SdTest::Result& r = sdTest_.result(i);
-        const int y = 90 + i * 25;
-        const bool now = run && sdTest_.phase() == i;
-        // Read-back errors light the row: they are the one thing that must be 0.
-        const uint32_t cl = now ? kSel : (r.errors ? kInk : (r.cmds ? kSoft : kFaint));
-        color(cl);
-        text(kX[0], y, kFontSmall, Disp::kOptCenterY, SdTest::phaseName(i));
-        std::snprintf(buf, sizeof buf, "%lu KB", static_cast<unsigned long>(SdTest::cmdBytes(i) / 1024));
-        text(kX[1], y, kFontSmall, Disp::kOptCenterY, buf);
-        if (!r.cmds) continue;
-        const double s = double(r.totalUs) / 1e6;
-        std::snprintf(buf, sizeof buf, "%.1f", s > 0.0 ? double(r.bytes) / (1024.0 * 1024.0) / s : 0.0);
-        text(kX[2], y, kFontSmall, Disp::kOptCenterY, buf);
-        std::snprintf(buf, sizeof buf, "%.1f", double(r.totalUs) / 1000.0 / double(r.cmds));
-        text(kX[3], y, kFontSmall, Disp::kOptCenterY, buf);
-        // The worst command: bright when it is long enough to matter for streaming.
-        color(r.maxUs > 100000 ? kInk : cl);
-        std::snprintf(buf, sizeof buf, "%lu", static_cast<unsigned long>(r.maxUs / 1000));
-        text(kX[4], y, kFontSmall, Disp::kOptCenterY, buf);
-        color(cl);
-        for (int b = 0; b < SdTest::kBins; ++b) {
-            std::snprintf(buf, sizeof buf, "%lu", static_cast<unsigned long>(r.over[b]));
-            text(kX[5 + b], y, kFontSmall, Disp::kOptCenterY, buf);
-        }
-    }
-    if (sdTest_.dmaNote()[0]) {
-        color(kSoft);
-        text(40, 318, kFontSmall, Disp::kOptCenterY, sdTest_.dmaNote());
-    }
-    color(kHelp);
-    text(40, 342, kFontSmall, 0, "Writes a 16 MB file, overwrites it in 32 / 64 / 256 KB commands and reads it back,");
-    text(40, 360, kFontSmall, 0, "then the same at 256 KB with direct DMA to SDRAM (about 30 s). The worst overwrite");
-    text(40, 378, kFontSmall, 0, "sets the streaming buffers. Results: Looper/sdtest.txt. Track 4 empty, 16 MB free.");
 }
 
 // ---------------------------------------------------------------------------
@@ -2910,6 +2851,8 @@ void App::drawFile() {
     color(files_.busy() ? kAmber : kInk);
     text(424, sy + 10, kFontSmall, Disp::kOptCenterY, files_.status()[0] ? files_.status() : "Ready");
     color(kHelp);
+    if (!files_.busy() && files_.partial())   // the loops are not that project any more
+        text(424, sy + 35, kFontSmall, Disp::kOptCenterY, "Not the whole project: F1 saves a new one");
     text(424, 360, kFontSmall, 0, "Projects: Looper/Projects/NNN");
     text(424, 380, kFontSmall, 0, "Exports: Looper/Export/NNN/trackN.wav");
     if (confirm_ == 2 && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0) {
@@ -2951,6 +2894,11 @@ void App::editKey(uint8_t id) {
         confirmUntilMs_ = now + 2000;
         return false;
     };
+    if (id >= b::F4 && id <= b::F7 && ((files_.lockedTracks() >> t) & 1)) {   // trim, cut, erase, undo
+        hint(t, files_.lockReason(), now);   // the track is being saved or loaded
+        confirm_ = -1;
+        return;
+    }
     switch (id) {
         case b::F1: editMarker_ = 0; break;
         case b::F2: editMarker_ = 1; break;

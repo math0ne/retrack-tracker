@@ -1,6 +1,8 @@
 #include "looper/engine.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 namespace looper {
@@ -232,6 +234,15 @@ uint64_t Engine::phase16(const Track& k) const {
     return uint64_t(r);
 }
 
+uint64_t Engine::latShift16(const Track& k) const {
+    return uint64_t(lat_) * ((uint64_t(modeInfo(k.mode).time16) * speed16_) >> 16);
+}
+
+uint64_t Engine::readPhase16(const Track& k) const {
+    const uint64_t P = period16(k);
+    return P ? (phase16(k) + latShift16(k) % P) % P : 0;
+}
+
 uint32_t Engine::posOfPhase(const Track& k, uint64_t ph) const {
     const ModeInfo& mi = modeInfo(k.mode);
     const uint32_t p = uint32_t(ph >> 16);
@@ -255,6 +266,7 @@ void Engine::saveUndoCell(int t, uint32_t i) {
     const uint8_t bit = uint8_t(1u << (c & 7));
     if (bits & bit) return;
     bits |= bit;
+    k.undoUsed = true;
     // The whole cell, before anything in it changes (this is its first write).
     const TrackMemory& m = mem_[t];
     const uint32_t f0 = c * kUndoCellFrames, f1 = f0 + kUndoCellFrames < k.len ? f0 + kUndoCellFrames : k.len;
@@ -349,7 +361,9 @@ void Engine::renderGrains(int t, uint64_t ph0, uint64_t step16, uint32_t n) {
             uint32_t first = B0;
             if (card) {
                 const StreamView& sv = stream_[t];
-                const uint32_t lo = sv.rStart.load(std::memory_order_acquire) + uint32_t(w);
+                // A block clear of the ring's back: the Streamer frees the oldest
+                // block, and loads over it, a whole block at a time.
+                const uint32_t lo = sv.rStart.load(std::memory_order_acquire) + blockOf(t) + uint32_t(w);
                 const uint32_t hi = sv.rEnd.load(std::memory_order_acquire);
                 if (hi < lo + 256) continue;   // the ring is not there yet: no grain now
                 if (hi - lo < uint32_t(S)) {   // too long for the ring: a shorter grain
@@ -507,6 +521,11 @@ void Engine::beginTake(int t, uint32_t tf, const int16_t* pre, uint32_t preFrame
     const TrackOpts& o = opts_[t];
     uint32_t unit = o.stop == StopQuant::kBar && !o.lenBeats ? barLen() : beatLen();
     if (o.stop == StopQuant::kFree && !o.lenBeats) unit = 0;
+    // The silence before the take, from the line, sits in its RAM: with a bar
+    // longer than half of that (a long first loop), on the beat; failing that, free.
+    const uint32_t room = (headOf(t) ? headOf(t) : capOf(t)) / 2;
+    if (unit && tf % unit + preFrames >= room) unit = beatLen();
+    if (unit && tf % unit + preFrames >= room) unit = 0;
     k.anchor = unit ? (tf / unit) * unit : tf - (preFrames < tf ? preFrames : tf);
     k.written = tf - k.anchor;
     k.recStart = tf;
@@ -567,11 +586,12 @@ void Engine::requestStop(int t) {
     }
     const TrackOpts& o = opts_[t];
     const uint32_t n = k.written;
-    if (o.stop == StopQuant::kFree) {
+    if (o.stop == StopQuant::kFree && !o.lenBeats) {
         finishRecording(t, n);
         return;
     }
-    const uint32_t unit = o.stop == StopQuant::kBeat ? beatLen() : barLen();
+    // A fixed length is in beats: a press before it ends stops on a beat.
+    const uint32_t unit = o.stop == StopQuant::kBeat || o.lenBeats ? beatLen() : barLen();
     const uint32_t below = n / unit * unit;
     // Just past a line (within an eighth of a unit): a late press, stop on that line.
     if (below && n - below <= unit / kSegments) {
@@ -611,11 +631,32 @@ void Engine::finishRecording(int t, uint32_t len) {
         // A free first take is one bar long and sets the tempo; on bar, on beat
         // or fixed-length first takes keep the tempo's bar.
         L_ = (o.stop == StopQuant::kFree && !o.lenBeats) ? len : barLen();
+        if (k.anchor % L_) {
+            // A count-in put its start a bar of the old tempo in: the clock
+            // moves back by that, so the loop's start is bar 1 of its own.
+            const uint32_t a = k.anchor;
+            k.anchor = 0;
+            tAcc_ -= uint64_t(a) << 16;
+            t_ = uint32_t(tAcc_ >> 16);
+            const uint32_t beat = beatLen();
+            lastBeat_ = beat ? t_ / beat : 0xFFFFFFFFu;   // no extra click
+            lastTick_ = beat ? uint32_t(uint64_t(t_) * 24u / beat) : 0xFFFFFFFFu;
+        }
     }
     if (len > recCap(t)) len = recCap(t);
     k.len = len;
     k.stopAt = 0;
     const bool mirrored = stream_[t].active.load(std::memory_order_relaxed);
+    if (mirrored && !k.head && headOf(t) && len > headOf(t)) {
+        // Rounded up to its bar past its RAM before it reached the card: a
+        // long take, its silent rest (zeros) on the card.
+        StreamView& sv = stream_[t];
+        k.head = headOf(t);
+        for (clouds::Grain& c : k.cg) c.Init();
+        sv.rStart.store(k.head, std::memory_order_relaxed);
+        sv.rEnd.store(k.head, std::memory_order_relaxed);
+        sv.head.store(k.head, std::memory_order_release);
+    }
     if (mirrored) stream_[t].recorded.store(n < len ? n : len, std::memory_order_relaxed);   // then zeros to len
     // Frames past len (a late press) were written too: the next clear zeroes them.
     k.written = n > len ? n : len;
@@ -663,6 +704,8 @@ void Engine::crossfadeLoopPoint(int t) {
             notePeak(m.peaks, s + i, l, r);
         }
     }
+    // A take on the card: its first block there was written before the blend.
+    if (stream_[t].active.load(std::memory_order_relaxed)) stream_[t].loopPoint.store(true, std::memory_order_release);
 }
 
 uint32_t Engine::recCap(int t) const {
@@ -726,7 +769,7 @@ int16_t* Engine::dubFrame(int t, uint32_t i) {
         p = m.frames + (k.mono ? size_t(bi) : 2 * size_t(bi));
     }
     const uint32_t b = bi / blockOf(t);
-    sv.dirty[b >> 5].fetch_or(1u << (b & 31), std::memory_order_relaxed);
+    sv.dirty[sv.session.load(std::memory_order_relaxed) & 1u][b >> 5].fetch_or(1u << (b & 31), std::memory_order_relaxed);
     if (k.cardUndo) k.dubUndo = 1;
     return p;
 }
@@ -748,7 +791,9 @@ void Engine::beginStream(int t) {
     sv.rEnd.store(0, std::memory_order_relaxed);
     sv.undoReq.store(0, std::memory_order_relaxed);
     sv.undoDone.store(false, std::memory_order_relaxed);
-    for (std::atomic<uint32_t>& w : sv.dirty) w.store(0, std::memory_order_relaxed);
+    for (auto& map : sv.dirty)
+        for (std::atomic<uint32_t>& w : map) w.store(0, std::memory_order_relaxed);
+    sv.loopPoint.store(false, std::memory_order_relaxed);
     sv.recording.store(true, std::memory_order_relaxed);
     sv.take.fetch_add(1, std::memory_order_relaxed);
     sv.active.store(true, std::memory_order_release);
@@ -768,7 +813,7 @@ void Engine::clearTrack(int t) {
     // A long take's card part is not zeroed (the next take overwrites it); its
     // peaks past the RAM's are.
     uint32_t dirty = k.mono ? (k.written + 1) / 2 : k.written;
-    if (dirty > mem_[t].capacity) dirty = mem_[t].capacity;
+    if (dirty > mem_[t].capacity || k.undoUsed) dirty = mem_[t].capacity;   // overdub undo cells sit at its end
     if (k.head) {
         const uint32_t used = k.written > k.start + k.len ? k.written : k.start + k.len;   // a loaded take too
         const uint32_t cells = (used + kPeakFrames - 1) / kPeakFrames;
@@ -814,9 +859,12 @@ void Engine::apply(const Msg& m) {
                 case TrackState::kRecording: requestStop(t); break;
                 case TrackState::kPlaying:
                     if (!canDubNow(k)) break;   // the app tells the user why
-                    if (!running_) startClockAlone(t);
-                    k.state = TrackState::kOverdubbing;
                     k.replace = m.arg == 1;
+                    if (!running_) {   // the transport is stopped: from its top, overdubbing
+                        queueLaunch(t, true);
+                        break;
+                    }
+                    k.state = TrackState::kOverdubbing;
                     break;
                 case TrackState::kStopped:   // start from the top on the next bar, overdubbing
                     if (canDubNow(k)) {
@@ -839,6 +887,10 @@ void Engine::apply(const Msg& m) {
                 case TrackState::kRecording: requestStop(t); break;
                 case TrackState::kPlaying:
                 case TrackState::kOverdubbing:   // stop: back to its start (shown there)
+                    if (!running_) {   // the transport is stopped: it starts, alone
+                        queueLaunch(t, false);
+                        break;
+                    }
                     if (stopFade_ && !k.fadeOut) {
                         // Fade out first (1 beat, 1 bar or 2 bars), then stop; a
                         // second press stops at once.
@@ -871,6 +923,7 @@ void Engine::apply(const Msg& m) {
                 StreamView& sv = stream_[t];
                 const uint32_t ff = sv.fileFrames.load(std::memory_order_acquire);
                 if (!ff || !headOf(t) || m.a <= headOf(t) || m.a > (k.mono ? 2 * ff : ff)) break;
+                k.input = k.mono ? (opts_[t].input != InputCh::kStereo ? opts_[t].input : InputCh::kMonoSum) : InputCh::kStereo;
                 k.len = m.a;
                 k.written = headOf(t) < m.a ? headOf(t) : m.a;   // what a clear zeroes (the RAM part)
                 k.start = 0;
@@ -887,7 +940,8 @@ void Engine::apply(const Msg& m) {
                 sv.rEnd.store(k.head, std::memory_order_relaxed);
                 sv.undoReq.store(0, std::memory_order_relaxed);
                 sv.undoDone.store(false, std::memory_order_relaxed);
-                for (std::atomic<uint32_t>& w : sv.dirty) w.store(0, std::memory_order_relaxed);
+                for (auto& map : sv.dirty)
+                    for (std::atomic<uint32_t>& w : map) w.store(0, std::memory_order_relaxed);
                 sv.recording.store(false, std::memory_order_relaxed);
                 sv.take.fetch_add(1, std::memory_order_relaxed);
                 sv.active.store(true, std::memory_order_relaxed);
@@ -899,6 +953,8 @@ void Engine::apply(const Msg& m) {
             }
             if (k.state == TrackState::kEmpty && m.a && m.a <= (m.arg & 1 ? 2 * mem_[t].capacity : mem_[t].capacity)) {
                 k.mono = (m.arg & 1) != 0;
+                // Overdubs come from the input it was recorded with (the track's channel option).
+                k.input = k.mono ? (opts_[t].input != InputCh::kStereo ? opts_[t].input : InputCh::kMonoSum) : InputCh::kStereo;
                 k.len = m.a;
                 k.written = m.a;
                 k.start = 0;
@@ -939,6 +995,7 @@ void Engine::apply(const Msg& m) {
                 k.anchor = k.undo.anchor;
                 k.offset16 = 0;
                 k.undo.has = false;
+                dropUndo(k);   // an overdub's cells were saved for the trimmed loop
                 restartGrains(k, uint64_t(posOf(k)) << 16);
                 view_[t].peakVersion.fetch_add(1, std::memory_order_relaxed);
             }
@@ -977,8 +1034,8 @@ void Engine::apply(const Msg& m) {
             if (cut) {
                 k.busy = true;
                 k.undo.has = false;   // the audio moves: an older trim cannot come back
-                dropUndo(k);
             }
+            dropUndo(k);   // an overdub undo would bring back what changed
             job_.state.store(1, std::memory_order_release);
             break;
         }
@@ -1132,14 +1189,23 @@ void Engine::apply(const Msg& m) {
                     } else if (x.len && (x.state == TrackState::kPlaying || x.state == TrackState::kOverdubbing)) {
                         x.anchor = bar ? x.anchor % bar : 0;
                         x.offset16 = 0;
+                        x.fadeOut = x.fadeOutLen = 0;
                         restartGrains(x, uint64_t(posOf(x)) << 16);
                     }
             }
             break;
         case kClearAll:
-            for (int o = 0; o < kTracks; ++o) clearTrack(o);
+            for (int o = 0; o < kTracks; ++o)
+                if (!(job_.state.load(std::memory_order_acquire) && job_.track == o)) clearTrack(o);   // not under an edit
             break;
         case kMonitor: monitor_ = m.arg != 0; break;
+        case kLatency: lat_ = uint32_t(m.arg < 0 ? 0 : (m.arg > int(kMaxLatencyFrames) ? kMaxLatencyFrames : m.arg)); break;
+        case kMeasure:
+            meas_ = m.arg != 0;
+            measClock_ = measPing_ = measHits_ = 0;
+            measWait_ = false;
+            measState_.store(meas_ ? 1 : 0, std::memory_order_release);
+            break;
         case kFeedback: feedback_ = uint8_t(m.arg < 0 ? 0 : (m.arg > 100 ? 100 : m.arg)); break;
     }
 }
@@ -1213,7 +1279,8 @@ void Engine::startRepeat(Track& k, PerfFx r) {
     if (slice < 64) slice = 64;
     if (slice > k.len) slice = k.len;
     const uint32_t bar = barLen();
-    const int64_t origin = bar ? int64_t((bar - k.anchor % bar) % bar) : 0;   // a bar line in the buffer
+    // A bar line in the buffer, where its audio is (the latency after the clock's).
+    const int64_t origin = bar ? int64_t((bar - k.anchor % bar + (latShift16(k) >> 16)) % bar) : 0;
     const int64_t pos = posOf(k);
     const int64_t d = pos - origin;
     int64_t s = (d >= 0 ? d / slice : -((-d + slice - 1) / slice)) * int64_t(slice) + origin;
@@ -1249,15 +1316,17 @@ void Engine::launch(Track& k) {
 void Engine::queueLaunch(int t, bool dub) {
     Track& k = trk_[t];
     k.launchDub = dub && canDubNow(k);
+    // A take keeps its place in the bar (a trimmed or on-beat one starts off the line).
+    const uint32_t bar = barLen(), ph = bar ? k.anchor % bar : 0;
     if (!running_) {   // nothing running: this track starts the clock, from its top
         startClockAlone(t);
-        k.anchor = 0;
+        setClock(ph);
+        k.anchor = ph;
         launch(k);
         return;
     }
     // From its beginning on the next bar line (now, when exactly on one).
-    const uint32_t bar = barLen();
-    k.anchor = bar ? ((t_ + bar - 1) / bar) * bar : t_;
+    k.anchor = bar ? ((t_ + bar - 1) / bar) * bar + ph : t_;
     k.offset16 = 0;
     k.state = TrackState::kQueued;
 }
@@ -1445,7 +1514,11 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                 const uint32_t fromRing = kPreRollFrames - f;   // f < 128 < kPreRollFrames
                 std::memcpy(pre, preRoll_ + 2 * f, fromRing * 2 * sizeof(int16_t));
                 std::memcpy(pre + 2 * fromRing, in, f * 2 * sizeof(int16_t));
-                if (L_ == 0 || !running_) {
+                bool taking = false;   // another take is under way on the clock: it stays
+                for (int o = 0; o < kTracks; ++o)
+                    if (o != t && (trk_[o].state == TrackState::kRecording || trk_[o].state == TrackState::kCountIn))
+                        taking = true;
+                if (!running_ || (L_ == 0 && !taking)) {
                     // No loop running: the bar clock starts at the pre-roll; the
                     // other loops stay stopped.
                     startClockAlone(t);
@@ -1540,7 +1613,10 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             const bool dub = (dubbing || k.dubX > 0.0f) && mi.canDub && !posFx;
             if (dub && !k.dubSession) {   // a new overdub: its cells are saved as it goes
                 k.dubSession = true;
-                k.undoOk = k.start + 2 * k.len + kXfadeFrames <= capOf(t) &&
+                // Its cells go after everything in use, a trimmed-away part included.
+                const uint32_t trimEnd = k.undo.has ? k.undo.start + k.undo.len : 0;
+                const uint32_t used = k.start + k.len > trimEnd ? k.start + k.len : trimEnd;
+                k.undoOk = used + k.len + kXfadeFrames <= capOf(t) &&
                            (k.len + kUndoCellFrames - 1) / kUndoCellFrames <= kUndoMapBytes * 8;
                 std::memset(undoMap_[t], 0, kUndoMapBytes);
                 if (k.undoOk) k.dubUndo = 0;   // the earlier pass cannot come back now
@@ -1649,7 +1725,10 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                 sendGain_[t][s] = st;
             }
             const uint64_t P = period16(k), L16 = uint64_t(k.len) << 16;
-            uint64_t ph = phase16(k);
+            // Read ahead of the clock by the latency; an overdub writes shift behind.
+            const uint64_t shift = latShift16(k) % P;
+            uint64_t ph = phase16(k) + shift;
+            if (ph >= P) ph -= P;
             if (mi.reader == ModeInfo::kCloud && !posFx) renderGrains(t, ph, step16, n);
             // Frame i as left/right; a mono buffer gives the same sample to both.
             const bool mono = k.mono;
@@ -1763,7 +1842,8 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                             if (dub) {
                                 float oldK, inK;
                                 ramp(oldK, inK);
-                                dubVari(t, ph, step16, in ? in + 2 * f : nullptr, oldK, inK);
+                                dubVari(t, ph >= shift ? ph - shift : ph + P - shift, step16, in ? in + 2 * f : nullptr,
+                                        oldK, inK);
                             }
                             break;
                         }
@@ -1776,18 +1856,20 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                             const int16_t l = in ? in[2 * f] : 0, r = in ? in[2 * f + 1] : 0;
                             float oldK, inK;
                             ramp(oldK, inK);
-                            saveUndoCell(t, i);
-                            if (int16_t* p = dubFrame(t, i)) {   // RAM, or a long take's ring
+                            // Where the input belongs: at the clock, the latency behind the read.
+                            const uint32_t w = shift ? posOfPhase(k, ph >= shift ? ph - shift : ph + P - shift) : i;
+                            saveUndoCell(t, w);
+                            if (int16_t* p = dubFrame(t, w)) {   // RAM, or a long take's ring
                                 if (mono) {
-                                    const int16_t nv = sat16(float(a) * oldK + float(fold(k.input, l, r)) * inK);
+                                    const int16_t nv = sat16(float(p[0]) * oldK + float(fold(k.input, l, r)) * inK);
                                     p[0] = nv;
-                                    notePeakMono(m.peaks, pk0 + i, nv);
+                                    notePeakMono(m.peaks, pk0 + w, nv);
                                 } else {
-                                    const int16_t nl = sat16(float(a) * oldK + float(l) * inK);
-                                    const int16_t nr = sat16(float(b) * oldK + float(r) * inK);
+                                    const int16_t nl = sat16(float(p[0]) * oldK + float(l) * inK);
+                                    const int16_t nr = sat16(float(p[1]) * oldK + float(r) * inK);
                                     p[0] = nl;
                                     p[1] = nr;
-                                    notePeak(m.peaks, pk0 + i, nl, nr);
+                                    notePeak(m.peaks, pk0 + w, nl, nr);
                                 }
                             }
                         }
@@ -1977,6 +2059,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
         }
     }
     clockRan_ = running_;
+    if (meas_) measure(out, in, n);
     if (running_) {   // speed16_ loop frames per output frame
         tAcc_ += uint64_t(n) * speed16_;
         t_ = uint32_t(tAcc_ >> 16);
@@ -1990,6 +2073,44 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
         outPeak_[c].store(outPk[c], std::memory_order_relaxed);
     }
     publish();
+}
+
+void Engine::measure(int16_t* out, const int16_t* in, uint32_t n) {
+    // The round-trip latency, with a cable from an output to the input: the
+    // outputs go quiet but for a short click every kMeasGap frames, and the
+    // first input frame over -20 dBFS after it times the trip. The loops keep
+    // running underneath, unheard.
+    std::memset(out, 0, size_t(n) * 2 * sizeof(int16_t));
+    for (uint32_t f = 0; f < n; ++f) {
+        const uint32_t c = measClock_ + f, ph = c % kMeasGap;
+        if (ph == kMeasGap / 2 && measPing_ < kMeasPings && !measWait_) {   // half a gap of silence first
+            measAt_ = c;
+            measWait_ = true;
+            ++measPing_;
+        }
+        if (measWait_ && c - measAt_ < 24) {   // the click: 24 frames of a square wave, -9 dBFS
+            const int16_t v = (c - measAt_) & 4 ? -11600 : 11600;
+            out[2 * f] = out[2 * f + 1] = v;
+        }
+        if (!measWait_ || c == measAt_) continue;
+        const int l = in ? std::abs(int(in[2 * f])) : 0, r = in ? std::abs(int(in[2 * f + 1])) : 0;
+        if (l >= 3277 || r >= 3277) {
+            measGot_[measHits_++] = uint16_t(c - measAt_);
+            measWait_ = false;
+        } else if (c - measAt_ > kMeasWindow) {
+            measWait_ = false;   // nothing came back
+        }
+    }
+    measClock_ += n;
+    if (measPing_ < kMeasPings || measWait_) return;
+    meas_ = false;
+    if (measHits_ < kMeasPings / 2 + 1) {
+        measState_.store(3, std::memory_order_release);
+        return;
+    }
+    std::sort(measGot_, measGot_ + measHits_);
+    measFrames_.store(measGot_[measHits_ / 2], std::memory_order_relaxed);
+    measState_.store(2, std::memory_order_release);
 }
 
 void Engine::publish() {

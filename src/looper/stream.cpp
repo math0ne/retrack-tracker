@@ -151,21 +151,34 @@ bool Streamer::drain(int t, const Ctx& c) {
     return true;
 }
 
-bool Streamer::writeBlock(int t, const Ctx& c, uint32_t b) {
+bool Streamer::writeBlock(int t, const Ctx& c, int par, uint32_t b) {
     // Clear, then write: an overdub that changes it again meanwhile marks it again.
     StreamView& sv = *c.sv;
-    sv.dirty[b >> 5].fetch_and(~(1u << (b & 31)), std::memory_order_relaxed);
-    const uint32_t f0 = b * c.bu, n = f0 + c.bu < c.len ? c.bu : c.len - f0;
-    if (!sv.undoFiles.load(std::memory_order_relaxed) || hB_[t] < 0)   // no second file: in place
-        return io(true, hA_[t], f0 * c.ub, c.at(f0), n * c.ub);
-    // The first write of the pass goes to the other file: the pass before stays.
-    const bool moved = bit(sess_[t], b);
-    const IStorage::Handle h = moved ? fileOf(t, b) : (bit(cur_[t], b) ? hA_[t] : hB_[t]);
-    if (!io(true, h, f0 * c.ub, c.at(f0), n * c.ub)) return false;
-    if (!moved) {
-        sess_[t][b >> 5] |= 1u << (b & 31);
-        cur_[t][b >> 5] ^= 1u << (b & 31);
+    std::atomic<uint32_t>& word = sv.dirty[par][b >> 5];
+    const uint32_t mask = 1u << (b & 31);
+    word.fetch_and(~mask, std::memory_order_relaxed);
+    // The whole block, up to the file's end: a trim may have left changed
+    // blocks past the loop's end, and an undo of the trim brings them back.
+    const uint32_t units = c.ub == 2 ? 2 * kStreamFrames : kStreamFrames;
+    const uint32_t f0 = b * c.bu;
+    if (f0 >= units) return false;
+    const uint32_t n = f0 + c.bu < units ? c.bu : units - f0;
+    uint32_t* const sess = sess_[t][par];
+    bool ok;
+    if (!sv.undoFiles.load(std::memory_order_relaxed) || hB_[t] < 0) {   // no second file: in place
+        // ... unless the block's current version is on B (B not open again yet): wait for it.
+        ok = !bit(cur_[t], b) && io(true, hA_[t], f0 * c.ub, c.at(f0), n * c.ub);
+    } else {
+        // The first write of the pass goes to the other file: the pass before stays.
+        const bool moved = bit(sess, b);
+        const IStorage::Handle h = moved ? fileOf(t, b) : (bit(cur_[t], b) ? hA_[t] : hB_[t]);
+        ok = io(true, h, f0 * c.ub, c.at(f0), n * c.ub);
+        if (ok && !moved) {
+            sess[b >> 5] |= mask;
+            cur_[t][b >> 5] ^= mask;
+        }
     }
+    if (!ok) word.fetch_or(mask, std::memory_order_relaxed);   // still to go: tried again later
     return true;
 }
 
@@ -176,18 +189,21 @@ bool Streamer::writeBack(int t, const Ctx& c, uint32_t pos, bool all, uint32_t l
     if (hi <= lo) return false;
     const uint32_t rS = sv.rStart.load(std::memory_order_relaxed), rE = sv.rEnd.load(std::memory_order_relaxed);
     const uint32_t b0 = lo / c.bu, b1 = (hi + c.bu - 1) / c.bu;
-    for (uint32_t w = b0 >> 5; w <= (b1 - 1) >> 5 && w < kWords; ++w) {
-        uint32_t bits = sv.dirty[w].load(std::memory_order_relaxed);
-        while (bits) {
-            const uint32_t b = (w << 5) + uint32_t(__builtin_ctz(bits));
-            bits &= bits - 1;
-            if (b < b0 || b >= b1) continue;
-            const uint32_t f0 = b * c.bu, f1 = f0 + c.bu;
-            if (!all && pos + kMargin >= f0 && pos < f1 + kMargin) continue;   // the playhead is in it
-            if (f0 >= c.head && !all && (f0 < rS || (f1 < c.len ? f1 : c.len) > rE)) continue;   // not in the ring
-            return writeBlock(t, c, b);
+    // The pass before first (its blocks are its own), then this pass's.
+    const int now = int(session_[t] & 1u);
+    for (int par : {now ^ 1, now})
+        for (uint32_t w = b0 >> 5; w <= (b1 - 1) >> 5 && w < kWords; ++w) {
+            uint32_t bits = sv.dirty[par][w].load(std::memory_order_relaxed);
+            while (bits) {
+                const uint32_t b = (w << 5) + uint32_t(__builtin_ctz(bits));
+                bits &= bits - 1;
+                if (b < b0 || b >= b1) continue;
+                const uint32_t f0 = b * c.bu, f1 = f0 + c.bu;
+                if (!all && pos + kMargin >= f0 && pos < f1 + kMargin) continue;   // the playhead is in it
+                if (f0 >= c.head && !all && (f0 < rS || (f1 < c.len ? f1 : c.len) > rE)) continue;   // not in the ring
+                return writeBlock(t, c, par, b);
+            }
         }
-    }
     return false;
 }
 
@@ -197,13 +213,17 @@ bool Streamer::undoStep(int t, const Ctx& c) {
     // other file, reload the RAM part's, recompute their peaks, refill the ring.
     StreamView& sv = *c.sv;
     if (undoPhase_[t] == 0) {
-        pendS_[t] = sv.rStart.load(std::memory_order_relaxed);
-        pendE_[t] = sv.rEnd.load(std::memory_order_relaxed);
+        if (!pend_[t]) {   // a ring move under way: its range is pending already
+            pendS_[t] = sv.rStart.load(std::memory_order_relaxed);
+            pendE_[t] = sv.rEnd.load(std::memory_order_relaxed);
+        }
+        pend_[t] = false;
         undoPhase_[t] = 1;
     }
     if (undoPhase_[t] == 1) {
         if (flushAll(t, c)) return true;
-        for (uint32_t w = 0; w < kWords; ++w) cur_[t][w] ^= sess_[t][w];
+        const uint32_t* sess = sess_[t][session_[t] & 1u];   // the last pass
+        for (uint32_t w = 0; w < kWords; ++w) cur_[t][w] ^= sess[w];
         undoNext_[t] = 0;
         undoPhase_[t] = 2;
         return true;
@@ -211,12 +231,13 @@ bool Streamer::undoStep(int t, const Ctx& c) {
     // Reload: one block of the pass a call.
     const uint32_t nb = (c.len + c.bu - 1) / c.bu;
     uint32_t b = undoNext_[t];
-    while (b < nb && !bit(sess_[t], b)) ++b;
+    while (b < nb && !bit(sess_[t][session_[t] & 1u], b)) ++b;
     if (b < nb) {
-        undoNext_[t] = b + 1;
         const uint32_t f0 = b * c.bu, n = f0 + c.bu < c.len ? c.bu : c.len - f0;
         uint8_t* dst = f0 < c.head ? c.ram + size_t(f0) * c.ub : p_->scratch;   // the card part: just its peaks
-        if (io(false, fileOf(t, b), f0 * c.ub, dst, n * c.ub)) peaks(t, c, b, dst);
+        if (!io(false, fileOf(t, b), f0 * c.ub, dst, n * c.ub)) return true;   // again next time
+        peaks(t, c, b, dst);
+        undoNext_[t] = b + 1;
         return true;
     }
     sv.rStart.store(c.head, std::memory_order_release);   // the ring refills from the files
@@ -247,8 +268,11 @@ bool Streamer::editStep(int t, const Ctx& c) {
         const TrackView& v = e_->view(t);
         editStart_[t] = v.start.load(std::memory_order_relaxed);
         editLen_[t] = v.len.load(std::memory_order_relaxed);
-        pendS_[t] = sv.rStart.load(std::memory_order_relaxed);
-        pendE_[t] = sv.rEnd.load(std::memory_order_relaxed);
+        if (!pend_[t]) {   // a ring move under way: its range is pending already
+            pendS_[t] = sv.rStart.load(std::memory_order_relaxed);
+            pendE_[t] = sv.rEnd.load(std::memory_order_relaxed);
+        }
+        pend_[t] = false;
         editNext_[t] = 0;
         editPhase_[t] = 1;
     }
@@ -260,6 +284,15 @@ bool Streamer::editStep(int t, const Ctx& c) {
         if (flushAll(t, d)) return true;
         // From here on the files are written in place; the pass before is gone.
         std::memset(sess_[t], 0, sizeof sess_[t]);
+        if (cut && bit(cur_[t], A / bu)) {
+            // The cut writes [A, ...) to file A: the start of A's block, before
+            // A, goes there first from B, where its current version is.
+            const uint32_t b0 = A / bu * bu;
+            if (A > b0) {
+                if (!io(false, hB_[t], b0 * ub, p_->scratch, (A - b0) * ub)) return true;
+                if (!io(true, hA_[t], b0 * ub, p_->scratch, (A - b0) * ub)) return true;
+            }
+        }
         editPhase_[t] = 2;
         return true;
     }
@@ -268,7 +301,8 @@ bool Streamer::editStep(int t, const Ctx& c) {
         const uint32_t x = editNext_[t];
         if (cut) {   // [B + x, ...) to [A + x, ...): read through the staging buffer, then write
             if (B + x >= end) {
-                std::memset(cur_[t], 0, sizeof cur_[t]);   // all of it is in file A now
+                // From A's block on it is all in file A now; the blocks before keep their file.
+                for (uint32_t b = A / bu; b < kWords * 32u; ++b) cur_[t][b >> 5] &= ~(1u << (b & 31));
                 editNext_[t] = A / bu;
                 editPhase_[t] = 3;
                 return true;
@@ -277,8 +311,8 @@ bool Streamer::editStep(int t, const Ctx& c) {
             const uint32_t dst = A + x;
             if (c.head && dst < c.head && dst + n > c.head) n = c.head - dst;   // RAM, then the card
             if (!read(t, B + x, buf, n)) return true;
+            if (!io(true, hA_[t], dst * ub, buf, n * ub)) return true;   // again next time
             if (c.head && dst < c.head) std::memcpy(c.ram + size_t(dst) * ub, buf, size_t(n) * ub);
-            io(true, hA_[t], dst * ub, buf, n * ub);
             editNext_[t] = x + n;
             return true;
         }
@@ -358,7 +392,17 @@ bool Streamer::serviceTrack(int t) {
     const uint32_t ses = sv.session.load(std::memory_order_acquire);
     if (ses != session_[t]) {
         session_[t] = ses;
-        std::memset(sess_[t], 0, sizeof sess_[t]);
+        std::memset(sess_[t][ses & 1u], 0, sizeof sess_[t][0]);
+    }
+    // The loop-point blend changed the take's first frames after they went
+    // to the card: that block goes again (in place: no pass of its own).
+    if (sv.loopPoint.load(std::memory_order_acquire)) {
+        const uint32_t s0 = start / c.bu * c.bu, n = s0 + c.bu < c.len ? c.bu : c.len - s0;
+        if (sv.flushed.load(std::memory_order_acquire) > s0 && s0 < c.head) {
+            if (!io(true, fileOf(t, s0 / c.bu), s0 * c.ub, c.ram + size_t(s0) * c.ub, n * c.ub)) return true;
+        }
+        sv.loopPoint.store(false, std::memory_order_relaxed);
+        return true;
     }
     if (sv.undoReq.load(std::memory_order_acquire) && !sv.undoDone.load(std::memory_order_relaxed))
         return undoStep(t, c);
@@ -380,11 +424,14 @@ bool Streamer::serviceTrack(int t) {
     const uint32_t first = start > head ? head + (start - head) / bu * bu : head;
     uint32_t s;   // forwards: where the ring starts; backwards: where it ends
     if (fwd) {
-        s = pos < first + behind ? first : pos - behind;
+        s = pos < first + behind || len - first <= ring ? first : pos - behind;
         if (s >= len) s = first;
         s = head + (s - head) / bu * bu;
     } else {
-        s = pos < head || pos < start + behind || pos + behind >= len ? len : pos + behind;
+        // Near the loop's start the ring holds its end, where the wrap lands
+        // (a start in the card part: the playhead's own window, a reset at the wrap).
+        const bool nearStart = pos < start + behind && start <= head;
+        s = pos < head || nearStart || pos + behind >= len ? len : pos + behind;
         if (s < len) s = head + (s - head + bu - 1) / bu * bu;
         if (s > len) s = len;
     }
@@ -447,8 +494,10 @@ bool Streamer::read(int t, uint32_t b, uint8_t* dst, uint32_t n) {
         } else {
             const uint32_t blk = b / bu;
             const uint32_t rS = sv.rStart.load(std::memory_order_relaxed), rE = sv.rEnd.load(std::memory_order_relaxed);
-            const bool changed = (sv.dirty[blk >> 5].load(std::memory_order_relaxed) >> (blk & 31)) & 1u;
-            if (changed && b >= rS && b + k <= rE) {   // newer in the ring than on the card
+            const bool changed = ((sv.dirty[0][blk >> 5].load(std::memory_order_relaxed) |
+                                   sv.dirty[1][blk >> 5].load(std::memory_order_relaxed)) >> (blk & 31)) & 1u;
+            const bool held = (b >= rS && b + k <= rE) || (pend_[t] && b >= pendS_[t] && b + k <= pendE_[t]);
+            if (changed && held) {   // newer in the ring than on the card
                 std::memcpy(dst, ram + size_t(head + (b - head) % ring) * ub, size_t(k) * ub);
             } else if (hA_[t] < 0 || !io(false, fileOf(t, blk), b * ub, dst, k * ub)) {
                 return false;
