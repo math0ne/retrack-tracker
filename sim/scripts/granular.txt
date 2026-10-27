@@ -91,7 +91,7 @@ press FX2
 press F1
 press F6
 wait 400
-expect_fx 2 Clouds 4 80
+expect_fx 2 Clouds 4 75
 # Mixer: track 1 strip, up one row from Level to its FX 2 send.
 press MASTER
 press F1
@@ -103,11 +103,12 @@ shot ../build/sim/check/granular_clouds_page.png
 press FX2
 wait 50
 shot ../build/sim/check/granular_clouds_fx.png
-# F4 = Pitch on the first bank (F2..F5 = knobs 1..4); Shift + F5 = Freeze on the second.
+# F4 = Pitch on the first bank (F2..F5 = knobs 1..4; default +12 st): down an octave to 0.
+# Shift + F5 = Freeze on the second.
 press F4
-enc 12
+enc -12
 wait 30
-expect_fx 2 Clouds 3 36
+expect_fx 2 Clouds 3 24
 hold SHIFT
 wait 30
 shot ../build/sim/check/granular_clouds_shift.png
@@ -118,17 +119,17 @@ shot ../build/sim/check/granular_clouds_bank2.png
 enc 1
 wait 30
 expect_fx 2 Clouds 8 1
-# Locked on the second bank: plain F2 is Texture (40 -> 44).
+# Locked on the second bank: plain F2 is Texture (50 -> 54).
 press F2
 enc 2
 wait 30
-expect_fx 2 Clouds 5 44
-# A Shift tap: back to the first bank; F2 is Position (20 -> 24).
+expect_fx 2 Clouds 5 54
+# A Shift tap: back to the first bank; F2 is Position (5 -> 9).
 press SHIFT
 press F2
 enc 2
 wait 30
-expect_fx 2 Clouds 1 24
+expect_fx 2 Clouds 1 9
 press NOTE
 
 # Performance: pad 4 of row 2 toggles FX 2's freeze.

@@ -51,9 +51,12 @@ const FxTypeInfo kFxTypes[kFxTypeCount] = {
                 {nullptr, 0, 0, nullptr}}},
     {"Flanger", {{"Rate", 100, 20, nullptr}, {"Depth", 100, 60, nullptr}, {"Feedback", 95, 60, nullptr},
                  {"Manual", 100, 30, nullptr}}},
-    {"Clouds", {{"Position", 100, 20, nullptr}, {"Size", 100, 40, nullptr}, {"Pitch", 48, kCloudsPitchZero, nullptr},
-                {"Density", 100, 80, nullptr}, {"Texture", 100, 40, nullptr}, {"Feedback", 100, 0, nullptr},
-                {"Spread", 100, 50, nullptr}, {"Freeze", 1, 0, kOffOn}}},
+    // Defaults: the OpenTracker fork's (engine.h granular*): small grains an
+    // octave up, a dense cloud, full stereo. Its feedback (60 %) never fed
+    // back (its high-pass cancelled itself); here it does, so it starts at 0.
+    {"Clouds", {{"Position", 100, 5, nullptr}, {"Size", 100, 10, nullptr}, {"Pitch", 48, kCloudsPitchZero + 12, nullptr},
+                {"Density", 100, 75, nullptr}, {"Texture", 100, 50, nullptr}, {"Feedback", 100, 0, nullptr},
+                {"Spread", 100, 100, nullptr}, {"Freeze", 1, 0, kOffOn}}},
 };
 
 // ---------------------------------------------------------------------------

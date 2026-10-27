@@ -343,7 +343,7 @@ mute and stop do). Either slot can hold any of six effects:
 | Reverb | Size (decay 0.3–9 s), Tone (dark … bright), Width |
 | Chorus | Rate (0.1–5 Hz), Depth, Width |
 | Flanger | Rate (0.05–2 Hz), Depth, Feedback, Manual (0.5–8 ms) |
-| Clouds | Mutable Instruments' granular processor on a 3 s record buffer (at 44.1 kHz, no resampling; up to 12 grains). Knobs 1: Position (how far back the grains read), Size, Pitch (±24 semitones), Density (Clouds' deadband at noon; up from there grains come at random, down from there evenly). Knobs 2 (**Shift + F2–F5**): Texture (window shape; past 75 % a diffuser), Feedback, Spread (stereo), Freeze (the buffer stops recording; also pad 4 in performance mode) |
+| Clouds | Mutable Instruments' granular processor on a 4.1 s record buffer (at 32 kHz, as in the OpenTracker fork; Density asks for as many grains as the 40-grain original, up to 24; defaults as in the OpenTracker fork). Knobs 1: Position (how far back the grains read), Size, Pitch (±24 semitones), Density (Clouds' deadband at noon; up from there grains come at random, down from there evenly). Knobs 2 (**Shift + F2–F5**): Texture (window shape; past 75 % a diffuser), Feedback, Spread (stereo), Freeze (the buffer stops recording; also pad 4 in performance mode) |
 
 **FX1 / FX2** open that slot's page: a live picture of the effect on top (the
 echo taps on the beat grid, the reverb's decay, the LFOs moving, Clouds'
