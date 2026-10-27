@@ -1000,9 +1000,11 @@ void App::scissorOff() { scissor(0, 0, 800, 480); }
 void App::render(uint32_t now) {
     words_ = 0;
     d_->dlStart();
-    d_->clearColorRGB(r8(kBg), g8(kBg), b8(kBg));
+    // The lanes sit on plain black; the other pages on a top-lit gradient.
+    const bool lanes = fxPage_ < 0 && !edit_ && !config_ && !mixer_ && !options_ && !file_ && !inPage_;
+    d_->clearColorRGB(lanes ? 0 : r8(kBg), lanes ? 0 : g8(kBg), lanes ? 0 : b8(kBg));
     d_->clear(true, true, true);
-    d_->gradient(0, 0, 0x202020, 0, 479, 0x080808);   // light falls from the top
+    if (!lanes) d_->gradient(0, 0, 0x202020, 0, 479, 0x080808);   // light falls from the top
     words_ += 8;
 
     if (fxPage_ >= 0) drawFxPage(now);
@@ -1096,14 +1098,9 @@ void App::drawLane(int t, uint32_t now) {
     const int y0 = kLaneY0 + t * (kLaneH + kLaneGap), y1 = y0 + kLaneH;
     char buf[48];
 
-    // Card, outlined in the track colour when selected
-    if (sel) {
-        color(tc);
-        alpha(110);
-        fillRect(kLaneX0 - 2, y0 - 2, kLaneX1 + 2, y1 + 2, 10);
-        alpha(255);
-    }
-    panel(kLaneX0, y0, kLaneX1, y1, 9, sel ? kLaneSel : kLane);
+    // No card: the waveforms sit on the black screen; the selected track is
+    // the one drawn at full brightness.
+    (void)y1;
 
     // Waveform inset
     const int wx = kWaveX, wy = y0 + kWaveDy, wx1 = wx + kWaveW, wy1 = wy + kWaveH;
@@ -1164,7 +1161,8 @@ void App::drawLane(int t, uint32_t now) {
         int px = wx + int(uint64_t(kWaveW) * (pos % span) / span);
         if (s == TrackState::kRecording) px = wx + int(uint64_t(kWaveW) * written / span);
         const uint32_t ramg = kWaveRamG + uint32_t(t) * kWaveBytes;
-        const float dim = muted || s == TrackState::kStopped || s == TrackState::kQueued ? 0.35f : 1.0f;
+        const float dim = (muted || s == TrackState::kStopped || s == TrackState::kQueued ? 0.35f : 1.0f) *
+                          (sel ? 1.0f : 0.45f);   // the selected track bright, the others dimmer
         const bool rev = modeInfo(mode).reverse && s != TrackState::kRecording;
         const float leftK = rev ? 0.45f * dim : dim, rightK = rev ? dim : 0.45f * dim;
         if (px > wx) {
@@ -1236,8 +1234,8 @@ void App::drawLane(int t, uint32_t now) {
 
     if (perf_ && v.len.load()) drawPerfCells(t, wx, wy);   // effects need a loop
 
-    // Corner tag: the track number, then what is not the default (length,
-    // mode, mute). The selected track's full state is on the F-keys.
+    // Corner tag: what is not the default (length, mode, mute), no box. The
+    // selected track's full state is on the F-keys.
     {
         char tag[48];
         int n = 0;
@@ -1253,16 +1251,9 @@ void App::drawLane(int t, uint32_t now) {
         if (muted && n < int(sizeof tag) - 2) std::snprintf(tag + n, sizeof tag - size_t(n), "%sMuted", n ? "  " : "");
         else if (!n) tag[0] = '\0';
         const int tx = wx + 4, ty = wy + 3;
-        color(0x05070A);
-        alpha(200);
-        fillRect(tx - 2, ty - 1, tx + 20 + (tag[0] ? 8 * int(std::strlen(tag)) : 0), ty + 17, 4);
-        alpha(255);
-        color(empty ? scale(tc, 0.5f) : tc);
-        std::snprintf(buf, sizeof buf, "%d", t + 1);
-        text(tx + 4, ty, kFontSmall, 0, buf);
         if (tag[0]) {
-            color(muted ? 0xC0A000 : kDim);
-            text(tx + 20, ty, kFontSmall, 0, tag);
+            color(muted ? 0xC0A000 : (sel ? kDim : scale(kDim, 0.7f)));
+            text(tx, ty, kFontSmall, 0, tag);
         }
     }
 
@@ -1794,9 +1785,16 @@ void App::drawGrid(int t, int wx, int wy, uint32_t span, int w, int h) {
     if (float(bar) * k >= 22.0f) {
         char buf[8];
         color(0x6B7685);
+        // On the lanes bar 1 goes without a label (the corner holds the
+        // track's length); the editor labels it.
+        const bool lane = w == kWaveW;
         int n = 1;
-        if (off) text(wx + 3, wy + 1, kFontSmall, 0, "1"), ++n;
+        if (off) {
+            if (!lane) text(wx + 3, wy + 1, kFontSmall, 0, "1");
+            ++n;
+        }
         for (uint32_t i = off; i < span && n <= 64; i += bar, ++n) {
+            if (lane && n == 1) continue;
             std::snprintf(buf, sizeof buf, "%d", n);
             text(wx + int(float(i) * k) + 3, wy + 1, kFontSmall, 0, buf);
         }
