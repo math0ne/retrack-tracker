@@ -356,7 +356,10 @@ knobs and the encoder turns the selected one. Changing the type silences the
 slot for about 0.2 s while its delay line is cleared.
 
 The **Master** key opens the mixer page: seven strips, each over its screen
-key, plus F8 home.
+key, plus F8 home. On the two FX strips the second row is **To FX 2** /
+**To FX 1**: that slot's output into the other one (taken before its
+return), so Clouds can run into a reverb. One way at a time: with both up,
+FX 1 → FX 2 runs and the other shows "off".
 
 | Strip (key) | Top row | Middle row | Fader |
 |---|---|---|---|

@@ -1517,7 +1517,7 @@ void App::drawFKeys() {
         else if (mixer_ && !modeBar_) hc = stripColor(i);
         else if (options_ && !modeBar_) hc = i < kTracks ? kTrackColor[i] : (i == 4 ? kAmber : kDim);
         if (hot && hotCol) hc = hotCol;
-        panel(x0, kKeyY0, x1, kKeyY1, 6, hot ? hc : kCell);
+        if (hot) panel(x0, kKeyY0, x1, kKeyY1, 6, hc);   // only lit keys get a cell; the rest are bare labels
         if (title[i][0]) {
             uint32_t tcol = kDim;
             if (hot) tcol = kBg;
@@ -1568,6 +1568,7 @@ bool App::mixParam(int strip, int row, MixParam& p, int& track, int& fxKnob) con
     // slot's effect knobs: fxKnob >= 0, track = the slot.
     track = strip < kTracks ? strip : 0;
     fxKnob = -1;
+    p = MixParam::kLevel;
     if (strip < kTracks) {
         p = row == 0 ? MixParam::kSend1 : (row == 1 ? MixParam::kSend2 : MixParam::kLevel);
         return true;
@@ -1577,6 +1578,10 @@ bool App::mixParam(int strip, int row, MixParam& p, int& track, int& fxKnob) con
         track = slot;
         if (row == 2) {
             p = slot == 0 ? MixParam::kReturn1 : MixParam::kReturn2;
+            return true;
+        }
+        if (row == 1) {   // this slot's output into the other one (Clouds into a reverb)
+            p = slot == 0 ? MixParam::kChain1 : MixParam::kChain2;
             return true;
         }
         if (!fxTypeInfo(engine_.fxType(slot)).knob[row].name) return false;
@@ -1697,11 +1702,14 @@ void App::drawStrip(int s) {
             fxKnobText(t, k, buf, sizeof buf);
             fr = fxKnobFrac(t, k);
         } else {
-            label = row == 0 ? "To FX 1" : "To FX 2";
+            // Track sends; on the FX strips the chain into the other slot.
+            label = p == MixParam::kChain1 ? "To FX 2" : (p == MixParam::kChain2 ? "To FX 1" : (row == 0 ? "To FX 1" : "To FX 2"));
             const uint8_t v = engine_.mix(p, t);
             std::snprintf(buf, sizeof buf, "%u", unsigned(v));
             fr = float(v) / 100.0f;
         }
+        if (k < 0 && p == MixParam::kChain2 && engine_.mix(MixParam::kChain1) > 0 && engine_.mix(p) > 0)
+            std::snprintf(buf, sizeof buf, "off");   // one way at a time: FX 1 -> 2 is up
         color(kDim);
         text(cx, by0 + 12, kFontSmall, Disp::kOptCenter, label);
         color(kInk);

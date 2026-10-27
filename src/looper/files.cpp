@@ -195,6 +195,8 @@ void Files::snapshot(ProjectFile& pf) const {
     pf.version = 3;
     pf.stopFade = e.opt(OptParam::kStopFade);
     pf.monitorFx = e.opt(OptParam::kMonitorFx);
+    pf.chain[0] = e.mix(MixParam::kChain1);
+    pf.chain[1] = e.mix(MixParam::kChain2);
     pf.bar = e.masterLen();
     pf.bpm = e.opt(OptParam::kTempo);
     pf.beats = e.beatsPerBar();
@@ -256,6 +258,8 @@ void Files::postSettings(const ProjectFile& pf, bool tracks) {
         if (pf.version >= 3) {
             opt(0, OptParam::kStopFade, pf.stopFade);
             opt(0, OptParam::kMonitorFx, pf.monitorFx);
+            mix(0, MixParam::kChain1, pf.chain[0]);
+            mix(0, MixParam::kChain2, pf.chain[1]);
         }
         e.post(Engine::kMonitor, 0, pf.monitor);
         e.post(Engine::kFeedback, 0, pf.feedback);

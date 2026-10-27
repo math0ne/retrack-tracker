@@ -78,6 +78,9 @@ public:
     const Engine& engine() const { return engine_; }   // read-only, for the simulator's checks
     uint8_t inputGain() const { return cfg_.gain; }
     uint32_t lastWords() const { return lastWords_; }   // the last frame's display list
+    void postMix(MixParam p, int track, int v) {        // the simulator's mix command
+        engine_.post(Engine::kMix, uint8_t(track), int16_t((int(p) << 8) | (v & 0xFF)));
+    }
     // Simulator scripts: set an option directly (as the options page would).
     void scriptOpt(int track, OptParam p, int value) {
         engine_.post(Engine::kOpt, uint8_t(track), int16_t((int(p) << 8) | (value & 0xFF)));

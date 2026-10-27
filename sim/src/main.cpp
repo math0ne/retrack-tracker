@@ -34,6 +34,7 @@
 //   expect_mode TRACK NAME        playback mode (label without spaces: Halfspeed, Granular)
 //   midi_in HEX...                bytes in on DIN;  midi_clock BPM [start|stop]  a clock in (0: none)
 //   reset_midi / expect_midi_out din|usb BYTE MIN [MAX]   count a byte sent since reset_midi
+//   mix TRACK NAME VALUE          a mixer setting (level send1 send2 return1 return2 master chain1 chain2)
 //   expect_smooth MAX             no left-output step between two frames above MAX since reset_levels (clicks)
 //   expect_grain TRACK KNOB VALUE Granular mode's knob 1..4 (spread, size, density, pitch)
 //   expect_fx SLOT TYPE [K V]     FX slot (1..2) holds TYPE (and knob K, 1..4, is V)
@@ -476,6 +477,17 @@ struct Headless {
                 m.nextTickMs = double(m.clock.micros()) / 1000.0;
                 if (st == "start") m.midi.in.push_back(0xFA);
                 if (st == "stop") m.midi.in.push_back(0xFC);
+            } else if (cmd == "mix") {
+                // mix TRACK NAME VALUE: a mixer setting (level, send1, send2, return1, return2,
+                // master, chain1, chain2; TRACK for level and sends)
+                static const char* const kMixNames[] = {"level",  "send1",  "send2",  "return1",
+                                                        "return2", "master", "chain1", "chain2"};
+                std::string name, val;
+                in >> name >> val;
+                for (int i = 0; i < 8; ++i)
+                    if (name == kMixNames[i])
+                        m.app.postMix(looper::MixParam(i), std::atoi(arg.c_str()) - 1 < 0 ? 0 : std::atoi(arg.c_str()) - 1,
+                                      std::atoi(val.c_str()));
             } else if (cmd == "reset_midi") {
                 m.midi.out[0].clear();
                 m.midi.out[1].clear();

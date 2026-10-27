@@ -76,7 +76,7 @@ private:
         uint8_t fxKnob2[kFxSlots][kFxBank];     // the second bank (Clouds)
         uint8_t grain[kTracks][kGrainKnobs];    // Granular mode's knobs
         // Version 3:
-        uint8_t stopFade, monitorFx, midiClock, reserved[13];   // reserved: zero
+        uint8_t stopFade, monitorFx, midiClock, chain[kFxSlots], reserved[11];   // reserved: zero
     };
     static constexpr uint32_t kProjectV1Bytes = 136, kProjectV2Bytes = 160;
     static_assert(sizeof(ProjectTrack) == 24, "fixed layout");

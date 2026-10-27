@@ -160,6 +160,8 @@ enum class MixParam : uint8_t {
     kReturn1,        // FX 1 return level 0..100
     kReturn2,
     kMaster,         // master level 0..100
+    kChain1,         // FX 1's output into FX 2 (before FX 1's return), 0..100
+    kChain2,         // FX 2's output into FX 1; one way at a time (kChain1 wins)
 };
 
 // Effect memory the app hands to Engine::init (SDRAM on the device): a delay
@@ -464,6 +466,8 @@ private:
     uint8_t masterLevel_ = 100;
     float sendGain_[kTracks][kFxSlots] = {};   // smoothed
     float returnGain_[kFxSlots] = {0.8f, 0.8f};
+    uint8_t chain_[kFxSlots] = {0, 0};      // slot s's output into the other slot
+    float chainGain_[kFxSlots] = {0.0f, 0.0f};
     float masterGain_ = 1.0f;
     FxUnit fx_[kFxSlots];
     float busL_[kFxSlots][128], busR_[kFxSlots][128];

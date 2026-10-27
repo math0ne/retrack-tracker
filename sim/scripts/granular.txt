@@ -170,6 +170,31 @@ expect_below 0.01
 press F2
 wait 100
 
+# Chain: FX 2 (Clouds) into FX 1 (a delay). Track 1 at level 0 (its
+# send is pre-fader), FX 2's own return 0: only the chain, through FX 1.
+mix 1 level 0
+mix 1 send1 0
+mix 1 send2 100
+mix 0 return2 0
+mix 0 chain2 100
+# (track 1 was relaunched just above)
+wait 3000
+expect_state 1 PLAY
+reset_levels
+wait 1000
+expect_audio 0.02
+press MASTER
+wait 50
+shot ../build/sim/check/granular_chain_mixer.png
+press NOTE
+# The chain off: once the delay has rung out, nothing.
+mix 0 chain2 0
+wait 4000
+reset_levels
+wait 500
+expect_below 0.005
+mix 1 level 80
+mix 0 return2 80
 # Saved and loaded with the project (version 3: 176 bytes).
 press FILE
 press F1

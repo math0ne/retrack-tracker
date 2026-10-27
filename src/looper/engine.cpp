@@ -897,6 +897,8 @@ void Engine::setMix(MixParam p, int t, int v) {
         case MixParam::kReturn1: return_[0] = pct(v, 100); break;
         case MixParam::kReturn2: return_[1] = pct(v, 100); break;
         case MixParam::kMaster: masterLevel_ = pct(v, 100); break;
+        case MixParam::kChain1: chain_[0] = pct(v, 100); break;
+        case MixParam::kChain2: chain_[1] = pct(v, 100); break;
     }
 }
 
@@ -1069,6 +1071,8 @@ uint8_t Engine::mix(MixParam p, int t) const {
         case MixParam::kReturn1: return return_[0];
         case MixParam::kReturn2: return return_[1];
         case MixParam::kMaster: return masterLevel_;
+        case MixParam::kChain1: return chain_[0];
+        case MixParam::kChain2: return chain_[1];
     }
     return 0;
 }
@@ -1579,8 +1583,27 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
         // The delay times follow the tempo: a bar in output frames.
         const uint32_t bar = uint32_t(uint64_t(barLen()) * 65536u / speed16_);
         float wetL[128], wetR[128];
-        for (int s = 0; s < kFxSlots; ++s) {
+        // A chain (one slot's output into the other, e.g. Clouds into a
+        // reverb): that slot runs first and its output joins the other's
+        // send bus, before its own return. One way only (no loop): FX 1 -> 2
+        // when both are up.
+        const int first = chain_[0] == 0 && chain_[1] > 0 ? 1 : 0;
+        for (int k = 0; k < kFxSlots; ++k) {
+            const int s = k == 0 ? first : 1 - first;
             fx_[s].process(busL[s], busR[s], wetL, wetR, n, bar);
+            if (k == 0) {
+                const float ct = float(chain_[s]) / 100.0f;
+                float cg = chainGain_[s];
+                const float cstep = (ct - cg) / float(n);
+                chainGain_[s] = ct;
+                chainGain_[1 - s] = 0.0f;   // the other way is off while this one runs
+                if (ct > 0.0f || cg > 0.0f)
+                    for (uint32_t f = 0; f < n; ++f) {
+                        cg += cstep;
+                        busL[1 - s][f] += wetL[f] * cg;
+                        busR[1 - s][f] += wetR[f] * cg;
+                    }
+            }
             const float rt = float(return_[s]) / 100.0f;
             float rg = returnGain_[s];
             const float rstep = (rt - rg) / float(n);
