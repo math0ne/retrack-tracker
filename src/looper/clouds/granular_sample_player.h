@@ -68,6 +68,10 @@ public:
         grain_rate_phasor_ = 0.0f;
     }
 
+    // Grain sizes are Clouds' table (32 kHz samples) times this: at another
+    // sample rate, rate / 32000 keeps their lengths (the looper runs at 44.1 kHz).
+    void set_size_scale(float s) { size_scale_ = s; }
+
     // Play granular output from buffer
     // buffer: interleaved stereo int16_t
     // buffer_size: number of stereo frames
@@ -226,7 +230,7 @@ private:
         }
         float pitch = parameters.pitch;
         float window_shape = parameters.granular.window_shape;
-        float grain_size = stmlib::Interpolate(lut_grain_size, parameters.size, 256.0f);
+        float grain_size = stmlib::Interpolate(lut_grain_size, parameters.size, 256.0f) * size_scale_;
         float pitch_ratio = SemitonesToRatio(pitch);
         float inv_pitch_ratio = SemitonesToRatio(-pitch);
 
@@ -285,6 +289,7 @@ private:
     float gain_normalization_;
     float grain_size_hint_;
     float grain_rate_phasor_;
+    float size_scale_ = 1.0f;
 
     Grain grains_[kMaxNumGrains];
     int32_t available_grains_[kMaxNumGrains];

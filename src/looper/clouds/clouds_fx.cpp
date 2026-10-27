@@ -8,25 +8,32 @@
 
 namespace looper {
 namespace {
-constexpr float kDown = float(CloudsFx::kRate) / 44100.0f;   // internal samples per output frame
+// Clouds' grain-size table is in 32 kHz samples: the same lengths here.
+constexpr float kSizeScale = float(CloudsFx::kRate) / 32000.0f;
+
+// Transparent up to 75 % of full scale, then a soft knee to 100 % (Clouds'
+// SoftClip bends even quiet signals a little).
+inline float limit(float x) {
+    const float a = x < 0.0f ? -x : x;
+    if (a <= 0.75f) return x;
+    const float y = 0.75f + 0.25f * stmlib::SoftClip((a - 0.75f) * 4.0f);
+    return x < 0.0f ? -y : y;
+}
 }  // namespace
 
 void CloudsFx::init(int16_t* buffer) {
     buf_ = buffer;
-    player_.Init(2, kMaxGrains);
     diffuser_.Init(diffMem_);
     reset();
 }
 
 void CloudsFx::reset() {
     head_ = 0;
-    downPhase_ = upPos_ = 0.0f;
-    lastInL_ = lastInR_ = prevOutL_ = prevOutR_ = 0.0f;
     fbHpL_ = fbHpR_ = fbXL_ = fbXR_ = 0.0f;
     std::memset(fbL_, 0, sizeof fbL_);
     std::memset(fbR_, 0, sizeof fbR_);
-    fbN_ = 0;
     player_.Init(2, kMaxGrains);
+    player_.set_size_scale(kSizeScale);
     std::memset(diffMem_, 0, sizeof diffMem_);
 }
 
@@ -47,41 +54,27 @@ void CloudsFx::process(const float* inL, const float* inR, float* outL, float* o
         for (uint32_t f = 0; f < n; ++f) outL[f] = outR[f] = 0.0f;
         return;
     }
-    // Down to 32 kHz (linear), the bus at +-32768 to +-1.
-    int m = 0;
-    for (uint32_t f = 0; f < n; ++f) {
-        const float l = inL[f] * (1.0f / 32768.0f), r = inR[f] * (1.0f / 32768.0f);
-        downPhase_ += kDown;
-        if (downPhase_ >= 1.0f) {
-            downPhase_ -= 1.0f;
-            const float t = 1.0f - downPhase_ / kDown;   // where the internal sample falls between the two
-            inL_[m] = lastInL_ + (l - lastInL_) * t;
-            inR_[m] = lastInR_ + (r - lastInR_) * t;
-            ++m;
-        }
-        lastInL_ = l;
-        lastInR_ = r;
-    }
-
-    // Record, with Clouds' high-passed, soft-limited feedback; frozen, the
-    // buffer holds still and the grains keep reading it.
+    // Record (the bus at +-32768 to +-1), with Clouds' high-passed,
+    // soft-limited feedback from the last block's output; frozen, the buffer
+    // holds still and the grains keep reading it.
     if (!freeze_) {
         const float cut = (20.0f + 100.0f * feedback_ * feedback_) / float(kRate);
         float hp = 1.0f - cut * 6.28318f;
         hp = hp < 0.9f ? 0.9f : (hp > 0.9999f ? 0.9999f : hp);
-        for (int i = 0; i < m; ++i) {
-            const int k = fbN_ ? (i < fbN_ ? i : fbN_ - 1) : 0;
-            const float xl = fbN_ ? fbL_[k] : 0.0f, xr = fbN_ ? fbR_[k] : 0.0f;
+        for (uint32_t i = 0; i < n; ++i) {
+            const float xl = fbL_[i], xr = fbR_[i];
             fbHpL_ = hp * (fbHpL_ + xl - fbXL_);
             fbHpR_ = hp * (fbHpR_ + xr - fbXR_);
             fbXL_ = xl;
             fbXR_ = xr;
-            float l = inL_[i], r = inR_[i];
-            l += feedback_ * (stmlib::SoftLimit(feedback_ * 1.4f * fbHpL_ + l) - l);
-            r += feedback_ * (stmlib::SoftLimit(feedback_ * 1.4f * fbHpR_ + r) - r);
+            float l = inL[i] * (1.0f / 32768.0f), r = inR[i] * (1.0f / 32768.0f);
+            if (feedback_ > 0.0f) {
+                l += feedback_ * (stmlib::SoftLimit(feedback_ * 1.4f * fbHpL_ + l) - l);
+                r += feedback_ * (stmlib::SoftLimit(feedback_ * 1.4f * fbHpR_ + r) - r);
+            }
             const uint32_t at = (head_ & (kFrames - 1)) * 2;
-            buf_[at] = int16_t(stmlib::Clip16(int32_t(stmlib::SoftClip(l) * 32767.0f)));
-            buf_[at + 1] = int16_t(stmlib::Clip16(int32_t(stmlib::SoftClip(r) * 32767.0f)));
+            buf_[at] = int16_t(stmlib::Clip16(int32_t(limit(l) * 32767.0f)));
+            buf_[at + 1] = int16_t(stmlib::Clip16(int32_t(limit(r) * 32767.0f)));
             head_ = (head_ + 1) & (kFrames - 1);
         }
     }
@@ -117,40 +110,20 @@ void CloudsFx::process(const float* inL, const float* inR, float* outL, float* o
     }
     p.granular.window_shape = texture_ < 0.75f ? texture_ * 1.333f : 1.0f;
     p.granular.stereo_spread = spread_;
-    player_.Play(buf_, int32_t(kFrames), int32_t(head_), p, grainOut_, size_t(m));
-    for (int i = 0; i < m; ++i) {
-        outL_[i + 1] = grainOut_[2 * i];
-        outR_[i + 1] = grainOut_[2 * i + 1];
+    player_.Play(buf_, int32_t(kFrames), int32_t(head_), p, grainOut_, size_t(n));
+    for (uint32_t i = 0; i < n; ++i) {
+        outL_[i] = grainOut_[2 * i];
+        outR_[i] = grainOut_[2 * i + 1];
     }
     diffuser_.set_amount(texture_ > 0.75f ? (texture_ - 0.75f) * 4.0f : 0.0f);
-    diffuser_.Process(outL_ + 1, outR_ + 1, size_t(m));
-    for (int i = 0; i < m; ++i) {
-        fbL_[i] = outL_[i + 1];
-        fbR_[i] = outR_[i + 1];
-    }
-    fbN_ = m;
-
-    // Up to 44.1 kHz: index 0 is the previous block's last sample.
-    outL_[0] = prevOutL_;
-    outR_[0] = prevOutR_;
-    for (uint32_t f = 0; f < n; ++f) {
-        int i = int(upPos_);
-        if (i > m - 1) i = m - 1 < 0 ? 0 : m - 1;
-        const float t = upPos_ - float(i);
-        const int j = i + 1 <= m ? i + 1 : i;
-        // -3 dB through a soft limiter: overlapping grains add up to well over
-        // the input level, and the send bus must not clip.
-        const float l = (outL_[i] + (outL_[j] - outL_[i]) * t) * 0.7f;
-        const float r = (outR_[i] + (outR_[j] - outR_[i]) * t) * 0.7f;
-        outL[f] = stmlib::SoftClip(l) * 32768.0f;
-        outR[f] = stmlib::SoftClip(r) * 32768.0f;
-        upPos_ += kDown;
-    }
-    upPos_ -= float(m);
-    if (upPos_ < 0.0f) upPos_ = 0.0f;
-    if (m) {
-        prevOutL_ = outL_[m];
-        prevOutR_ = outR_[m];
+    diffuser_.Process(outL_, outR_, size_t(n));
+    // -3 dB, then the limiter: overlapping grains add up to well over the
+    // input level, and the send bus must not clip.
+    for (uint32_t i = 0; i < n; ++i) {
+        fbL_[i] = outL_[i];
+        fbR_[i] = outR_[i];
+        outL[i] = limit(outL_[i] * 0.7f) * 32768.0f;
+        outR[i] = limit(outR_[i] * 0.7f) * 32768.0f;
     }
 }
 

@@ -1,9 +1,11 @@
 // Clouds as a send effect: the Mutable Instruments Clouds granular engine
-// (looper/clouds, ported from the OpenTracker fork) around a 4.1 s stereo
-// record buffer at 32 kHz. The send bus is resampled down to 32 kHz,
-// recorded (unless frozen) with soft-limited feedback, played back by up to
-// kMaxGrains grains and resampled back up to 44.1 kHz. Fully wet: the dry
-// signal is the track itself, through the mixer.
+// (looper/clouds, ported from the OpenTracker fork) around a 3 s stereo
+// record buffer. It runs at the looper's 44.1 kHz (Clouds' own 32 kHz needs
+// resampling both ways, and plain linear resampling left loud images and
+// aliases); the grain sizes are scaled to keep Clouds' lengths. The send bus
+// is recorded (unless frozen) with soft-limited feedback and played back by
+// up to kMaxGrains grains. Fully wet: the dry signal is the track itself,
+// through the mixer.
 #pragma once
 
 #include <cstdint>
@@ -15,8 +17,8 @@ namespace looper {
 
 class CloudsFx {
 public:
-    static constexpr uint32_t kRate = 32000;
-    static constexpr uint32_t kFrames = 131072;   // stereo int16: 512 KB, the size of an FX slot's line
+    static constexpr uint32_t kRate = 44100;
+    static constexpr uint32_t kFrames = 131072;   // stereo int16: 512 KB, the size of an FX slot's line (3 s)
     static constexpr int kMaxGrains = 12;         // of Clouds' 40: each grain reads the uncached SDRAM
     static constexpr int kBlockMax = 128;
 
@@ -42,19 +44,13 @@ private:
     float diffMem_[2048];
 
     float position_ = 0.2f, size_ = 0.4f, pitch_ = 0.0f, density_ = 0.8f;
-    float texture_ = 0.4f, feedback_ = 0.2f, spread_ = 0.5f;
+    float texture_ = 0.4f, feedback_ = 0.0f, spread_ = 0.5f;
     bool freeze_ = false;
 
-    // 44.1 -> 32 kHz: a phase over the input; 32 -> 44.1 kHz: a read position
-    // over this block's internal samples, the last of the previous block first.
-    float downPhase_ = 0.0f, lastInL_ = 0.0f, lastInR_ = 0.0f;
-    float upPos_ = 0.0f, prevOutL_ = 0.0f, prevOutR_ = 0.0f;
     // Feedback: the previous block's output, high-passed (one pole).
     float fbHpL_ = 0.0f, fbHpR_ = 0.0f, fbXL_ = 0.0f, fbXR_ = 0.0f;
     float fbL_[kBlockMax] = {}, fbR_[kBlockMax] = {};
-    int fbN_ = 0;
-    float inL_[kBlockMax], inR_[kBlockMax];
-    float outL_[kBlockMax + 1], outR_[kBlockMax + 1];
+    float outL_[kBlockMax], outR_[kBlockMax];
     float grainOut_[kBlockMax * 2];
 };
 

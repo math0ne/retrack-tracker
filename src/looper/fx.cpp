@@ -52,7 +52,7 @@ const FxTypeInfo kFxTypes[kFxTypeCount] = {
     {"Flanger", {{"Rate", 100, 20, nullptr}, {"Depth", 100, 60, nullptr}, {"Feedback", 95, 60, nullptr},
                  {"Manual", 100, 30, nullptr}}},
     {"Clouds", {{"Position", 100, 20, nullptr}, {"Size", 100, 40, nullptr}, {"Pitch", 48, kCloudsPitchZero, nullptr},
-                {"Density", 100, 80, nullptr}, {"Texture", 100, 40, nullptr}, {"Feedback", 100, 20, nullptr},
+                {"Density", 100, 80, nullptr}, {"Texture", 100, 40, nullptr}, {"Feedback", 100, 0, nullptr},
                 {"Spread", 100, 50, nullptr}, {"Freeze", 1, 0, kOffOn}}},
 };
 

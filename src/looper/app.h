@@ -156,7 +156,8 @@ private:
     void arc(int cx, int cy, float r, float a0, float a1, int segs);   // a LINE_STRIP arc, radians
     int fxPage_ = -1;             // slot shown, -1 = none
     bool fxBar_ = false;          // F1: the labels show the effect types
-    int fxBank_ = 0;              // the knob bank on F2..F5 (Shift + F2..F5: the second)
+    int fxBank_ = 0;              // the bank F2..F5 are on: Shift + F2..F5 locks the second, a Shift tap the first
+    bool fxShiftUnlocked_ = false;   // this Shift press unlocked the second bank: show the first while held
     int fxBankOf(int slot) const; // the bank shown: the selected knob's, or the last one
     int fxSel_ = 0;               // selected knob, kFxKnobs = return
     float knobShown_[kFxSlots][kFxPageKnobs] = {};   // eased towards the values: the knobs glide

@@ -453,7 +453,16 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     const bool down = ev.type == E::kButtonDown;
-    if (ev.id == b::Shift) shift_ = down;
+    if (ev.id == b::Shift) {
+        shift_ = down;
+        // FX page: with the second bank locked, Shift goes back to the first.
+        if (down && fxPage_ >= 0 && fxBank_ == 1) {
+            fxBank_ = 0;
+            if (fxSel_ >= kFxBank && fxSel_ < kFxKnobs) fxSel_ -= kFxBank;   // the same place, first bank
+            fxShiftUnlocked_ = true;
+        }
+        if (!down) fxShiftUnlocked_ = false;
+    }
     if (ev.id == b::Power) {
         powerHeld_ = down;
         powerDownMs_ = ev.timeMs;
@@ -3057,8 +3066,10 @@ void App::fxKey(uint8_t id) {
     auto exists = [&](int k) { return k == kFxKnobs || (k >= 0 && k < kFxKnobs && ti.knob[k].name); };
     switch (id) {
         case b::F1: fxBar_ = true; break;
-        case b::F2: case b::F3: case b::F4: case b::F5: {   // Shift: the second bank
-            const int kn = (shift_ ? kFxBank : 0) + id - b::F2;
+        case b::F2: case b::F3: case b::F4: case b::F5: {
+            // The knob under the key, in the bank shown; Shift + key locks the
+            // second bank (until a Shift tap).
+            const int kn = fxBankOf(slot) * kFxBank + id - b::F2;
             if (exists(kn)) {
                 fxSel_ = kn;
                 fxBank_ = kn / kFxBank;
@@ -3092,8 +3103,8 @@ int App::fxBankOf(int slot) const {
     // otherwise the selected knob's bank.
     const FxTypeInfo& ti = fxTypeInfo(engine_.fxType(slot));
     if (!ti.knob[kFxBank].name) return 0;   // a type without a second bank
-    if (shift_) return 1;
-    return fxSel_ < kFxKnobs ? fxSel_ / kFxBank : fxBank_;
+    if (shift_ && !fxShiftUnlocked_) return 1;
+    return fxBank_;
 }
 
 void App::fxEncoder(int delta) {
@@ -3152,8 +3163,8 @@ void App::drawFxPage(uint32_t now) {
         color(kDim);
         text(700, 280, kFontSmall, Disp::kOptCenter, buf);
         color(0x4A5563);
-        text(700, 300, kFontSmall, Disp::kOptCenter, "Hold Shift:");
-        text(700, 320, kFontSmall, Disp::kOptCenter, bank ? "these four" : "the other four");
+        text(700, 300, kFontSmall, Disp::kOptCenter, bank ? "Tap Shift:" : "Shift + F2-F5:");
+        text(700, 320, kFontSmall, Disp::kOptCenter, bank ? "the first four" : "the other four");
         text(700, 340, kFontSmall, Disp::kOptCenter, "Sends: mixer");
     } else {
         text(700, 300, kFontSmall, Disp::kOptCenter, "Encoder: knob");

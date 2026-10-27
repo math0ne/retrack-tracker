@@ -118,6 +118,17 @@ shot ../build/sim/check/granular_clouds_bank2.png
 enc 1
 wait 30
 expect_fx 2 Clouds 8 1
+# Locked on the second bank: plain F2 is Texture (40 -> 44).
+press F2
+enc 2
+wait 30
+expect_fx 2 Clouds 5 44
+# A Shift tap: back to the first bank; F2 is Position (20 -> 24).
+press SHIFT
+press F2
+enc 2
+wait 30
+expect_fx 2 Clouds 1 24
 press NOTE
 
 # Performance: pad 4 of row 2 toggles FX 2's freeze.
