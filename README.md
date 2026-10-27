@@ -551,14 +551,16 @@ clears it. The bindings and the clock setting are saved with the settings.
 
 - **Mute** keeps a track running in time, silently: unmute and it carries on
   where the loop is.
-- **Stop** puts a track back to its start. **Play** starts it from there on the
-  next bar line (in its own place in the bar, if it starts off the line), so it
-  comes in on the beat; with the transport stopped it starts at once, alone; **Rec** on a stopped track does the
-  same and overdubs from that bar.
-- **Starting one thing starts only that thing.** With the transport stopped,
-  recording a track, or pressing a track's Play, starts the bar clock for that
-  track alone; loops that were playing go to stopped, ready to start on a bar.
-  The **Play** key starts or stops everything together.
+- **Stop** puts a track back to its start. A track's **Play** (F2, pad column 2)
+  starts it from there on the next bar line (in its own place in the bar, if it
+  starts off the line), so it comes in on the beat; **Rec** on a stopped track
+  does the same and overdubs from that bar.
+- **The Play key starts or stops everything together; Rec acts on the
+  selected track only.** Rec never stops another track: with the transport
+  stopped it starts it as Play does (the loops that were playing, from bar 1)
+  and records or overdubs its own track. A track's Play (F2, pad column 2)
+  with the transport stopped starts that track alone; the loops that were
+  playing go to stopped, ready to start on a bar.
 
 ### Playback modes
 
@@ -773,7 +775,10 @@ copying that folder onto the card and power-cycling installs the build.
   the SD card (5 minutes stereo), undo included (it uses the card's second
   file). Internal SRAM: about 243 of 256 KB in use.
 - **Long takes:** up to 5 minutes (the stream files' size). Granular's Spread
-  on the card part reaches about the 2 s ring around the playhead. Cut and
+  on the card part reaches about the 2 s ring around the playhead. A beat
+  repeat or tape stop there takes the ring with it while it lasts; releasing
+  one held a while is like a jump pad (a moment of silence while the ring
+  refills at the playhead). Cut and
   erase on a long take take a few seconds. A long take trimmed to start past
   its RAM part, and longer than the 2 s ring, has a few milliseconds of gap
   at each loop wrap (the ring reloads there). A card with small clusters

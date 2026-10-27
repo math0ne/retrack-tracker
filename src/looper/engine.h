@@ -213,6 +213,10 @@ struct StreamView {
     std::atomic<uint32_t> flushed{0};       // main: loop frames of the take on the card (from 0)
     std::atomic<uint32_t> rStart{0}, rEnd{0};   // main: loop frames the ring holds for playback
     std::atomic<bool> back{false};          // audio: the playhead reads backwards (reverse, ping-pong's way back)
+    // audio: a beat repeat or a tape stop reads here (buffer frame), away from
+    // the playhead: the ring follows it while it lasts (kNoFx: none).
+    static constexpr uint32_t kNoFx = 0xFFFFFFFFu;
+    std::atomic<uint32_t> fxAt{kNoFx};
     std::atomic<uint32_t> underruns{0};     // audio: frames played as silence (not in the ring)
     std::atomic<uint32_t> overruns{0};      // audio: takes cut short (the card fell a ring behind)
     // audio: blocks an overdub changed (main writes them back), one map per
@@ -485,6 +489,7 @@ private:
     void queueLaunch(int t, bool dub);
     void launch(Track& k);
     void startClockAlone(int t);
+    void startTransport();   // as Play: everything that was playing, from bar 1
     void startRepeat(Track& k, PerfFx r);
     void beginTake(int t, uint32_t tf, const int16_t* pre, uint32_t preFrames);   // sound start
     void dubVari(int t, uint64_t ph, uint64_t step16, const int16_t* in, float oldK, float inK);   // overdub off speed 1

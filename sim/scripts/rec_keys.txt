@@ -1,0 +1,59 @@
+# The device's keys: Play starts and stops everything; Rec acts on the
+# selected track only. Recording a track never stops the others, also
+# after Play stopped them (it starts the transport again, as Play).
+wait 300
+tone_shape steady
+tone 330
+# Rec on track 1, Rec to stop; Down, the same on track 2.
+press REC
+wait 4500
+press REC
+wait 2500
+press DOWN
+press REC
+wait 4500
+press REC
+wait 2500
+expect_state 1 PLAY
+expect_state 2 PLAY
+# Play twice (all stopped, all from bar 1), then a take on track 3.
+press PLAY
+wait 500
+press PLAY
+wait 500
+press DOWN
+press REC
+wait 4500
+press REC
+wait 2500
+expect_state 1 PLAY
+expect_state 2 PLAY
+expect_state 3 PLAY
+# Play once (all stopped), then a take on track 4: the others play again with it.
+press PLAY
+wait 500
+press DOWN
+press REC
+wait 50
+expect_state 1 PLAY
+expect_state 2 PLAY
+expect_state 3 PLAY
+wait 4500
+press REC
+wait 2500
+expect_state 4 PLAY
+reset_levels
+wait 500
+expect_audio 0.1
+# Play stops everything; Rec on a playing track overdubs it, and the others play again too.
+press PLAY
+wait 500
+press UP
+press REC
+wait 50
+expect_state 3 DUB
+expect_state 1 PLAY
+expect_state 4 PLAY
+press REC
+wait 50
+expect_state 3 PLAY

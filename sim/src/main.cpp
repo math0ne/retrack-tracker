@@ -1125,6 +1125,18 @@ bool soak(Headless& h, uint32_t seed, uint32_t minutes, const std::string& logPa
             if (!before && wasPlaying[t] && playing(t) && u > underAt[t]) {
                 audible += u - underAt[t];
                 audibleBy[m.app.engine().view(t).mode.load() & 15] += u - underAt[t];
+                if (u - underAt[t] > 4410) {   // over 0.1 s: where, for the log
+                    const looper::TrackView& v = m.app.engine().view(t);
+                    const looper::StreamView& sv = m.app.engine().stream(t);
+                    char b[200];
+                    std::snprintf(b, sizeof b,
+                                  "   heard %.2f s of silence on track %d: mode %d state %d pos %u start %u len %u "
+                                  "head %u ring [%u, %u) back %d",
+                                  double(u - underAt[t]) / 44100.0, t + 1, int(v.mode.load()), int(v.state.load()),
+                                  v.pos.load(), v.start.load(), v.len.load(), sv.head.load(), sv.rStart.load(),
+                                  sv.rEnd.load(), int(sv.back.load()));
+                    act(b);
+                }
             }
             underAt[t] = u;
             wasPlaying[t] = playing(t);

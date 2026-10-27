@@ -414,7 +414,9 @@ bool Streamer::serviceTrack(int t) {
     // the RAM part), backwards up to kStreamBehind after it (to the loop's end
     // while a reverse loop is in the RAM part: it wraps there next).
     const uint32_t len = c.len, head = c.head, ring = c.ring, bu = c.bu;
-    const uint32_t pos = start + v.pos.load(std::memory_order_relaxed);   // buffer frames
+    // Buffer frames: the playhead, or where a beat repeat or a tape stop reads.
+    const uint32_t fx = sv.fxAt.load(std::memory_order_relaxed);
+    const uint32_t pos = fx != StreamView::kNoFx ? fx : start + v.pos.load(std::memory_order_relaxed);
     const uint32_t behind = mono ? 2 * kStreamBehind : kStreamBehind;
     const bool back = sv.back.load(std::memory_order_relaxed);
     const bool pp = modeInfo(PlayMode(v.mode.load(std::memory_order_relaxed))).pingPong;

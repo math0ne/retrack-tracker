@@ -53,14 +53,16 @@ wait 800
 expect_ch left 0.2
 expect_ch right silent
 
-# Recording with the transport stopped: only the new take runs.
+# Recording with the transport stopped: Rec acts on its track only, the
+# transport starts as Play does (track 1, playing before, plays again;
+# track 2, stopped, stays stopped).
 press PLAY
 wait 50
 tone 330
 tap 24
 wait 30
 expect_state 3 REC
-expect_state 1 STOP
+expect_state 1 PLAY
 expect_state 2 STOP
 wait 1000
 tap 24

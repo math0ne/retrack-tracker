@@ -495,7 +495,10 @@ void Engine::startRecording(int t) {
         k.state = TrackState::kArmed;
         return;
     }
-    if (first || !running_) startClockAlone(t);   // the other loops stay stopped
+    // Rec acts on this track only: with the transport stopped it starts as
+    // Play does, the loops that were playing with it (the first take alone).
+    if (first) startClockAlone(t);
+    else if (!running_) startTransport();
     const uint32_t bar = barLen(), beat = beatLen();
     k.stopAt = o.lenBeats ? uint32_t(o.lenBeats) * beat : 0;
     if (o.start == StartMode::kCountIn) {
@@ -860,14 +863,12 @@ void Engine::apply(const Msg& m) {
                 case TrackState::kPlaying:
                     if (!canDubNow(k)) break;   // the app tells the user why
                     k.replace = m.arg == 1;
-                    if (!running_) {   // the transport is stopped: from its top, overdubbing
-                        queueLaunch(t, true);
-                        break;
-                    }
+                    if (!running_) startTransport();   // stopped: it starts as Play does, everything with it
                     k.state = TrackState::kOverdubbing;
                     break;
                 case TrackState::kStopped:   // start from the top on the next bar, overdubbing
                     if (canDubNow(k)) {
+                        if (!running_) startTransport();   // (bar 1 is now: it starts at once)
                         queueLaunch(t, true);
                         k.replace = m.arg == 1;
                     }
@@ -1173,25 +1174,7 @@ void Engine::apply(const Msg& m) {
                         finishNow(o);
                 running_ = false;
             } else if (L_) {
-                // Everything from bar 1: what was playing plays from its own
-                // first bar, what was queued starts now, stopped tracks stay
-                // stopped. A take's start keeps its place in the bar (the grid
-                // stays), so one that began on a bar line (a count-in, a take
-                // recorded later in the session) begins at its start, not where
-                // its old anchor put the new bar 1.
-                const uint32_t bar = barLen();
-                setClock(0);
-                running_ = true;
-                for (Track& x : trk_)
-                    if (x.state == TrackState::kQueued) {
-                        x.anchor = 0;
-                        launch(x);
-                    } else if (x.len && (x.state == TrackState::kPlaying || x.state == TrackState::kOverdubbing)) {
-                        x.anchor = bar ? x.anchor % bar : 0;
-                        x.offset16 = 0;
-                        x.fadeOut = x.fadeOutLen = 0;
-                        restartGrains(x, uint64_t(posOf(x)) << 16);
-                    }
+                startTransport();
             }
             break;
         case kClearAll:
@@ -1291,6 +1274,27 @@ void Engine::startRepeat(Track& k, PerfFx r) {
     p.repT0 = t_;
     p.repIn = uint32_t((pos - s + int64_t(k.len)) % int64_t(k.len)) % slice;
     p.repFx = uint8_t(r);
+}
+
+void Engine::startTransport() {
+    // Everything from bar 1: what was playing plays from its own first bar,
+    // what was queued starts now, stopped tracks stay stopped. A take's start
+    // keeps its place in the bar (the grid stays), so one that began on a bar
+    // line (a count-in, a take recorded later in the session) begins at its
+    // start, not where its old anchor put the new bar 1.
+    const uint32_t bar = barLen();
+    setClock(0);
+    running_ = true;
+    for (Track& x : trk_)
+        if (x.state == TrackState::kQueued) {
+            x.anchor = 0;
+            launch(x);
+        } else if (x.len && (x.state == TrackState::kPlaying || x.state == TrackState::kOverdubbing)) {
+            x.anchor = bar ? x.anchor % bar : 0;
+            x.offset16 = 0;
+            x.fadeOut = x.fadeOutLen = 0;
+            restartGrains(x, uint64_t(posOf(x)) << 16);
+        }
 }
 
 void Engine::startClockAlone(int t) {
@@ -1518,7 +1522,9 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                 for (int o = 0; o < kTracks; ++o)
                     if (o != t && (trk_[o].state == TrackState::kRecording || trk_[o].state == TrackState::kCountIn))
                         taking = true;
-                if (!running_ || (L_ == 0 && !taking)) {
+                if (L_ && !running_) {
+                    startTransport();   // with loops: as Play, everything that was playing with it
+                } else if (L_ == 0 && !taking) {
                     // No loop running: the bar clock starts at the pre-roll; the
                     // other loops stay stopped.
                     startClockAlone(t);
@@ -1742,6 +1748,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             const uint32_t rS = sh ? stream_[t].rStart.load(std::memory_order_acquire) : 0;
             const uint32_t rE = sh ? stream_[t].rEnd.load(std::memory_order_acquire) : 0;
             uint32_t under = 0;
+            uint32_t fxIp = StreamView::kNoFx;   // where a repeat / tape stop read last (loop frame)
             auto lr = [&](uint32_t i, int16_t& a, int16_t& b) {
                 const int16_t* p = fr + (mono ? size_t(i) : 2 * size_t(i));
                 if (sh && s0 + i >= sh) {
@@ -1791,6 +1798,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                         ip = posOfPhase(k, ph);
                         if (mi.reader != ModeInfo::kDirect) fp = float(uint32_t(ph & 0xFFFFu)) * (1.0f / 65536.0f);
                     }
+                    if (rep || tape) fxIp = ip;
                     if (vib) {
                         // 5.5 Hz, depth from its knob.
                         const float o = vibDepth * pf.vib.next();
@@ -1802,9 +1810,11 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                         fp = pos - float(ip);
                     }
                     const uint32_t j = ip + 1 < k.len ? ip + 1 : 0;
-                    interp(ip, j, fp, sl, sr);
-                    sl *= env;
-                    sr *= env;
+                    if (env > 0.0f) {   // a tape stop come to rest reads nothing
+                        interp(ip, j, fp, sl, sr);
+                        sl *= env;
+                        sr *= env;
+                    }
                 } else if (keep) {
                     for (Grain& gr : k.grain) {
                         if (gr.age >= kGrainFrames) {
@@ -1942,6 +1952,8 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             wrote = dub;
             if (vib) pf.vib.renorm();
             if (under) stream_[t].underruns.fetch_add(under, std::memory_order_relaxed);
+            if (k.head)   // a long take: the ring follows a repeat or a tape stop while it lasts
+                stream_[t].fxAt.store(fxIp == StreamView::kNoFx ? fxIp : k.start + fxIp, std::memory_order_relaxed);
             if (sh)   // which way the Streamer fills the ring
                 stream_[t].back.store(mi.reverse || (mi.pingPong && (phase16(k) >> 16) >= k.len),
                                       std::memory_order_relaxed);
