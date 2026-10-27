@@ -204,9 +204,10 @@ mouse wheel = encoder. The panel is clickable.
 
 The screen is the four track lanes and, along the bottom, the labels of the
 eight screen keys, each centred over its key as on the stock Tracker. The whole
-interface is greyscale and minimal: every page is plain black with no cards or
-boxes, the selected row or strip marked by a short bright bar at its left and
-brighter text, the four tracks told apart by slightly different greys (only
+interface is greys and one colour: every page is plain black with no cards or
+boxes, and whatever is selected (a lane, a row, a strip, a knob, a picked
+mode) is drawn in the yellow of the DIY norns shield's OLED, the rest
+in dimmer greys. The four tracks are told apart by slightly different greys (only
 the popups over the lanes keep a backing, to stay readable). The lanes
 are waveforms only, the full width of the screen; a tag in each lane's corner
 gives its number and, when they apply, its length, mode (other than Forward)
@@ -611,7 +612,7 @@ the running effects.
 ### Loop editor
 
 **Instr** opens a big waveform of the selected track (Up/Down for another)
-with a start and an end marker. The selection is bright, the rest dim; the bar
+with a start and an end marker. The selection is yellow, the rest dim; the bar
 and beat lines are drawn over it, and the markers read bar.beat.sixteenth from
 the loop start.
 

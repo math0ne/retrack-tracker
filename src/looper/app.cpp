@@ -39,6 +39,14 @@ constexpr uint32_t kInk = 0xEEEEEE, kDim = 0x828282, kFaint = 0x3A3A3A;
 // The selection is full white (kInk); the values that are not selected a
 // little dimmer (kSoft), their bars, faders and arcs at kUnsel of their colour.
 constexpr uint32_t kSoft = 0xA8A8A8;
+// The selection: what is picked is drawn in the yellow of the DIY norns
+// shield's OLED, sampled from photos of a lit one; everything else in greys.
+constexpr uint32_t kSel = 0xD7CD64;
+// The rest of the palette, greys too: help text, level meters, the grid,
+// the track lanes' empty line, mute.
+constexpr uint32_t kHelp = 0x535353, kMeter = 0xA4A4A4, kMute = 0x979797;
+constexpr uint32_t kBeatLine = 0x222222, kBarLine = 0x4E4E4E, kBarNum = 0x747474;
+constexpr uint32_t kTrackDim = 0x2C2C2C, kMeterBack = 0x242424, kCellOff = 0x424242;
 constexpr float kUnsel = 0.6f;
 constexpr uint32_t kRed = 0xFFFFFF, kAmber = 0xC6C6C6;   // recording = the brightest; the page accent
 constexpr uint32_t kTrackColor[kTracks] = {0xF4F4F4, 0xDCDCDC, 0xC4C4C4, 0xACACAC};
@@ -74,7 +82,7 @@ void fmtSeconds(char* buf, size_t n, uint32_t frames) {
 }
 
 // Mixer strip colours: the four tracks, delay, reverb, master, back.
-constexpr uint32_t kDelayColor = 0xB388FF, kReverbColor = 0x64D2FF;
+constexpr uint32_t kDelayColor = 0xA2A2A2, kReverbColor = 0xB6B6B6;
 uint32_t stripColor(int s) {
     if (s < kTracks) return kTrackColor[s];
     if (s == 4) return kDelayColor;
@@ -1063,9 +1071,7 @@ void App::updateWaves(uint32_t now) {
 // Drawing helpers
 
 void App::color(uint32_t rgb) {
-    // Greyscale: every colour as its luminance (Rec. 601 weights).
-    const uint8_t l = uint8_t((77u * r8(rgb) + 150u * g8(rgb) + 29u * b8(rgb)) >> 8);
-    d_->colorRGB(l, l, l);
+    d_->colorRGB(r8(rgb), g8(rgb), b8(rgb));
     ++words_;
 }
 
@@ -1088,11 +1094,6 @@ void App::well(int x0, int y0, int x1, int y1, int radius, uint32_t fill) {
     fillRect(x0, y0 - 1, x1, y1, radius);
     color(fill);
     fillRect(x0, y0 + 1, x1, y1, radius);
-}
-
-void App::mark(int x, int y0, int y1) {
-    color(kInk);
-    fillRect(x, y0, x + 3, y1, 1);
 }
 
 void App::alpha(uint8_t a) {
@@ -1206,7 +1207,7 @@ void App::render(uint32_t now) {
     } else if (f6Held_) {
         char v[12];
         std::snprintf(v, sizeof v, "%u", unsigned(cfg_.gain));
-        drawPopupKnob("Input gain", v, float(cfg_.gain) / 100.0f, gainShown_, 0x3DDC97,
+        drawPopupKnob("Input gain", v, float(cfg_.gain) / 100.0f, gainShown_, kMeter,
                       inMeter_[0] > inMeter_[1] ? inMeter_[0] : inMeter_[1]);
     } else if (f4Held_ && shift_) {
         char v[12];
@@ -1281,7 +1282,6 @@ void App::drawLane(int t, uint32_t now) {
 
     // Waveform inset
     const int wx = kWaveX, wy = y0 + kWaveDy, wx1 = wx + kWaveW, wy1 = wy + kWaveH;
-    if (sel) mark(wx - 10, wy + 10, wy1 - 10);
     if (s == TrackState::kRecording || s == TrackState::kCountIn || s == TrackState::kArmed) {
         color(s == TrackState::kRecording ? kRed : kAmber);
         alpha(uint8_t(80 + 150 * pulse(now, 700)));
@@ -1309,7 +1309,7 @@ void App::drawLane(int t, uint32_t now) {
         color(kFaint);
         fillRect(mx0, my - 5, mx1, my + 5, 5);
         if (lv > 0.0f) {
-            color(lv >= th ? kRed : 0x3DDC97);
+            color(lv >= th ? kRed : kMeter);
             fillRect(mx0, my - 5, mx0 + 10 + int((mx1 - mx0 - 10) * lv), my + 5, 5);
         }
         const int tx = mx0 + int((mx1 - mx0) * th);
@@ -1345,13 +1345,13 @@ void App::drawLane(int t, uint32_t now) {
         const float leftK = rev ? 0.45f * dim : dim, rightK = rev ? dim : 0.45f * dim;
         if (px > wx) {
             scissor(wx, wy, px - wx, kWaveH);
-            color(scale(tc, leftK));
+            color(scale(sel ? kSel : tc, leftK));
             d_->drawL8(int16_t(wx), int16_t(wy), ramg, kWaveW, kWaveH, 1);
             words_ += 13;
         }
         if (px < wx1) {
             scissor(px, wy, wx1 - px, kWaveH);
-            color(scale(tc, rightK));
+            color(scale(sel ? kSel : tc, rightK));
             d_->drawL8(int16_t(wx), int16_t(wy), ramg, kWaveW, kWaveH, 1);
             words_ += 13;
         }
@@ -1444,14 +1444,14 @@ void App::drawLane(int t, uint32_t now) {
         else if (!n) tag[0] = '\0';
         const int tx = wx + 4, ty = wy + 3;
         if (tag[0]) {
-            color(muted ? 0xC0A000 : (sel ? kDim : scale(kDim, 0.7f)));
+            color(muted ? kMute : (sel ? kDim : scale(kDim, 0.7f)));
             text(tx, ty, kFontSmall, 0, tag);
         }
     }
 
     // Hint over the waveform
     if (hintTrack_ == t && hintText_ && int32_t(hintUntilMs_ - now) > 0) {
-        color(0x262D38);
+        color(kTrackDim);
         alpha(235);
         fillRect(wx + 110, wy + kWaveH / 2 - 16, wx1 - 110, wy + kWaveH / 2 + 16, 8);
         alpha(255);
@@ -1704,7 +1704,7 @@ void App::drawFKeys() {
                     break;
                 case 2:
                     hot = v.muted.load();
-                    hotCol = 0xC0A000;
+                    hotCol = kMute;
                     title[i] = "MUTE";
                     std::snprintf(val[i], sizeof val[i], "%s", v.muted.load() ? "On" : "Off");
                     break;
@@ -1738,6 +1738,11 @@ void App::drawFKeys() {
         else if (fxPage_ >= 0) hc = stripColor(4 + fxPage_);
         else if (mixer_ && !modeBar_) hc = stripColor(i);
         if (hot && hotCol) hc = hotCol;
+        // A lit key with no state colour of its own (the mode, the knob, the
+        // chapter picked) shows the selection; states (recording, playing,
+        // muted) keep theirs.
+        const bool pick = hot && !hotCol;
+        if (pick) hc = kSel;
         // No cells: a lit key (recording, playing, muted, the picked mode...)
         // has bright text and a bar under it in its lit colour.
         if (hot) {
@@ -1746,7 +1751,7 @@ void App::drawFKeys() {
         }
         if (title[i][0]) {
             uint32_t tcol = kDim;
-            if (hot) tcol = kInk;
+            if (hot) tcol = pick ? kSel : kInk;
             else if (file_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
             else if (inPage_) tcol = i < 5 ? scale(hc, 0.9f) : kDim;
             else if (edit_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
@@ -1759,7 +1764,7 @@ void App::drawFKeys() {
             text(cx, kKeyY0 + 8, kFontSmall, Disp::kOptCenter, title[i]);
         }
         const bool bar = modeBar_ || (fxPage_ >= 0 && fxBar_);   // one-line labels
-        color(hot ? 0xFFFFFF : kInk);
+        color(pick ? kSel : (hot ? 0xFFFFFF : kInk));
         text(cx, bar ? (kKeyY0 + kKeyY1) / 2 + 4 : kKeyY0 + 26, kFontSmall, Disp::kOptCenter, val[i]);
     }
     // Home page: the input level inside the INPUT cell, the track's level inside VOLUME
@@ -1770,7 +1775,7 @@ void App::drawFKeys() {
         for (int c = 0; c < 2; ++c) {
             const float m = inMeter_[c];
             if (m < 0.005f) continue;
-            color(m > 0.9f ? kRed : (m > 0.6f ? kAmber : 0x3DDC97));
+            color(m > 0.9f ? kRed : (m > 0.6f ? kAmber : kMeter));
             hline(x0, x0 + int((x1 - x0) * m), kKeyY1 + c * 2, 16);
         }
         // The selected track's volume inside the VOLUME cell, its output level over it.
@@ -1881,7 +1886,7 @@ void App::drawMixer() {
     for (int s = 0; s < kStrips; ++s) drawStrip(s);
     // The eighth column, over F8: how to drive the page.
     const int cx = 7 * kKeyW + kKeyW / 2;
-    color(0x4A5563);
+    color(kHelp);
     text(cx, 200, kFontSmall, Disp::kOptCenter, "Up/Down");
     text(cx, 218, kFontSmall, Disp::kOptCenter, "row");
     text(cx, 248, kFontSmall, Disp::kOptCenter, "Encoder");
@@ -1899,7 +1904,7 @@ void App::drawStrip(int s) {
     const bool emptyTrack = s < kTracks && TrackState(engine_.view(s).state.load()) == TrackState::kEmpty;
     char buf[16];
 
-    color(sel ? kInk : (emptyTrack ? kFaint : kDim));
+    color(sel ? kSel : (emptyTrack ? kFaint : kDim));
     text(cx, 23, kFontSmall, Disp::kOptCenter, kStripName[s]);
 
     // Two small parameters: label, value, bar. Track sends use their slot's colour.
@@ -1907,9 +1912,8 @@ void App::drawStrip(int s) {
         MixParam p;
         int t, k;
         if (!mixParam(s, row, p, t, k)) continue;
-        const int by0 = 52 + row * 64, by1 = by0 + 58;
+        const int by0 = 52 + row * 64;
         const bool on = sel && row_ == row;
-        if (on) mark(x0 + 2, by0 + 8, by1 - 8);
         const char* label;
         float fr;
         if (k >= 0) {
@@ -1926,14 +1930,14 @@ void App::drawStrip(int s) {
         if (k < 0 && p == MixParam::kChain2 && engine_.mix(MixParam::kChain1) > 0 && engine_.mix(p) > 0)
             std::snprintf(buf, sizeof buf, "off");   // one way at a time: FX 1 -> 2 is up
         // Label, value, bar with the same margin above and below (8 px in a 58 px cell).
-        color(on ? kInk : kDim);
+        color(on ? kSel : kDim);
         text(cx, by0 + 15, kFontSmall, Disp::kOptCenter, label);
-        color(on ? kInk : kSoft);
+        color(on ? kSel : kSoft);
         text(cx, by0 + 33, kFontSmall, Disp::kOptCenter, buf);
         const uint32_t bc = s < kTracks ? (row == 0 ? kDelayColor : kReverbColor) : sc;
         color(kFaint);
         fillRect(x0 + 12, by0 + 46, x1 - 12, by0 + 50, 2);
-        color(scale(bc, (emptyTrack ? 0.4f : 1.0f) * (on ? 1.0f : kUnsel)));
+        color(on ? kSel : scale(bc, (emptyTrack ? 0.4f : 1.0f) * kUnsel));
         fillRect(x0 + 12, by0 + 46, x0 + 16 + int((x1 - x0 - 28) * fr), by0 + 50, 2);
     }
 
@@ -1945,25 +1949,24 @@ void App::drawStrip(int s) {
     auto frac = [](uint8_t v) { return float(v) / 100.0f; };
     const int fy0 = 184, fy1 = 424;
     const bool on = sel && row_ == 2;
-    if (on) mark(x0 + 2, fy0 + 8, fy1 - 8);
-    color(on ? kInk : kDim);
+    color(on ? kSel : kDim);
     text(cx, fy0 + 15, kFontSmall, Disp::kOptCenter, s < kTracks || s == 6 ? "Level" : "Return");
     const uint8_t v = engine_.mix(p, t);
     const int sy0 = fy0 + 32, sy1 = fy1 - 32;           // slot, centred between the label and the value
     const int ky = sy1 - int((sy1 - sy0) * frac(v));     // knob
     color(kFaint);
     fillRect(cx - 4, sy0, cx + 4, sy1, 4);
-    color(scale(sc, (emptyTrack ? 0.4f : 1.0f) * (on ? 1.0f : kUnsel)));
+    color(on ? kSel : scale(sc, (emptyTrack ? 0.4f : 1.0f) * kUnsel));
     fillRect(cx - 4, ky, cx + 4, sy1, 4);
-    color(on ? kInk : kSoft);
+    color(on ? kSel : kSoft);
     fillRect(cx - 14, ky - 4, cx + 14, ky + 4, 3);
     // Meters: one for a track or a return, left and right for the master.
     auto meter = [&](int mx, float m) {
-        color(0x1E252F);
+        color(kMeterBack);
         fillRect(mx - 2, sy0, mx + 2, sy1, 2);
         if (m < 0.005f) return;
         if (m > 1.0f) m = 1.0f;
-        color(m > 0.9f ? kRed : (m > 0.6f ? kAmber : 0x3DDC97));
+        color(m > 0.9f ? kRed : (m > 0.6f ? kAmber : kMeter));
         fillRect(mx - 2, sy1 - int((sy1 - sy0) * m), mx + 2, sy1, 2);
     };
     if (s < kTracks) meter(x1 - 16, trackMeter_[s]);
@@ -1973,7 +1976,7 @@ void App::drawStrip(int s) {
         meter(x1 - 16, outMeter_[1]);
     }
     valueText(v);
-    color(on ? kInk : kSoft);
+    color(on ? kSel : kSoft);
     text(cx, fy1 - 15, kFontSmall, Disp::kOptCenter, buf);
 }
 
@@ -2008,33 +2011,43 @@ void App::drawGrid(int t, int wx, int wy, uint32_t span, int w, int h) {
         d_->end();
         ++words_;
     };
-    if (beat && float(beat) * k >= 6.0f) {   // beats only when they are at least 6 px apart
-        color(0x1C232D);
+    // Few lines on long loops: beats only when kBeatGap apart; bar lines
+    // every 1, 2, 4, 8 ... bars (bars 1, 1 + step, ...) so they stay kBarGap
+    // apart; bar numbers on those, every other one if crowded.
+    constexpr float kBeatGap = 24.0f, kBarGap = 48.0f, kLabelGap = 40.0f;
+    const float barPx = float(bar) * k;
+    uint32_t barStep = 1;
+    while (barPx * float(barStep) < kBarGap && barStep < 4096) barStep *= 2;
+    uint32_t labStep = barStep;
+    while (barPx * float(labStep) < kLabelGap && labStep < 8192) labStep *= 2;
+    if (beat && float(beat) * k >= kBeatGap) {
+        color(kBeatLine);
         lines(off % beat, beat, 96, true);
     }
-    if (float(bar) * k >= 4.0f) {
-        color(0x46505E);
-        lines(off, bar, 64, false);
+    // Bar line j (from off) is bar j + 1, or j + 2 when the take starts off a bar.
+    const uint32_t j0 = off ? barStep - 1 : 0;
+    color(kBarLine);
+    lines(off + j0 * bar, bar * barStep, 64, false);
+    // Bar numbers: 1 at the take's start, then on the bar lines drawn.
+    char buf[8];
+    color(kBarNum);
+    // On the lanes bar 1 goes without a label (the corner holds the track's
+    // length); the editor labels it.
+    const bool lane = w == kWaveW;
+    uint32_t n = 1;
+    if (off) {
+        if (!lane) text(wx + 3, wy + 1, kFontSmall, 0, "1");
+        ++n;
     }
-    // Bar numbers: 1 at the take's start, then one per bar line.
-    if (float(bar) * k >= 22.0f) {
-        char buf[8];
-        color(0x6B7685);
-        // On the lanes bar 1 goes without a label (the corner holds the
-        // track's length); the editor labels it.
-        const bool lane = w == kWaveW;
-        int n = 1;
-        if (off) {
-            if (!lane) text(wx + 3, wy + 1, kFontSmall, 0, "1");
-            ++n;
-        }
-        for (uint32_t i = off; i < span && n <= 64; i += bar, ++n) {
-            if (lane && n == 1) continue;
-            const int x = wx + int(float(i) * k) + 3;
-            if (lane && x < wx + 120) continue;   // under the corner tag (length, card, mode)
-            std::snprintf(buf, sizeof buf, "%d", n);
-            text(x, wy + 1, kFontSmall, 0, buf);
-        }
+    int labels = 0;
+    for (uint32_t i = off; i < span && labels < 64; i += bar, ++n) {
+        if ((lane && n == 1) || (n - 1) % labStep) continue;
+        const int x = wx + int(float(i) * k) + 3;
+        if (lane && x < wx + 120) continue;   // under the corner tag (length, card, mode)
+        if (x > wx + w - 12) break;           // not on the loop's very end
+        std::snprintf(buf, sizeof buf, "%lu", static_cast<unsigned long>(n));
+        text(x, wy + 1, kFontSmall, 0, buf);
+        ++labels;
     }
 }
 
@@ -2064,7 +2077,7 @@ void App::drawPerfCells(int t, int wx, int wy) {
         perfLabel(PerfFx(e), name, sizeof name);
         perfValue(PerfFx(e), val, sizeof val);
         const bool showVal = !(e == int(PerfFx::kRepeat8) || e == int(PerfFx::kRepeat16));   // already in the name
-        color(active ? kBg : (content ? kInk : 0x3A4452));
+        color(active ? kBg : (content ? kInk : kCellOff));
         text((x0 + x1) / 2, (y0 + y1) / 2 - (showVal ? 8 : 0), kFontSmall, Disp::kOptCenter, name);
         if (showVal) {
             color(active ? kBg : kDim);
@@ -2266,13 +2279,12 @@ void App::drawInput() {
         for (int r = 0; r < kInRows[c]; ++r) {
             const int y0 = 46 + r * 48, y1 = y0 + 40, cy = (y0 + y1) / 2;
             const bool sel = inCol_ == c && inRow_ == r;
-            if (sel) mark(x0, y0 + 10, y1 - 10);
             const char* name = kInName[c][r];
             if (c == 0 && r == 2) {
                 std::snprintf(buf, sizeof buf, "Track %d channels", selected_ + 1);
                 name = buf;
             }
-            color(sel ? kInk : kDim);
+            color(sel ? kSel : kDim);
             text(x0 + 16, cy, kFontBody, Disp::kOptCenterY, name);
             char v[24];
             float frac = -1.0f, meter = -1.0f;
@@ -2326,14 +2338,14 @@ void App::drawInput() {
                 const int bx0 = x1 - 150, bx1 = x1 - 16;
                 color(kFaint);
                 fillRect(bx0, y1 - 9, bx1, y1 - 6, 2);
-                color(scale(kAmber, sel ? 1.0f : kUnsel));
+                color(sel ? kSel : scale(kAmber, kUnsel));
                 fillRect(bx0, y1 - 9, bx0 + 2 + int(float(bx1 - bx0 - 2) * frac), y1 - 6, 2);
                 if (meter > 0.005f) {   // the live input level just above it
-                    color(meter > 0.9f ? kRed : (meter > 0.6f ? kAmber : 0x3DDC97));
+                    color(meter > 0.9f ? kRed : (meter > 0.6f ? kAmber : kMeter));
                     fillRect(bx0, y1 - 13, bx0 + int(float(bx1 - bx0) * (meter > 1.0f ? 1.0f : meter)), y1 - 11, 1);
                 }
             }
-            color(dim ? kDim : (sel ? kInk : kSoft));
+            color(dim ? kDim : (sel ? kSel : kSoft));
             text(x1 - 16, frac >= 0.0f ? cy - 4 : cy, kFontBody, Disp::kOptRightX | Disp::kOptCenterY, v);
         }
     }
@@ -2342,7 +2354,7 @@ void App::drawInput() {
     const char* help = kInHelp[inCol_][inRow_];
     if (inCol_ == 0 && inRow_ == 2 && !empty) help = "This track holds a loop: clear it to change its channels.";
     text(20, 340, kFontSmall, 0, help);
-    color(0x4A5563);
+    color(kHelp);
     text(20, 384, kFontSmall, 0, "Up / Down: setting   Left / Right: card   Encoder: value (Shift: fine)");
 }
 
@@ -2562,10 +2574,9 @@ void App::drawMidi() {
     // Left: the clock and what is coming in.
     static const char* const kClock[3] = {"Off", "Send", "Follow"};
     const bool sel0 = midiRow_ == 0;
-    if (sel0) mark(20, 56, 80);
-    color(sel0 ? kInk : kDim);
+    color(sel0 ? kSel : kDim);
     text(36, 68, kFontBody, Disp::kOptCenterY, "Clock");
-    color(sel0 ? kInk : kSoft);
+    color(sel0 ? kSel : kSoft);
     text(324, 68, kFontBody, Disp::kOptRightX | Disp::kOptCenterY, kClock[cfg_.midiClock % 3]);
     color(kDim);
     const MidiClock mc = MidiClock(cfg_.midiClock);
@@ -2580,7 +2591,7 @@ void App::drawMidi() {
     }
     std::snprintf(buf, sizeof buf, "Last in: %s", midi_.lastMessage());
     text(36, 184, kFontSmall, 0, buf);
-    color(0x4A5563);
+    color(kHelp);
     text(36, 300, kFontSmall, 0, "Controls: a note or a controller (any");
     text(36, 320, kFontSmall, 0, "channel; a footswitch's 127 presses).");
     text(36, 340, kFontSmall, 0, "F1 Learn, then press it. F2 clears.");
@@ -2589,15 +2600,14 @@ void App::drawMidi() {
         const int y0 = 46 + a * 46, y1 = y0 + 40, cy = (y0 + y1) / 2;
         const bool sel = midiRow_ == a + 1;
         const bool waiting = midi_.learning() == a;
-        if (sel) mark(360, y0 + 10, y1 - 10);
-        color(sel ? kInk : kDim);
+        color(sel ? kSel : kDim);
         text(376, cy, kFontBody, Disp::kOptCenterY, kMidiActionName[a]);
         const MidiBinding& mb = cfg_.midiMap[a];
         if (waiting) std::snprintf(buf, sizeof buf, "press it...");
         else if (mb.type == 1) std::snprintf(buf, sizeof buf, "Note %u", unsigned(mb.num));
         else if (mb.type == 2) std::snprintf(buf, sizeof buf, "CC %u", unsigned(mb.num));
         else std::snprintf(buf, sizeof buf, "-");
-        color(waiting || sel ? kInk : (mb.type ? kSoft : kDim));
+        color(waiting || sel ? kSel : (mb.type ? kSoft : kDim));
         text(764, cy, kFontBody, Disp::kOptRightX | Disp::kOptCenterY, buf);
     }
 }
@@ -2620,16 +2630,15 @@ void App::drawFirmware() {
         const int i = first + r;
         const int y0 = 46 + r * 46, y1 = y0 + 40;
         const bool sel = fwSel_ == i;
-        if (sel) mark(20, y0 + 10, y1 - 10);
-        color(sel ? kInk : kDim);
+        color(sel ? kSel : kDim);
         text(40, (y0 + y1) / 2, kFontBody, Disp::kOptCenterY, fw_[i].name);
         const bool running = std::strcmp(fw_[i].name, mine) == 0;
         const bool stock = std::strncmp(fw_[i].name, "PolyendTracker", 14) == 0;
         if (running || stock) {
-            color(running ? kAmber : 0x3DDC97);
+            color(running ? kAmber : kMeter);
             text(560, (y0 + y1) / 2, kFontSmall, Disp::kOptRightX | Disp::kOptCenterY, running ? "this looper" : "stock");
         }
-        color(sel ? kInk : kDim);
+        color(sel ? kSel : kDim);
         std::snprintf(buf, sizeof buf, "%lu KB", static_cast<unsigned long>((fw_[i].bytes + 1023) / 1024));
         text(760, (y0 + y1) / 2, kFontBody, Disp::kOptRightX | Disp::kOptCenterY, buf);
     }
@@ -2643,7 +2652,7 @@ void App::drawFirmware() {
          fwMsg_ ? fwMsg_ : "F1 twice flashes the selected image. The Tracker restarts into the updater.");
     color(kDim);
     text(40, 362, kFontSmall, 0, "Loops that are not saved are lost. To come back, flash the looper image again.");
-    color(0x4A5563);
+    color(kHelp);
     text(760, 384, kFontSmall, Disp::kOptRightX, "Up / Down or encoder: image");
 }
 
@@ -2666,8 +2675,7 @@ void App::drawConfig() {
     for (int r = 0; r < kCfgRows; ++r) {
         const int y0 = 46 + r * 46, y1 = y0 + 40;
         const bool sel = cfgRow_ == r;
-        if (sel) mark(20, y0 + 10, y1 - 10);
-        color(sel ? kInk : kDim);
+        color(sel ? kSel : kDim);
         text(40, (y0 + y1) / 2, kFontBody, Disp::kOptCenterY, kCfgName[r]);
         float frac = -1.0f;   // a bar for the levels
         bool off = false;
@@ -2690,10 +2698,10 @@ void App::drawConfig() {
         if (frac >= 0.0f) {
             color(kFaint);
             fillRect(420, (y0 + y1) / 2 - 3, 640, (y0 + y1) / 2 + 3, 3);
-            color(off ? kDim : scale(kAmber, sel ? 1.0f : kUnsel));
+            color(off ? kDim : (sel ? kSel : scale(kAmber, kUnsel)));
             fillRect(420, (y0 + y1) / 2 - 3, 426 + int(214.0f * frac), (y0 + y1) / 2 + 3, 3);
         }
-        color(off ? kDim : (sel ? kInk : kSoft));
+        color(off ? kDim : (sel ? kSel : kSoft));
         text(760, (y0 + y1) / 2, kFontBody, Disp::kOptRightX | Disp::kOptCenterY, buf);
     }
     // About
@@ -2710,7 +2718,7 @@ void App::drawConfig() {
                       static_cast<unsigned long>(mo), streamer_.status()[0] ? " (no stream files)" : "");
     text(40, 362, kFontSmall, 0, buf);
     text(40, 384, kFontSmall, 0, files_.cardReady() ? "SD card ready" : "No SD card: settings are not saved");
-    color(0x4A5563);
+    color(kHelp);
     text(760, 362, kFontSmall, Disp::kOptRightX, "Up / Down: setting   Encoder: value");
 }
 
@@ -2773,9 +2781,8 @@ void App::drawSdTest() {
         const SdTest::Result& r = sdTest_.result(i);
         const int y = 90 + i * 25;
         const bool now = run && sdTest_.phase() == i;
-        if (now) mark(20, y - 9, y + 9);
         // Read-back errors light the row: they are the one thing that must be 0.
-        const uint32_t cl = now || r.errors ? kInk : (r.cmds ? kSoft : kFaint);
+        const uint32_t cl = now ? kSel : (r.errors ? kInk : (r.cmds ? kSoft : kFaint));
         color(cl);
         text(kX[0], y, kFontSmall, Disp::kOptCenterY, SdTest::phaseName(i));
         std::snprintf(buf, sizeof buf, "%lu KB", static_cast<unsigned long>(SdTest::cmdBytes(i) / 1024));
@@ -2800,7 +2807,7 @@ void App::drawSdTest() {
         color(kSoft);
         text(40, 318, kFontSmall, Disp::kOptCenterY, sdTest_.dmaNote());
     }
-    color(0x4A5563);
+    color(kHelp);
     text(40, 342, kFontSmall, 0, "Writes a 16 MB file, overwrites it in 32 / 64 / 256 KB commands and reads it back,");
     text(40, 360, kFontSmall, 0, "then the same at 256 KB with direct DMA to SDRAM (about 30 s). The worst overwrite");
     text(40, 378, kFontSmall, 0, "sets the streaming buffers. Results: Looper/sdtest.txt. Track 4 empty, 16 MB free.");
@@ -2855,7 +2862,7 @@ void App::drawFile() {
     text(28, 60, kFontSmall, Disp::kOptCenterY, "PROJECTS");
     const int n = files_.projectCount();
     if (!n) {
-        color(0x4A5563);
+        color(kHelp);
         text(202, 200, kFontSmall, Disp::kOptCenter, "None yet: F1 saves this one");
     }
     const int rows = 9;
@@ -2865,9 +2872,8 @@ void App::drawFile() {
     for (int i = first; i < n && i < first + rows; ++i) {
         const int y0 = 76 + (i - first) * 38, y1 = y0 + 32;
         const bool sel = i == projSel_, cur = files_.projectNumber(i) == files_.current();
-        if (sel) mark(24, y0 + 7, y1 - 7);
         std::snprintf(buf, sizeof buf, "Project %03d", files_.projectNumber(i));
-        color(sel ? kInk : kDim);
+        color(sel ? kSel : kDim);
         text(40, (y0 + y1) / 2, kFontBody, Disp::kOptCenterY, buf);
         if (cur) {
             color(kAmber);
@@ -2884,7 +2890,7 @@ void App::drawFile() {
         const int y = 92 + t * 40;
         color(kTrackColor[t]);
         dot(436, y, 9);
-        color(t == selected_ ? kInk : kDim);
+        color(t == selected_ ? kSel : kDim);
         if (len) {
             char s[16];
             fmtSeconds(s, sizeof s, len);
@@ -2903,7 +2909,7 @@ void App::drawFile() {
     }
     color(files_.busy() ? kAmber : kInk);
     text(424, sy + 10, kFontSmall, Disp::kOptCenterY, files_.status()[0] ? files_.status() : "Ready");
-    color(0x4A5563);
+    color(kHelp);
     text(424, 360, kFontSmall, 0, "Projects: Looper/Projects/NNN");
     text(424, 380, kFontSmall, 0, "Exports: Looper/Export/NNN/trackN.wav");
     if (confirm_ == 2 && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0) {
@@ -3037,12 +3043,12 @@ void App::drawEditPage(uint32_t now) {
         auto part = [&](int x0, int x1, float k) {
             if (x1 <= x0) return;
             scissor(x0, wy, x1 - x0, kEditH);
-            color(scale(tc, k));
+            color(k >= 1.0f ? kSel : scale(tc, k));
             d_->drawL8(int16_t(wx), int16_t(wy), kEditRamG, kEditW, kEditH, 1);
             words_ += 13;
         };
         part(wx, xa, 0.3f);
-        part(xa, xb, 1.0f);
+        part(xa, xb, 1.0f);   // the selection: amber
         part(xb, wx1, 0.3f);
         scissorOff();
     }
@@ -3050,7 +3056,7 @@ void App::drawEditPage(uint32_t now) {
     for (int mk = 0; mk < 2; ++mk) {
         const int x = mk ? xb : xa;
         const bool sel = editMarker_ == mk;
-        color(sel ? kInk : scale(kInk, 0.5f));
+        color(sel ? kSel : scale(kInk, 0.5f));
         vline(x, wy - 4, wy1 + 4, sel ? 40 : 24);
         fillRect(x - 7, wy1 + 4, x + 7, wy1 + 14, 3);   // the handle
     }
@@ -3063,14 +3069,14 @@ void App::drawEditPage(uint32_t now) {
     fmtPos(bpos, sizeof bpos, editB_);
     char dur[16];
     fmtSeconds(dur, sizeof dur, editB_ - editA_);
-    color(editMarker_ == 0 ? kInk : kDim);
+    color(editMarker_ == 0 ? kSel : kDim);
     text(wx, wy1 + 34, kFontBody, 0, a);
-    color(editMarker_ == 1 ? kInk : kDim);
+    color(editMarker_ == 1 ? kSel : kDim);
     text(wx1, wy1 + 34, kFontBody, Disp::kOptRightX, bpos);
     std::snprintf(buf, sizeof buf, "selection %s", dur);
     color(tc);
     text(400, wy1 + 44, kFontBody, Disp::kOptCenter, buf);
-    color(0x4A5563);
+    color(kHelp);
     text(400, 300, kFontSmall, Disp::kOptCenter, "Encoder moves the marker on the snap grid (Shift: finer).");
     text(400, 322, kFontSmall, Disp::kOptCenter, "TRIM keeps the selection (UNDO brings the rest back).");
     text(400, 344, kFontSmall, Disp::kOptCenter, "CUT removes it, ERASE silences it: press twice.");
@@ -3112,24 +3118,24 @@ void App::drawKnob(int cx, int cy, int r, float frac, float shown, uint32_t col,
         alpha(255);
     }
     if (sel) {
-        color(col);
+        color(kSel);
         alpha(140);
         d_->lineWidth(16);
         arc(cx, cy, float(r) + 9.0f, kA0, kA0 + kSpan, 24);
         alpha(255);
     }
     d_->lineWidth(5 * 16);
-    color(0x262E3A);
+    color(kTrackDim);
     arc(cx, cy, float(r), kA0, kA0 + kSpan, 24);
     const bool lit = sel || !dimmable;   // full brightness
     if (shown > 0.005f) {
-        color(lit ? col : scale(col, kUnsel));
+        color(sel ? kSel : (lit ? col : scale(col, kUnsel)));
         arc(cx, cy, float(r), kA0, kA0 + kSpan * shown, 2 + int(22.0f * shown));
     }
     words_ += 1;
     // The pointer (no body: the arcs carry it)
     const float a = kA0 + kSpan * shown;
-    color(lit ? kInk : kSoft);
+    color(sel ? kSel : (lit ? kInk : kSoft));
     d_->lineWidth(3 * 16);
     d_->begin(Disp::kLines);
     d_->vertex2f(int32_t((float(cx) + float(r - 24) * std::cos(a)) * 16.0f),
@@ -3139,11 +3145,11 @@ void App::drawKnob(int cx, int cy, int r, float frac, float shown, uint32_t col,
     d_->end();
     words_ += 5;
     if (name) {
-        color(sel ? kInk : kDim);
+        color(sel ? kSel : kDim);
         text(cx, cy - r - 20, kFontSmall, Disp::kOptCenter, name);
     }
     if (value) {
-        color(lit ? kInk : kSoft);
+        color(sel ? kSel : (lit ? kInk : kSoft));
         text(cx, cy + r + 8, kFontSmall, Disp::kOptCenter, value);
     }
 }
@@ -3346,12 +3352,12 @@ void App::drawFxPage(uint32_t now) {
     std::snprintf(buf, sizeof buf, "%u", unsigned(ret));
     drawKnob(5 * kKeyW + kKeyW / 2, 326, 34, float(ret) / 100.0f, knobShown_[slot][kFxKnobs], sc,
              fxSel_ == kFxKnobs, retMeter_[slot] * 1.5f, "Return", buf);
-    color(0x4A5563);
+    color(kHelp);
     if (ti.knob[kFxBank].name) {   // two banks
         std::snprintf(buf, sizeof buf, "Knobs %d of 2", bank + 1);
         color(kDim);
         text(700, 280, kFontSmall, Disp::kOptCenter, buf);
-        color(0x4A5563);
+        color(kHelp);
         text(700, 300, kFontSmall, Disp::kOptCenter, bank ? "Tap Shift:" : "Shift + F2-F5:");
         text(700, 320, kFontSmall, Disp::kOptCenter, bank ? "the first four" : "the other four");
         text(700, 340, kFontSmall, Disp::kOptCenter, "Sends: mixer");
@@ -3386,10 +3392,10 @@ void App::drawFxVisual(int slot, uint32_t now) {
             const bool pp = type == FxType::kPingPong;
             const float head = float(engine_.transportFrame() % uint32_t(win)) / win;
             // grid: bar line in the middle, beats faint
-            color(0x1C232D);
+            color(kBeatLine);
             const int beats = engine_.beatsPerBar() ? engine_.beatsPerBar() : 4;
             for (int i = 1; i < 2 * beats; ++i) vline(x0 + (x1 - x0) * i / (2 * beats), y0, y1, 16);
-            color(0x3A4452);
+            color(kCellOff);
             vline((x0 + x1) / 2, y0, y1, 16);
             hline(x0, x1, mid, 16);
             float amp = 1.0f;
@@ -3462,7 +3468,7 @@ void App::drawFxVisual(int slot, uint32_t now) {
             const float width = fl ? 1.0f : k(2) / 100.0f;
             const float ph = 6.2831853f * rate * float(now) / 1000.0f;
             const float cycles = 2.0f;
-            color(0x3A4452);
+            color(kCellOff);
             hline(x0, x1, mid, 16);
             for (int side = 0; side < 2; ++side) {
                 // Opaque: a translucent strip shows dots where its segments overlap.
