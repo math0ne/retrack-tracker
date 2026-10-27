@@ -7,8 +7,12 @@ SGTL5000 codec, keypad, pad LEDs, SD card, USB) is copied from
 way [SIDTracker](https://github.com/sandlbn/SidTracker) does it. See
 `PROVENANCE.md` for exactly what was copied.
 
-Status: feasibility prototype. It builds a flashable image and runs in the
-desktop simulator; **it has not been run on a Tracker yet.**
+> [!WARNING]
+> **Very beta.** This runs on the Tracker and is being tested on the device,
+> but expect bugs and performance issues (audio glitches, a slow screen under
+> load). Keep the stock firmware on the SD card as the way back (see
+> [Install on a Tracker](#install-on-a-tracker)), and don't trust it with
+> anything you can't afford to lose.
 
 ![The looper in the simulator: four loops playing](docs/img/panel.png)
 
