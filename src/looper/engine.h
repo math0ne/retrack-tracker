@@ -446,7 +446,7 @@ private:
 
     // recording options, tempo and metronome (kept across track clears)
     TrackOpts opts_[kTracks];
-    uint8_t bpm_ = 120, beats_ = 4;
+    uint8_t bpm_ = 94, beats_ = 4;   // the tempo at power-on
     uint32_t bpm16_ = 0;                // a precise tempo from MIDI clock (16.16 bpm), 0: bpm_
     bool clockOut_ = false, clockRan_ = false;
     uint32_t lastTick_ = 0xFFFFFFFFu;

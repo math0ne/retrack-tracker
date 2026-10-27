@@ -377,7 +377,7 @@ uint32_t Engine::barLen() const {
     // The master loop's bar once there is one; before that, the tempo's.
     if (L_) return L_;
     if (bpm16_) return uint32_t((uint64_t(kSampleRate) * 60u * beats_ << 16) / bpm16_);
-    return uint32_t(uint64_t(kSampleRate) * 60u * beats_ / (bpm_ ? bpm_ : 120));
+    return uint32_t(uint64_t(kSampleRate) * 60u * beats_ / (bpm_ ? bpm_ : 94));
 }
 
 void Engine::pushRealtime(uint8_t b) {

@@ -836,6 +836,9 @@ int main(int argc, char** argv) {
     if (!headless) return runInteractive(m, o);
     Headless h{m};
     h.advance(300);   // boot: zero the loop memory, first frames
+    // The scripts are timed at 120 bpm (a 2 s bar), not the device's default tempo.
+    m.app.scriptOpt(0, looper::OptParam::kTempo, 120);
+    h.advance(10);
     const bool ok = h.run(o.script);
     h.advance(50);
     if (!o.shot.empty()) panelShot(m, o.shot, false);

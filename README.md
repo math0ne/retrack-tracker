@@ -406,7 +406,7 @@ are on the Input page; the tempo settings below are on its Tempo card.
 
 | Tempo card (Input page) | |
 |---|---|
-| Tempo | 40–240 bpm (default 120). It sets the bar until there is a loop. After that it is tape-style varispeed: 50–200 % of the loop's own tempo, every loop speeds up or slows down together and the pitch follows (or, on a track set to Stretch, stays). The metronome, count-ins, beat repeats and delay times follow it; new takes are resampled onto the loops' timeline, and only Forward Tape tracks overdub off 100 %. Clearing every track goes back to 100 %. Projects save it. |
+| Tempo | 40–240 bpm (default 94). It sets the bar until there is a loop. After that it is tape-style varispeed: 50–200 % of the loop's own tempo, every loop speeds up or slows down together and the pitch follows (or, on a track set to Stretch, stays). The metronome, count-ins, beat repeats and delay times follow it; new takes are resampled onto the loops' timeline, and only Forward Tape tracks overdub off 100 %. Clearing every track goes back to 100 %. Projects save it. |
 | Beats / bar | 1–12 (default 4): the click, on-beat stops and the beat lines. |
 | Metronome | Click on every beat while the transport runs (the count-in always clicks). Also Shift + Play. |
 | Click | Click level. |
