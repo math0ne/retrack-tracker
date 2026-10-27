@@ -1310,13 +1310,6 @@ void App::drawLane(int t, uint32_t now) {
         scissorOff();
 
         if (!perf_) drawGrid(t, wx, wy, span);   // the effect cells take its place (display-list budget)
-        color(kDim);
-        if (v.mono.load()) {
-            text(wx1 - 6, wy + 2, kFontSmall, Disp::kOptRightX, "M");
-        } else {
-            text(wx1 - 6, wy + 2, kFontSmall, Disp::kOptRightX, "L");
-            text(wx1 - 6, wy1 - 16, kFontSmall, Disp::kOptRightX, "R");
-        }
         if (s == TrackState::kQueued) {   // waiting for its bar line
             color(kAmber);
             text(wx1 - 24, wy + 2, kFontSmall, Disp::kOptRightX, "starts on the next bar");
@@ -1945,6 +1938,9 @@ void App::drawGrid(int t, int wx, int wy, uint32_t span, int w, int h) {
         for (uint32_t i = from; i < span && count < cap; i += step) {
             if (i == 0 || (skipBars && i % bar == off)) continue;
             const int x = wx + int(float(i) * k);
+            // None on the loop's end: a loop a hair over whole bars would
+            // otherwise put a line on its last pixels.
+            if (x > wx + w - 3) continue;
             d_->vertex2f(x * 16, wy * 16);
             d_->vertex2f(x * 16, wy1 * 16);
             words_ += 2;

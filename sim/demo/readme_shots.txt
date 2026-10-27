@@ -4,18 +4,19 @@ wait 300
 opt all start 0
 
 # Track 1: drums. Each take starts on a bar line, the stop press lands just
-# before the line two bars on (on-bar stops record to it).
+# before the line two bars on (on-bar stops record to it). Each starts 30 ms
+# past its bar line, clear of block rounding.
 input_wav ../build/demo/drums.wav
 tap 0
 wait 3950
 tap 0
-wait 4010
+wait 4030
 # Track 2: bass, from 8.0 s.
 input_wav ../build/demo/bass.wav
 tap 12
 wait 3950
 tap 12
-wait 4010
+wait 4030
 # Track 3: chords, from 16.0 s; a shot while it records.
 input_wav ../build/demo/chords.wav
 tap 24
@@ -23,13 +24,13 @@ wait 2500
 screen ../docs/img/recording.png
 wait 1450
 tap 24
-wait 4010
+wait 4030
 # Track 4: the pad, from 24.0 s.
 input_wav ../build/demo/pad.wav
 tap 36
 wait 3950
 tap 36
-wait 4010
+wait 4030
 input_wav off
 expect_state 4 PLAY
 expect_len 4 4.0
