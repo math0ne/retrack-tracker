@@ -64,6 +64,14 @@ uint32_t scale(uint32_t c, float k) {
     return (uint32_t(r8(c) * k) << 16) | (uint32_t(g8(c) * k) << 8) | uint32_t(b8(c) * k);
 }
 
+// A grey as the selection's yellow at the same brightness: how a selected
+// lane draws everything in it.
+uint32_t selShade(uint32_t grey) {
+    uint8_t m = r8(grey) > g8(grey) ? r8(grey) : g8(grey);
+    m = b8(grey) > m ? b8(grey) : m;
+    return scale(kSel, float(m) / float(r8(kSel)));
+}
+
 // Each channel raised by d, clamped (lit edges).
 uint32_t lighten(uint32_t c, int d) {
     auto ch = [&](int v) { return uint32_t(v + d > 255 ? 255 : v + d); };
@@ -1277,25 +1285,13 @@ void App::drawLane(int t, uint32_t now) {
     char buf[48];
 
     // No card: the waveforms sit on the black screen; the selected track is
-    // the one drawn at full brightness, with the selection bar at its left.
+    // the one drawn in yellow.
     (void)y1;
 
     // Waveform inset
     const int wx = kWaveX, wy = y0 + kWaveDy, wx1 = wx + kWaveW, wy1 = wy + kWaveH;
-    if (s == TrackState::kRecording || s == TrackState::kCountIn || s == TrackState::kArmed) {
-        color(s == TrackState::kRecording ? kRed : kAmber);
-        alpha(uint8_t(80 + 150 * pulse(now, 700)));
-        d_->lineWidth(24);
-        d_->begin(Disp::kLineStrip);
-        d_->vertex2f((wx - 3) * 16, (wy - 3) * 16);
-        d_->vertex2f((wx1 + 3) * 16, (wy - 3) * 16);
-        d_->vertex2f((wx1 + 3) * 16, (wy1 + 3) * 16);
-        d_->vertex2f((wx - 3) * 16, (wy1 + 3) * 16);
-        d_->vertex2f((wx - 3) * 16, (wy - 3) * 16);
-        d_->end();
-        words_ += 8;
-        alpha(255);
-    }
+    // The selected lane draws all of it in shades of the selection yellow.
+    auto sh = [sel](uint32_t c) { return sel ? selShade(c) : c; };
 
     if (s == TrackState::kArmed) {
         // Waiting for sound: the input level against the threshold, in dB.
@@ -1304,32 +1300,32 @@ void App::drawLane(int t, uint32_t now) {
         const float lv = pos(in > 0.0001f ? 20.0f * std::log10(in) : -100.0f);
         const float th = pos(thresholdDb(engine_.opt(OptParam::kThreshold)));
         const int mx0 = wx + 60, mx1 = wx1 - 60, my = wy + kWaveH / 2 + 14;
-        color(kAmber);
+        color(sh(kAmber));
         text(wx + kWaveW / 2, wy + 22, kFontSmall, Disp::kOptCenter, "Waiting for sound");
-        color(kFaint);
+        color(sh(kFaint));
         fillRect(mx0, my - 5, mx1, my + 5, 5);
         if (lv > 0.0f) {
-            color(lv >= th ? kRed : kMeter);
+            color(sh(lv >= th ? kRed : kMeter));
             fillRect(mx0, my - 5, mx0 + 10 + int((mx1 - mx0 - 10) * lv), my + 5, 5);
         }
         const int tx = mx0 + int((mx1 - mx0) * th);
-        color(kInk);
+        color(sh(kInk));
         vline(tx, my - 11, my + 11, 32);
         std::snprintf(buf, sizeof buf, "%d dB", int(std::lround(thresholdDb(engine_.opt(OptParam::kThreshold)))));
-        color(kDim);
+        color(sh(kDim));
         text(tx, my + 24, kFontSmall, Disp::kOptCenter, buf);
     } else if (s == TrackState::kCountIn) {
         // Beats left until the take starts, counting down on the beat.
         const uint32_t beat = engine_.barFrames() / (engine_.beatsPerBar() ? engine_.beatsPerBar() : 4);
         const uint32_t left = beat ? (v.startIn.load() + beat - 1) / beat : 0;
         std::snprintf(buf, sizeof buf, "Recording in %lu", static_cast<unsigned long>(left));
-        color(kAmber);
+        color(sh(kAmber));
         text(wx + kWaveW / 2, wy + kWaveH / 2, kFontBig, Disp::kOptCenter, buf);
     } else if (empty) {
-        color(kFaint);
-        hline(wx + 8, wx1 - 8, wy + kWaveH / 2, 16);
+        color(sel ? kSel : kFaint);   // the empty line shows the selection too
+        hline(wx + 8, wx1 - 8, wy + kWaveH / 2, sel ? 24 : 16);
         if (s == TrackState::kClearing) {
-            color(kDim);
+            color(sh(kDim));
             text(wx + kWaveW / 2, wy + kWaveH / 2, kFontSmall, Disp::kOptCenter, "clearing...");
         }
     } else if (waveValid_[t]) {
@@ -1357,9 +1353,9 @@ void App::drawLane(int t, uint32_t now) {
         }
         scissorOff();
 
-        if (!perf_) drawGrid(t, wx, wy, span);   // the effect cells take its place (display-list budget)
+        if (!perf_) drawGrid(t, wx, wy, span, kWaveW, kWaveH, sel);   // the effect cells take its place (display-list budget)
         if (s == TrackState::kQueued) {   // waiting for its bar line
-            color(kAmber);
+            color(sh(kAmber));
             text(wx1 - 24, wy + 2, kFontSmall, Disp::kOptRightX, "starts on the next bar");
         }
         // A pending stop: how many beats are left in the take.
@@ -1368,7 +1364,7 @@ void App::drawLane(int t, uint32_t now) {
             const uint32_t beat = engine_.barFrames() / (engine_.beatsPerBar() ? engine_.beatsPerBar() : 4);
             const uint32_t left = beat ? (stopIn + beat - 1) / beat : 0;
             std::snprintf(buf, sizeof buf, "ends in %lu beat%s", static_cast<unsigned long>(left), left == 1 ? "" : "s");
-            color(kRed);
+            color(sh(kRed));
             text(wx1 - 24, wy + 2, kFontSmall, Disp::kOptRightX, buf);
         }
 
@@ -1378,7 +1374,7 @@ void App::drawLane(int t, uint32_t now) {
             Engine::LoopGrain lg[kLoopGrains];
             const int ng = engine_.loopGrains(t, lg);
             const int mid = (wy + wy1) / 2, gh = (wy1 - wy) / 2 - 6;
-            color(kInk);
+            color(sh(kInk));
             for (int i = 0; i < ng; ++i) {
                 const int gx = wx + int(uint64_t(kWaveW) * (uint32_t(lg[i].pos) % span) / span);
                 int gw = int(uint64_t(kWaveW) * uint32_t(lg[i].width) / span);
@@ -1394,7 +1390,7 @@ void App::drawLane(int t, uint32_t now) {
         // Playhead with a glow, and a fading trail behind it: as long as the
         // read speed (half speed short, double long), on the side it came
         // from (backwards modes, ping-pong's way back: the right).
-        const uint32_t head = s == TrackState::kRecording ? kRed : (s == TrackState::kOverdubbing ? kAmber : kInk);
+        const uint32_t head = sh(s == TrackState::kRecording ? kRed : (s == TrackState::kOverdubbing ? kAmber : kInk));
         if (s == TrackState::kPlaying || s == TrackState::kOverdubbing) {
             const ModeInfo& mi = modeInfo(mode);
             int dir = mi.reverse ? -1 : 1;
@@ -1442,9 +1438,23 @@ void App::drawLane(int t, uint32_t now) {
             n += std::snprintf(tag + n, sizeof tag - size_t(n), "%s%s", n ? "  " : "", modeInfo(mode).name);
         if (muted && n < int(sizeof tag) - 2) std::snprintf(tag + n, sizeof tag - size_t(n), "%sMuted", n ? "  " : "");
         else if (!n) tag[0] = '\0';
-        const int tx = wx + 4, ty = wy + 3;
+        int tx = wx + 4;
+        const int ty = wy + 3;
+        // Recording: a dot before the tag, pulsing; armed or counting in: a ring.
+        const bool rec = s == TrackState::kRecording;
+        if (rec || s == TrackState::kArmed || s == TrackState::kCountIn) {
+            color(sh(kInk));
+            if (rec) alpha(uint8_t(110 + 145 * pulse(now, 700)));
+            dot(tx + 5, ty + 8, 5);
+            alpha(255);
+            if (!rec) {
+                color(0x000000);   // the screen
+                dot(tx + 5, ty + 8, 3);
+            }
+            tx += 16;
+        }
         if (tag[0]) {
-            color(muted ? kMute : (sel ? kDim : scale(kDim, 0.7f)));
+            color(muted ? sh(kMute) : (sel ? selShade(kSoft) : scale(kDim, 0.7f)));
             text(tx, ty, kFontSmall, 0, tag);
         }
     }
@@ -1455,7 +1465,7 @@ void App::drawLane(int t, uint32_t now) {
         alpha(235);
         fillRect(wx + 110, wy + kWaveH / 2 - 16, wx1 - 110, wy + kWaveH / 2 + 16, 8);
         alpha(255);
-        color(kAmber);
+        color(sh(kAmber));
         text(wx + kWaveW / 2, wy + kWaveH / 2, kFontSmall, Disp::kOptCenter, hintText_);
     }
 }
@@ -1983,7 +1993,7 @@ void App::drawStrip(int s) {
 // ---------------------------------------------------------------------------
 // Bar and beat grid over a waveform
 
-void App::drawGrid(int t, int wx, int wy, uint32_t span, int w, int h) {
+void App::drawGrid(int t, int wx, int wy, uint32_t span, int w, int h, bool tint) {
     const uint32_t bar = engine_.barFrames();
     const uint32_t beats = engine_.beatsPerBar() ? engine_.beatsPerBar() : 4;
     if (!bar || !span) return;
@@ -2021,16 +2031,16 @@ void App::drawGrid(int t, int wx, int wy, uint32_t span, int w, int h) {
     uint32_t labStep = barStep;
     while (barPx * float(labStep) < kLabelGap && labStep < 8192) labStep *= 2;
     if (beat && float(beat) * k >= kBeatGap) {
-        color(kBeatLine);
+        color(tint ? selShade(kBeatLine) : kBeatLine);
         lines(off % beat, beat, 96, true);
     }
     // Bar line j (from off) is bar j + 1, or j + 2 when the take starts off a bar.
     const uint32_t j0 = off ? barStep - 1 : 0;
-    color(kBarLine);
+    color(tint ? selShade(kBarLine) : kBarLine);
     lines(off + j0 * bar, bar * barStep, 64, false);
     // Bar numbers: 1 at the take's start, then on the bar lines drawn.
     char buf[8];
-    color(kBarNum);
+    color(tint ? selShade(kBarNum) : kBarNum);
     // On the lanes bar 1 goes without a label (the corner holds the track's
     // length); the editor labels it.
     const bool lane = w == kWaveW;

@@ -40,7 +40,7 @@ the selected track and show its state.
 
 ![Four loops playing](docs/img/home.png)
 
-A take in progress, the lane outlined, the REC key showing what a press does:
+A take in progress, a pulsing dot by the lane's tag, the REC key showing what a press does:
 
 ![Recording the third track](docs/img/recording.png)
 
@@ -207,11 +207,13 @@ eight screen keys, each centred over its key as on the stock Tracker. The whole
 interface is greys and one colour: every page is plain black with no cards or
 boxes, and whatever is selected (a lane, a row, a strip, a knob, a picked
 mode) is drawn in the yellow of the DIY norns shield's OLED, the rest
-in dimmer greys. The four tracks are told apart by slightly different greys (only
+in dimmer greys; the selected lane is yellow throughout (waveform, grid, tag,
+playhead, and its line when empty). The four tracks are told apart by slightly different greys (only
 the popups over the lanes keep a backing, to stay readable). The lanes
 are waveforms only, the full width of the screen; a tag in each lane's corner
 gives its number and, when they apply, its length, mode (other than Forward)
-and Muted. The selected track's state is on the keys: REC lights up while it
+and Muted. A lane that records has a pulsing dot before its tag (a ring
+while it is armed or counting in). The selected track's state is on the keys: REC lights up while it
 records (brightest, pulsing; a softer pulse for an overdub, dim during a count-in
 or while armed), PLAY lights while it plays (dim while it waits for its bar line), MUTE
 while it is muted.

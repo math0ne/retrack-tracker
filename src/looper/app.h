@@ -149,7 +149,7 @@ private:
     void drawStrip(int s);
 
     // track options page
-    void drawGrid(int t, int wx, int wy, uint32_t span, int w = kWaveW, int h = kWaveH);
+    void drawGrid(int t, int wx, int wy, uint32_t span, int w = kWaveW, int h = kWaveH, bool tint = false);
 
     // FX page
     static constexpr int kFxPageKnobs = kFxKnobs + 1;   // the type's knobs, then the return
