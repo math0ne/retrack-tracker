@@ -207,8 +207,8 @@ eight screen keys, each centred over its key as on the stock Tracker. The whole
 interface is greys and one colour: every page is plain black with no cards or
 boxes, and whatever is selected (a lane, a row, a strip, a knob, a picked
 mode) is drawn in the yellow of the DIY norns shield's OLED, the rest
-in dimmer greys; the selected lane is yellow throughout (waveform, grid, tag,
-playhead, and its line when empty). The four tracks are told apart by slightly different greys (only
+in dimmer greys; on the lanes only the selected track's waveform (or its line,
+when empty) turns yellow. The four tracks are told apart by slightly different greys (only
 the popups over the lanes keep a backing, to stay readable). The lanes
 are waveforms only, the full width of the screen; a tag in each lane's corner
 gives its number and, when they apply, its length, mode (other than Forward)
