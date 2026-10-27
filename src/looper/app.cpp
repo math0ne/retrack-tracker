@@ -1268,6 +1268,25 @@ void App::drawLane(int t, uint32_t now) {
             text(wx1 - 24, wy + 2, kFontSmall, Disp::kOptRightX, buf);
         }
 
+        // Granular: each sounding grain where it reads now, as long as it is,
+        // as tall and bright as its envelope, higher the more it is panned left.
+        if (modeInfo(mode).reader == ModeInfo::kCloud && (s == TrackState::kPlaying || s == TrackState::kOverdubbing)) {
+            Engine::LoopGrain lg[kLoopGrains];
+            const int ng = engine_.loopGrains(t, lg);
+            const int mid = (wy + wy1) / 2, gh = (wy1 - wy) / 2 - 6;
+            color(kInk);
+            for (int i = 0; i < ng; ++i) {
+                const int gx = wx + int(uint64_t(kWaveW) * (uint32_t(lg[i].pos) % span) / span);
+                int gw = int(uint64_t(kWaveW) * uint32_t(lg[i].width) / span);
+                gw = gw < 3 ? 3 : gw;
+                const int hh = 3 + int(lg[i].env * float(gh));
+                const int py = mid - int((0.5f - lg[i].pan) * float(gh));
+                alpha(uint8_t(40 + 150 * lg[i].env));
+                fillRect(gx - gw / 2, py - hh / 2, gx + gw / 2 + 1, py + hh / 2, 2);
+            }
+            alpha(255);
+        }
+
         // Playhead with a glow, and a fading trail behind it: as long as the
         // read speed (half speed short, double long), on the side it came
         // from (backwards modes, ping-pong's way back: the right).

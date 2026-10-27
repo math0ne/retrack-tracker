@@ -40,6 +40,8 @@
 //   expect_fx SLOT TYPE [K V]     FX slot (1..2) holds TYPE (and knob K, 1..4, is V)
 //   expect_perfknob FX VALUE      performance effect FX (1..8) knob value
 //   tone_shape steady|bursts      a continuous sine, or the default bursts
+//   input_wav PATH | input_wav off  a 16-bit 44.1 kHz WAV (mono or stereo) as the line
+//                                 input, from its start, looping (in place of the tone)
 //   expect_below MAX              fail unless the output peak since the last reset < MAX, then reset
 //   expect_perf TRACK FX on|off   performance effect FX (1..8, pad columns 5..12) running
 //   shot PATH          PNG of the front panel; screen PATH = the 800x480 screen only
@@ -115,7 +117,46 @@ struct ToneIn {
     bool steady = false;   // a continuous sine instead of bursts
     uint64_t n = 0;
     int16_t buf[128 * 2] = {};
+    std::vector<int16_t> wav;   // input_wav: stereo frames, looped
+    size_t wavPos = 0;
+    bool loadWav(const std::string& path) {
+        std::ifstream f(path, std::ios::binary);
+        std::vector<char> d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        if (d.size() < 12 || std::memcmp(d.data(), "RIFF", 4) != 0) return false;
+        int chans = 0, bits = 0;
+        for (size_t p = 12; p + 8 <= d.size();) {
+            uint32_t len;
+            std::memcpy(&len, &d[p + 4], 4);
+            if (std::memcmp(&d[p], "fmt ", 4) == 0 && len >= 16) {
+                uint16_t c, bps;
+                std::memcpy(&c, &d[p + 10], 2);
+                std::memcpy(&bps, &d[p + 22], 2);
+                chans = c;
+                bits = bps;
+            } else if (std::memcmp(&d[p], "data", 4) == 0 && bits == 16 && (chans == 1 || chans == 2)) {
+                const size_t frames = std::min<size_t>(len, d.size() - p - 8) / size_t(2 * chans);
+                wav.assign(frames * 2, 0);
+                const int16_t* s = reinterpret_cast<const int16_t*>(&d[p + 8]);
+                for (size_t i = 0; i < frames; ++i) {
+                    wav[2 * i] = s[i * chans];
+                    wav[2 * i + 1] = s[i * chans + chans - 1];
+                }
+                wavPos = 0;
+                return frames > 0;
+            }
+            p += 8 + len + (len & 1);
+        }
+        return false;
+    }
     const int16_t* block() {
+        if (!wav.empty()) {
+            for (int i = 0; i < 128; ++i) {
+                buf[2 * i] = wav[wavPos];
+                buf[2 * i + 1] = wav[wavPos + 1];
+                wavPos = (wavPos + 2) % wav.size();
+            }
+            return buf;
+        }
         if (hz <= 0.0f) return nullptr;
         for (int i = 0; i < 128; ++i, ++n) {
             const double t = double(n) / 44100.0;
@@ -590,6 +631,13 @@ struct Headless {
                             pass ? "PASS" : "FAIL", got);
                 ok = ok && pass;
             } else if (cmd == "tone_shape") m.tone.steady = arg == "steady";
+            else if (cmd == "input_wav") {
+                if (arg == "off") m.tone.wav.clear();
+                else if (!m.tone.loadWav(arg)) {
+                    std::fprintf(stderr, "%s:%d: cannot read %s\n", path.c_str(), lineNo, arg.c_str());
+                    ok = false;
+                }
+            }
             else if (cmd == "expect_below") {
                 const float pk = m.manualAudio.peakLevel();
                 const bool pass = pk < float(std::atof(arg.c_str()));

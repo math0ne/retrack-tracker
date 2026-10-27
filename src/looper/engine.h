@@ -275,6 +275,13 @@ public:
     float fxLfo(int slot) const { return fx_[slot].lfo(); }
     uint8_t perfParam(PerfFx fx) const { return perfParam_[int(fx)]; }
     uint8_t grainParam(int t, int knob) const { return grain_[t][knob]; }
+    // Granular mode, for the screen: the track's sounding grains (where each
+    // reads now in the loop, its length, its envelope 0..1 now, its pan 0..1).
+    struct LoopGrain {
+        int32_t pos, width;
+        float env, pan;
+    };
+    int loopGrains(int t, LoopGrain* out) const;   // out: kLoopGrains
     const CloudsFx& fxClouds(int slot) const { return fx_[slot].clouds(); }   // for the FX page picture
     // Tape tempo: the speed against the tempo the loops were recorded at.
     float speed() const { return float(speed16_) / 65536.0f; }

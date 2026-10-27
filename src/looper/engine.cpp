@@ -332,6 +332,21 @@ void Engine::renderGrains(int t, uint64_t ph0, uint64_t step16, uint32_t n) {
     }
 }
 
+int Engine::loopGrains(int t, LoopGrain* out) const {
+    const Track& k = trk_[t];
+    const int32_t len = int32_t(k.len);
+    int n = 0;
+    if (!len) return 0;
+    for (const clouds::Grain& c : k.cg) {   // read while the audio runs: a frame late at worst
+        if (!c.active()) continue;
+        int32_t p = c.readIndex() % len;
+        if (p < 0) p += len;
+        const float e = c.envelopePhase() > 2.0f ? 2.0f : c.envelopePhase();
+        out[n++] = {p, c.width(), 1.0f - std::fabs(1.0f - e), c.gainR() / (c.gainL() + c.gainR() + 0.001f)};
+    }
+    return n;
+}
+
 void Engine::setMode(int t, PlayMode mode) {
     Track& k = trk_[t];
     for (clouds::Grain& c : k.cg) c.Init();   // Granular starts (or stops) clean

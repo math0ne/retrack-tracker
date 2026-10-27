@@ -10,7 +10,131 @@ way [SIDTracker](https://github.com/sandlbn/SidTracker) does it. See
 Status: feasibility prototype. It builds a flashable image and runs in the
 desktop simulator; **it has not been run on a Tracker yet.**
 
-![Four tracks in the simulator](docs/four_tracks.png)
+![The looper in the simulator: four loops playing](docs/img/panel.png)
+
+The screenshots are from the simulator, with four example loops (drums,
+bass, chord stabs, a stereo pad) synthesized by `tools/demo_sounds.py` and
+recorded through the looper's input by `sim/demo/readme_shots.txt`.
+`tools/readme_shots.sh` makes them again.
+
+## Features
+
+### Four stereo tracks on one bar clock
+
+Each track records up to about 22 s of stereo (44 s mono) in the Tracker's
+16 MB SDRAM. The first take sets the bar; every later take, every playback
+mode and every effect follows the same bar clock, so nothing drifts. Takes
+start with a count-in (or at once, or when sound arrives), stop on the bar
+line, and blend their end into their start so the loop point does not click.
+Overdub (with feedback), replace (punch in), undo and redo.
+
+The home page is the four waveforms, left channel above the line and right
+below, with the bar and beat lines. The playhead leaves a fading trail as
+long as its speed, on the side it came from. The eight screen keys act on
+the selected track and show its state.
+
+![Four loops playing](docs/img/home.png)
+
+A take in progress, the lane outlined, the REC key showing what a press does:
+
+![Recording the third track](docs/img/recording.png)
+
+### Playback modes
+
+The mode bar (F5) has two pages: Forward, Reverse, Ping-pong, Half speed,
+Double, Half rev and Double rev; then Half time, Octave up, Octave down and
+Granular. Each mode reads from the bar clock, so a track stays in time in any
+mode and a switch carries on from where it is.
+
+| Page 1: playback | Page 2: grains |
+|---|---|
+| ![Mode bar, page 1](docs/img/modes.png) | ![Mode bar, page 2](docs/img/modes2.png) |
+
+**Granular** plays the loop through Clouds grains around the playhead. Hold
+F5 for its four knobs (Spread, Size, Density, Pitch). The lane draws every
+grain where it reads, as long as it is and as bright as it sounds. Below,
+track 2 plays in Half rev (the trail on the right of its playhead) and track 4
+is Granular, its grains scattered by Spread:
+
+| Grain knobs | Grains on the lane |
+|---|---|
+| ![Granular knobs](docs/img/granular.png) | ![Half rev and Granular tracks](docs/img/home_modes.png) |
+
+### Shift layer: track options
+
+Holding Shift relabels the screen keys: Replace, Play / stop all, Solo, Click
+level, then the selected track's options: Stop (free / on bar / on beat, or a
+fixed length in bars), Start (now / count-in / on sound, with its threshold),
+After rec (play / overdub / stop) and Tempo (Tape or Stretch).
+
+![The Shift layer](docs/img/shift.png)
+
+### Tempo, volume and input, under your fingers
+
+Hold F4 and turn for the tempo: before a loop it sets the bar, after it it is
+tape-style varispeed from 50 to 200 % (Stretch tracks keep their pitch). Hold
+F7 for the selected track's volume; hold F6 for the input gain, tap it for the
+Input page (source, gain, channels, monitoring through the effects, overdub
+feedback, and the tempo card: metronome, click, beats per bar, stop fade).
+
+| Tempo (F4) | Volume (F7) |
+|---|---|
+| ![Tempo knob](docs/img/tempo.png) | ![Volume knob](docs/img/volume.png) |
+
+![The Input page](docs/img/input.png)
+
+### Two send effects, including Clouds
+
+FX 1 and FX 2 each hold a Delay, Ping-pong delay, Reverb, Chorus, Flanger or
+Mutable Instruments' Clouds granular processor. Each page shows the effect
+live (echo taps, the reverb's decay, LFOs, Clouds' grains in its buffer) over
+its knobs. One slot can feed the other, so Clouds can run into the reverb.
+
+| Reverb | Clouds |
+|---|---|
+| ![Reverb page](docs/img/fx_reverb.png) | ![Clouds page](docs/img/fx_clouds.png) |
+
+### Mixer
+
+Master opens seven strips: per track the two pre-fader sends and the level,
+per FX slot a knob, the chain send to the other slot and the return, and the
+master, with meters on every fader.
+
+![The mixer](docs/img/mixer.png)
+
+### Performance mode
+
+Perform turns pad columns 5 to 12 into eight effects per track: two beat
+repeats, low-pass, high-pass, two filter sweeps, vibrato and tape stop. Hold
+a pad to play one, Shift + pad to latch it, hold and turn the encoder for its
+knob. Repeats and tape stop land back in time when released.
+
+![Performance mode, a filter sweep held](docs/img/perform.png)
+
+### Loop editor
+
+Instr opens the selected track's waveform with start and end markers on a
+bar / beat / 1/16 grid: trim (instant, with undo), cut and erase.
+
+![The loop editor](docs/img/editor.png)
+
+### Projects, export, settings, MIDI and the manual
+
+File saves and loads projects (every loop as a WAV plus all settings) and
+exports tracks as WAVs, in the background while the loops play. Config holds
+the settings, a firmware flasher (the way back to the stock firmware) and
+MIDI: clock out or follow, and eight learnable footswitch actions. Song opens
+a seven-chapter manual on the device.
+
+| File | Config |
+|---|---|
+| ![Projects](docs/img/file.png) | ![Settings](docs/img/config.png) |
+
+| MIDI | Manual |
+|---|---|
+| ![MIDI](docs/img/midi.png) | ![The on-device manual](docs/img/manual.png) |
+
+# Reference
 
 ## Layout
 
@@ -43,7 +167,11 @@ test tone on one channel when you run it interactively.
 ```
 build/sim/looper-sim --tone 330      # synthetic input
 build/sim/looper-sim --line-in       # the host microphone
+tools/readme_shots.sh                # the README screenshots (docs/img), from example loops
 ```
+
+Scripts can feed a WAV file into the input with `input_wav PATH` (16-bit,
+44.1 kHz, mono or stereo, looped; `input_wav off` stops it).
 
 Keyboard: the four rows `1..=`, `q..]`, `a..'`, `z../` are the pad rows
 (row = track). Enter = Rec, Space = Play, Backspace = Delete, F1..F8, Up/Down,
@@ -244,6 +372,8 @@ short, double long.
 
 **Granular** plays the loop through up to eight Clouds grains (Mutable
 Instruments' grain and window code), each centred on where the loop is now.
+The lane draws each sounding grain where it reads, as wide as it is long,
+taller and brighter as it gets louder, higher the more it is panned left.
 Hold **F5** on a Granular track for its four knobs: **Spread** (0 %: at the
 playhead … 100 %: anywhere in the loop), **Size** (20–500 ms), **Density**
 (1–8 grains overlapping) and **Pitch** (±24 semitones). With the track's Tempo
@@ -383,7 +513,7 @@ Tracks are stereo. Each lane draws the left channel above its centre line and
 the right channel below it.
 
 Every take starts in phase with the bar grid; how it ends is the Stop option
-on the track options page (on bar by default).
+(Shift + F5; on bar by default).
 
 ## Install on a Tracker
 
@@ -404,9 +534,8 @@ copying that folder onto the card and power-cycling installs the build.
 ## Limits found so far
 
 - **Memory:** 16 MB SDRAM = about 22.1 s of stereo audio per track (after the
-  1 MB of the two FX slots' delay lines), with no
-  undo. Mono storage or a shared pool would roughly double that; longer loops
-  need SD streaming (the SD → SDRAM DMA path is still unverified in the HAL).
+  1 MB of the two FX slots' delay lines); undo needs the loop to fit in half
+  of it. Mono tracks double that; longer loops need SD streaming (the SD → SDRAM DMA path is still unverified in the HAL).
 - **Display list:** the FT81x runs at most 2048 words (8 KB) per frame. This
   screen uses about 900. Waveforms are RGB332 bitmaps in the display's 1 MB
   RAM_G (13 words each to draw), so detail does not cost display-list space.
@@ -414,4 +543,4 @@ copying that folder onto the card and power-cycling installs the build.
   re-uploads 43 KB at 20 Hz, about 0.7–0.9 MB/s.
 - **Input latency:** recordings are not yet shifted to make up for the
   codec's in → out delay (OpenTracker measured 10–14 ms on live resampling).
-- **Not yet:** save/load to SD, MIDI clock, undo, per-track effects.
+- **Not yet:** per-track insert effects, latency compensation.

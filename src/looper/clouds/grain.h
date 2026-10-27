@@ -169,6 +169,7 @@ public:
 
     // Accessors for UI visualization
     inline int32_t firstSample() const { return first_sample_; }
+    inline int32_t readIndex() const { return first_sample_ + (phase_ >> 16); }   // where it reads now (unwrapped)
     inline int32_t width() const { return width_; }
     inline float envelopePhase() const { return envelope_phase_; }
     inline float gainL() const { return gain_l_; }
