@@ -43,6 +43,9 @@
 //   expect_stream TRACK long 0|1  the track holds a long take (its tail on the card)
 //   expect_stream TRACK under|over MAX   frames played as silence / takes cut short, at most MAX
 //   reset_stream TRACK            zero those counts
+//   card_speed WRITE_MBS READ_MBS LATENCY_MS [STALL_MS EVERY]   card commands take time (the
+//                                 audio runs on, as on the device): a fixed latency, the MB/s,
+//                                 and every EVERY-th write a stall; card_speed 0: instant
 //   input_wav PATH | input_wav off  a 16-bit 44.1 kHz WAV (mono or stereo) as the line
 //                                 input, from its start, looping (in place of the tone)
 //   expect_below MAX              fail unless the output peak since the last reset < MAX, then reset
@@ -344,6 +347,29 @@ void panelShot(Machine& m, const std::string& path, bool screenOnly) {
 struct Headless {
     Machine& m;
     double frameAcc = 0.0;
+    // card_speed: how long a card command takes.
+    double wMBs = 0.0, rMBs = 0.0, latMs = 0.0, stallMs = 0.0;
+    uint32_t stallEvery = 0, writes = 0;
+    bool inIo = false;
+
+    // The main loop is blocked in a card command: the audio interrupt runs on.
+    void stall(double us) {
+        m.clock.advanceUs(uint64_t(us));
+        frameAcc += us * 44.1 / 1000.0;
+        while (frameAcc >= 128.0) {
+            m.manualAudio.pull();
+            frameAcc -= 128.0;
+        }
+    }
+    static void ioHook(uint32_t bytes, bool write, void* ctx) {
+        Headless& h = *static_cast<Headless*>(ctx);
+        if (h.inIo) return;
+        h.inIo = true;
+        double ms = h.latMs + double(bytes) / ((write ? h.wMBs : h.rMBs) * 1048.576);
+        if (write && h.stallEvery && ++h.writes % h.stallEvery == 0) ms += h.stallMs;
+        h.stall(ms * 1000.0);
+        h.inIo = false;
+    }
 
     void resetLevels() {
         m.manualAudio.resetLevels();
@@ -351,7 +377,10 @@ struct Headless {
     }
 
     void advance(uint32_t ms) {
-        for (uint32_t i = 0; i < ms; ++i) {
+        // By the clock, not by passes: with card_speed a pass can take longer
+        // than its 1 ms (the card command's time is in the clock already).
+        const uint64_t end = m.clock.nowUs() + uint64_t(ms) * 1000u;
+        while (m.clock.nowUs() < end) {
             m.clock.advanceUs(1000);
             if (m.clockBpm > 0.0) {   // midi_clock: 24 ticks a beat on DIN
                 const double nowMs = double(m.clock.micros()) / 1000.0;
@@ -600,6 +629,20 @@ struct Headless {
                             unsigned(m.app.engine().fxKnob(s, 0)), unsigned(m.app.engine().fxKnob(s, 1)),
                             unsigned(m.app.engine().fxKnob(s, 2)), unsigned(m.app.engine().fxKnob(s, 3)));
                 ok = ok && pass;
+            } else if (cmd == "card_speed") {
+                std::string r, lat, st, ev;
+                in >> r >> lat >> st >> ev;
+                wMBs = std::atof(arg.c_str());
+                rMBs = std::atof(r.c_str());
+                latMs = std::atof(lat.c_str());
+                stallMs = std::atof(st.c_str());
+                stallEvery = uint32_t(std::atol(ev.c_str()));
+                if (wMBs > 0.0 && rMBs > 0.0) {
+                    m.storage.ioHook = &Headless::ioHook;
+                    m.storage.ioCtx = this;
+                } else {
+                    m.storage.ioHook = nullptr;
+                }
             } else if (cmd == "reset_stream") {
                 const int t = std::atoi(arg.c_str()) - 1;
                 if (t >= 0 && t < looper::kTracks) {   // a test's own counters: the engine only ever adds to them

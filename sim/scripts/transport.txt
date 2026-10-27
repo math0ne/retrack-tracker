@@ -1,0 +1,50 @@
+# The transport (Play) starts every playing loop from its own first bar, with
+# the default count-in (the first take starts a bar in) and for a take recorded
+# later in the session (it starts bars in).
+wait 300
+tone_shape steady
+# Track 1: 4 bars after the count-in, 330 Hz in its bar 1, then 660 Hz.
+tone 330
+tap 0
+wait 4000
+tone 660
+wait 6000
+tap 0
+wait 3000
+tone off
+expect_len 1 8.0
+press PLAY
+wait 500
+press PLAY
+reset_levels
+wait 500
+expect_pitch 330
+# Track 2, three bars later on: 3 bars, 440 Hz in its bar 1, then 880 Hz.
+# Muted track 1 first, so only track 2 sounds.
+tap 2
+wait 5000
+tone 440
+tap 12
+wait 3000
+tone 880
+wait 5000
+tap 12
+wait 3000
+tone off
+expect_len 2 6.0
+press PLAY
+wait 500
+press PLAY
+reset_levels
+wait 500
+expect_pitch 440
+# Both again: track 1 unmuted, bar 1 of each, on the same bar line.
+tap 2
+press PLAY
+wait 500
+press PLAY
+wait 2200
+tap 14
+reset_levels
+wait 500
+expect_pitch 660

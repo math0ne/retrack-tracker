@@ -1116,14 +1116,23 @@ void Engine::apply(const Msg& m) {
                         finishNow(o);
                 running_ = false;
             } else if (L_) {
-                // Everything from bar 1: what was playing plays, what was queued
-                // starts now, stopped tracks stay stopped.
+                // Everything from bar 1: what was playing plays from its own
+                // first bar, what was queued starts now, stopped tracks stay
+                // stopped. A take's start keeps its place in the bar (the grid
+                // stays), so one that began on a bar line (a count-in, a take
+                // recorded later in the session) begins at its start, not where
+                // its old anchor put the new bar 1.
+                const uint32_t bar = barLen();
                 setClock(0);
                 running_ = true;
                 for (Track& x : trk_)
                     if (x.state == TrackState::kQueued) {
                         x.anchor = 0;
                         launch(x);
+                    } else if (x.len && (x.state == TrackState::kPlaying || x.state == TrackState::kOverdubbing)) {
+                        x.anchor = bar ? x.anchor % bar : 0;
+                        x.offset16 = 0;
+                        restartGrains(x, uint64_t(posOf(x)) << 16);
                     }
             }
             break;

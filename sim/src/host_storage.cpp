@@ -102,6 +102,7 @@ int32_t HostStorage::read(Handle h, void* dst, uint32_t len) {
     std::fflush(f);
     const size_t n = std::fread(dst, 1, len, f);
     if (n < len && std::ferror(f)) return -1;
+    if (ioHook) ioHook(len, false, ioCtx);
     return int32_t(n);
 }
 
@@ -111,6 +112,7 @@ int32_t HostStorage::write(Handle h, const void* src, uint32_t len) {
     // Switching from reading to writing on a "r+" stream needs a positioning call.
     std::fseek(f, 0, SEEK_CUR);
     const size_t n = std::fwrite(src, 1, len, f);
+    if (ioHook) ioHook(len, true, ioCtx);
     return n == len || n > 0 ? int32_t(n) : -1;
 }
 

@@ -128,13 +128,14 @@ bool Streamer::drain(int t, const Ctx& c) {
     const uint32_t target = rec ? data : len;
     const uint32_t fl = sv.flushed.load(std::memory_order_relaxed);
     if (fl >= target) return false;
-    const uint32_t align = 512u / c.ub;
     uint32_t n;
     uint8_t* src;
     if (fl < data) {
         n = data - fl;
         if (n > c.bu) n = c.bu;
-        if (rec) n = n / align * align;   // whole sectors while it is still coming
+        // Whole blocks while it is still coming: one 32 KB command, not a
+        // stream of small ones (slow on a card, and each blocks the main loop).
+        if (rec && n < c.bu) return false;
         if (c.head && fl < c.head && fl + n > c.head) n = c.head - fl;   // RAM, then the ring
         if (c.head && fl >= c.head && n > c.ring - (fl - c.head) % c.ring) n = c.ring - (fl - c.head) % c.ring;
         src = c.at(fl);

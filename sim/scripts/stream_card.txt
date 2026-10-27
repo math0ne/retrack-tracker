@@ -1,0 +1,88 @@
+# Long takes on a card that takes time, like the 8 GB test card with 32 KB
+# clusters and direct DMA: 8 MB/s writes, 16 MB/s reads, 1 ms a command, a
+# 150 ms stall every 64th write. The main loop is blocked during each card
+# command while the audio runs on, as on the device. Defaults: count-in, on-bar.
+card_speed 8 16 1 150 64
+wait 300
+tone_shape steady
+# Track 1: a long take, 330 Hz to 14 s, then 660 Hz (from the card after 19.5 s).
+tone 330
+tap 0
+wait 16000
+tone 660
+wait 16000
+tap 0
+wait 3000
+tone off
+expect_state 1 PLAY
+expect_stream 1 long 1
+expect_stream 1 over 0
+# Track 2: a short take, then Play twice (stop, everything from bar 1).
+press DOWN
+tone 440
+tap 12
+wait 6000
+tap 12
+wait 3000
+tone off
+expect_state 1 PLAY
+expect_state 2 PLAY
+expect_stream 2 long 0
+tap 14
+press PLAY
+wait 500
+press PLAY
+reset_stream 1
+reset_levels
+wait 1000
+expect_pitch 330
+wait 20000
+reset_levels
+wait 1500
+expect_pitch 660
+wait 12000
+expect_stream 1 under 0
+# Replace a whole pass of track 1 (selected again) with 880 Hz, then undo it
+# and redo it.
+press UP
+tone 880
+hold SHIFT
+press F1
+release SHIFT
+wait 50
+expect_state 1 DUB
+wait 37000
+press F1
+tone off
+wait 50
+expect_state 1 PLAY
+tap 10
+wait 500
+reset_levels
+wait 1500
+expect_pitch 880
+expect_stream 1 over 0
+press F8
+wait 3000
+tap 10
+wait 500
+reset_levels
+wait 1500
+expect_pitch 660
+press F8
+wait 3000
+tap 10
+wait 500
+reset_levels
+wait 1500
+expect_pitch 880
+# Reverse across the wrap: no silence.
+press F5
+press F2
+wait 50
+expect_mode 1 Reverse
+tap 4
+wait 300
+reset_stream 1
+wait 6000
+expect_stream 1 under 0

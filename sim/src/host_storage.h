@@ -13,6 +13,11 @@ namespace sim {
 class HostStorage final : public ot::IStorage {
 public:
     static constexpr int kMaxOpen = 32;
+    // Called after each read / write with its size: the simulator's headless
+    // runner uses it to make card commands take time (card_speed), the audio
+    // going on meanwhile as it does on the device.
+    void (*ioHook)(uint32_t bytes, bool write, void* ctx) = nullptr;
+    void* ioCtx = nullptr;
     // Creates the root directory if needed. Returns false if it is unusable.
     bool init(const std::string& root);
     const std::string& root() const { return root_; }
