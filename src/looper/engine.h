@@ -431,6 +431,7 @@ private:
         uint8_t dubUndo = 0;         // 0 nothing, 1 can undo, 2 can redo (TrackView::dubUndo)
         float dubX = 0.0f;           // overdub / replace ramp, 0..1 (it ramps out after the stop too)
         uint32_t fadeAt = 0xFFFFFFFFu;   // the take's first frame after silence: it fades in from here
+        uint32_t fxPos = 0xFFFFFFFFu;    // where a beat repeat or a tape stop read last (loop frame; the playhead shows it)
         // The fade-in gain for buffer frame i of a take (1 outside the fade).
         float fadeIn(uint32_t i) const {
             return i >= fadeAt && i - fadeAt < kFadeInFrames ? (float(i - fadeAt) + 0.5f) / float(kFadeInFrames) : 1.0f;

@@ -1952,6 +1952,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             wrote = dub;
             if (vib) pf.vib.renorm();
             if (under) stream_[t].underruns.fetch_add(under, std::memory_order_relaxed);
+            k.fxPos = fxIp;
             if (k.head)   // a long take: the ring follows a repeat or a tape stop while it lasts
                 stream_[t].fxAt.store(fxIp == StreamView::kNoFx ? fxIp : k.start + fxIp, std::memory_order_relaxed);
             if (sh)   // which way the Streamer fills the ring
@@ -2136,7 +2137,11 @@ void Engine::publish() {
         v.written.store(k.state == TrackState::kRecording ? k.written : k.len, std::memory_order_relaxed);
         // Stopped and queued tracks show their start: that is where they begin again.
         const bool parked = k.state == TrackState::kStopped || k.state == TrackState::kQueued;
-        v.pos.store(k.state == TrackState::kRecording ? k.written : (parked ? 0 : posOf(k)), std::memory_order_relaxed);
+        // A beat repeat or a tape stop: the playhead is where it reads (the loop runs on under it).
+        const bool fx = running_ && k.fxPos != 0xFFFFFFFFu &&
+                        (k.state == TrackState::kPlaying || k.state == TrackState::kOverdubbing);
+        v.pos.store(k.state == TrackState::kRecording ? k.written : (parked ? 0 : (fx ? k.fxPos : posOf(k))),
+                    std::memory_order_relaxed);
         v.mono.store(k.mono, std::memory_order_relaxed);
         v.perf.store(k.perf.mask, std::memory_order_relaxed);
         v.start.store(k.start, std::memory_order_relaxed);

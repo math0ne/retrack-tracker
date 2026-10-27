@@ -26,8 +26,8 @@ way [SIDTracker](https://github.com/sandlbn/SidTracker) does it. See
 - Granular playback, with the grains drawn on the waveform
 - Tempo changes as tape varispeed or time-stretch, tap tempo
 - Two send effects: delay, ping-pong, reverb, chorus, flanger, Mutable Instruments Clouds
-- A mixer with sends, returns, FX chaining and meters
-- Performance mode: beat repeats, filters, sweeps, vibrato, tape stop on the pads
+- A mixer with sends, returns, FX chaining, meters and mutes
+- Performance mode: beat repeats, filters, sweeps, vibrato, tape stop, on one track or all at once
 - A loop editor: trim, cut, erase
 - Projects saved to the SD card, WAV export
 - MIDI clock in and out, learnable footswitch actions
@@ -136,7 +136,7 @@ its knobs. One slot can feed the other, so Clouds can run into the reverb.
 
 Master opens seven strips: per track the two pre-fader sends and the level,
 per FX slot a knob, the chain send to the other slot and the return, and the
-master, with meters on every fader.
+master, with meters on every fader. Hold Shift for the mutes on F1–F4.
 
 ![The mixer](docs/img/mixer.png)
 
@@ -144,8 +144,11 @@ master, with meters on every fader.
 
 Perform turns pad columns 5 to 12 into eight effects per track: two beat
 repeats, low-pass, high-pass, two filter sweeps, vibrato and tape stop. Hold
-a pad to play one, Shift + pad to latch it, hold and turn the encoder for its
-knob. Repeats and tape stop land back in time when released.
+a pad to play one, Shift + pad to latch it; play as many as you like on as many
+tracks at once. The screen keys become the eight effects' knobs: hold one and
+turn the encoder. Repeats and tape stop land back in time when released, and
+the playhead shows where they read. On the mixer, Perform turns the screen keys
+into the eight effects for **every track at once**.
 
 ![Performance mode, a filter sweep held](docs/img/perform.png)
 
@@ -645,9 +648,20 @@ again. Leaving performance mode turns everything off. Pad columns 1–3 keep
 record / play / mute; column 4 is **Freeze** for a Clouds slot (row 1 FX 1,
 row 2 FX 2; lit while frozen) instead of clear.
 
-Each effect has one knob: **hold its pad and turn the encoder** (a big knob
-shows while held). The knobs are shared by the four tracks; each cell shows its
-setting.
+Each effect has one knob, on the screen keys while performance mode is on:
+F1–F8 are the eight effects (labelled with their settings); **hold one and turn
+the encoder** to set it (its big knob shows while the key is held). Holding a
+pad and turning the encoder sets that effect too, without the knob. Holding pads
+never covers the lanes, so effects can run on several tracks at once. The knobs
+are shared by the four tracks; each cell shows its setting. The track keys come
+back when performance mode is left (pad columns 1–3 keep record / play / mute
+meanwhile). A beat repeat or a tape stop moves the playhead to where it reads.
+
+**On the mixer** (Master), Perform keeps the mixer on screen and makes F1–F8
+the eight effects for all tracks at once: hold a key and its effect runs on
+every track with a loop, Shift + key latches it on all of them (again: off),
+and holding a key and turning the encoder sets its knob. Left / Right still
+pick a strip. The pads keep playing effects per track meanwhile.
 
 | Pad column | Effect | Knob (default) |
 |---|---|---|
@@ -726,7 +740,9 @@ FX 1 → FX 2 runs and the other shows "off".
 | Master (F7) | – | – | Master level |
 
 F1–F7 or Left/Right pick a strip, Up/Down a row (the row stays when you change
-strip), the encoder sets the value, Shift + encoder in single steps. Faders
+strip), the encoder sets the value, Shift + encoder in single steps. Holding
+**Shift**, F1–F4 mute and unmute tracks 1–4 (the labels read MUTE, lit while
+muted); a muted strip shows "Muted" where its name is. Faders
 show their level meter; the master shows left and right. Sends start at 0,
 returns at 80, track levels at 80, master at 100. Mixer settings stay when a
 track is cleared.

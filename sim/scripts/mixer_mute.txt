@@ -1,0 +1,35 @@
+# The mixer: holding Shift, F1..F4 mute and unmute the tracks (the strip
+# picked stays); a muted strip says so.
+wait 300
+opt all start 0
+tone_shape steady
+tone 330
+tap 0
+wait 2000
+tap 0
+wait 300
+tone off
+expect_state 1 PLAY
+press MASTER
+wait 50
+hold SHIFT
+wait 50
+shot ../build/sim/check/mixer_shift.png
+press F1
+wait 50
+release SHIFT
+reset_levels
+wait 500
+expect_silent
+shot ../build/sim/check/mixer_muted.png
+hold SHIFT
+press F1
+release SHIFT
+reset_levels
+wait 500
+expect_audio 0.1
+# Without Shift, F2 picks the strip as before (no mute).
+press F2
+reset_levels
+wait 500
+expect_audio 0.1

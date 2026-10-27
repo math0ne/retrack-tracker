@@ -176,6 +176,13 @@ private:
     void perfLabel(PerfFx fx, char* buf, size_t n) const;   // "Rpt 1/8" etc.
     void perfValue(PerfFx fx, char* buf, size_t n) const;
     int heldFx_ = -1;             // effect of the pad held last (or -1)
+    int perfKey_ = -1;            // performance mode: the F-key held, its effect's knob on the encoder (or -1)
+    // Performance mode on the mixer: F1..F8 play the eight effects on every track at once.
+    bool perfGlobal() const { return perf_ && mixer_; }
+    void perfAll(int fx, bool down);   // an effect key on the mixer: on / off (latched: Shift) on every track
+    bool perfKeys() const {       // performance mode on the home page: F1..F8 are the effects' knobs
+        return perf_ && !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_;
+    }
     uint8_t heldPads_[kTracks] = {};   // held effect pads per track
     float perfShown_ = 0.0f;
     // Loop editor (S.Edit): a big waveform of one track, start / end markers on

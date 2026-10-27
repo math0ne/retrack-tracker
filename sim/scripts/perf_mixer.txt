@@ -1,0 +1,53 @@
+# Performance mode on the mixer: Perform there keeps the mixer, and F1..F8
+# play the eight effects on every track at once (Shift + key: latched on all,
+# again: off); held, the encoder sets the effect's knob.
+wait 300
+opt all start 0
+tone_shape steady
+tone 330
+tap 0
+wait 2000
+tap 0
+tap 12
+wait 2000
+tap 12
+wait 300
+tone off
+press MASTER
+press PERFORMANCE
+wait 100
+shot ../build/sim/check/perf_mixer.png
+# F3 held: the low-pass on both tracks (the empty ones have nothing to cut).
+hold F3
+wait 100
+expect_perf 1 3 on
+expect_perf 2 3 on
+expect_perf 3 3 off
+enc 3
+wait 100
+shot ../build/sim/check/perf_mixer_held.png
+release F3
+wait 50
+expect_perf 1 3 off
+expect_perf 2 3 off
+expect_perfknob 3 44
+# Shift + F8: tape stop latched everywhere; again: off everywhere.
+hold SHIFT
+press F8
+release SHIFT
+wait 100
+expect_perf 1 8 on
+expect_perf 2 8 on
+hold SHIFT
+press F8
+release SHIFT
+wait 100
+expect_perf 1 8 off
+expect_perf 2 8 off
+# Without Perform the mixer keys pick strips again.
+press PERFORMANCE
+wait 100
+press F2
+press F3
+wait 50
+expect_perf 1 3 off

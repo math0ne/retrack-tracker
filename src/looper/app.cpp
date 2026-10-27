@@ -493,13 +493,16 @@ void App::onInput(const ot::InputEvent& ev) {
             f4Turned_ = true;
             return;
         }
-        if (perf_ && heldFx_ >= 0) {
-            // An effect pad is held: the encoder turns that effect's knob.
-            const PerfKnob& kn = kPerfKnobs[heldFx_];
+        // Performance: an effect's F-key held (its knob shows), or else an
+        // effect pad held (a quick tweak, its value in the cell): the encoder
+        // turns that effect's knob.
+        const int pfx = perfKey_ >= 0 ? perfKey_ : heldFx_;
+        if (perf_ && pfx >= 0) {
+            const PerfKnob& kn = kPerfKnobs[pfx];
             const int step = kn.list || shift_ ? 1 : 2;
-            int v = int(engine_.perfParam(PerfFx(heldFx_))) + ev.delta * step;
+            int v = int(engine_.perfParam(PerfFx(pfx))) + ev.delta * step;
             v = v < 0 ? 0 : (v > kn.max ? kn.max : v);
-            engine_.post(Engine::kPerfParam, 0, int16_t((heldFx_ << 8) | v));
+            engine_.post(Engine::kPerfParam, 0, int16_t((pfx << 8) | v));
             return;
         }
         if (fxPage_ >= 0) {
@@ -557,7 +560,9 @@ void App::onInput(const ot::InputEvent& ev) {
             perfToggleOff_ = perf_;
             perf_ = true;
             perfDownMs_ = ev.timeMs;
-            goHome();   // the effect cells sit on the lanes
+            // The effect cells sit on the lanes; on the mixer it stays, its keys
+            // playing the effects on every track.
+            if (!mixer_) goHome();
         } else if (perfToggleOff_ || ev.timeMs - perfDownMs_ >= 400) {
             closePerf();
         }
@@ -580,6 +585,16 @@ void App::onInput(const ot::InputEvent& ev) {
         } else if (down && ev.id <= b::F4) {
             grainSel_ = ev.id - b::F1;
         }
+        return;
+    }
+    if (perfGlobal() && b::isFKey(ev.id)) {   // the mixer in performance mode: F1..F8 on every track
+        perfAll(ev.id - b::F1, down);
+        return;
+    }
+    if (perfKeys() && b::isFKey(ev.id)) {   // performance mode: F1..F8 hold the effects' knobs
+        const int k = ev.id - b::F1;
+        if (down) perfKey_ = k;
+        else if (perfKey_ == k) perfKey_ = -1;
         return;
     }
     if (home && shift_ && b::isFKey(ev.id) && ev.id != b::F4 && !f5Held_ && !f6Held_ && !f7Held_) {
@@ -800,12 +815,32 @@ void App::stressPreset() {
     hint(selected_, "Stress: granular, filters, reverb + Clouds, click", p_.clock->millis());
 }
 
+void App::perfAll(int fx, bool down) {
+    // Held: the effect on every track with a loop, the encoder on its knob;
+    // Shift + key latches it everywhere (again: off everywhere).
+    const uint8_t bit = uint8_t(1u << fx);
+    if (down) {
+        perfKey_ = fx;
+        bool on = true;
+        if (shift_) {
+            on = (perfLatch_[0] & bit) == 0;   // the tracks latch together
+            for (uint8_t& l : perfLatch_) l = on ? uint8_t(l | bit) : uint8_t(l & ~bit);
+        }
+        for (int t = 0; t < kTracks; ++t)
+            if (engine_.view(t).len.load()) engine_.post(Engine::kPerf, uint8_t(t), int16_t((fx << 8) | (on ? 1 : 0)));
+    } else {
+        if (perfKey_ == fx) perfKey_ = -1;
+        for (int t = 0; t < kTracks; ++t)
+            if (!(perfLatch_[t] & bit) && !(heldPads_[t] & bit)) engine_.post(Engine::kPerf, uint8_t(t), int16_t(fx << 8));
+    }
+}
+
 void App::closePerf() {
     perf_ = false;
     perfToggleOff_ = false;
     for (uint8_t& l : perfLatch_) l = 0;
     for (uint8_t& h : heldPads_) h = 0;
-    heldFx_ = -1;
+    heldFx_ = perfKey_ = -1;
     engine_.post(Engine::kPerfOff);
 }
 
@@ -1247,7 +1282,7 @@ void App::render(uint32_t now) {
         if (loop) std::snprintf(title, sizeof title, "Tempo  %d%%", int(engine_.speed() * 100.0f + 0.5f));
         else std::snprintf(title, sizeof title, "Tempo");
         drawPopupKnob(title, v, frac, tempoShown_, kAmber, 0.0f);
-    } else if (perf_ && heldFx_ >= 0) {
+    } else if (perfKeys() && perfKey_ >= 0) {   // an effect's F-key held (pads alone show no knob)
         drawPerfKnob();
     }
     if (stats_) drawStats();
@@ -1494,7 +1529,19 @@ void App::drawFKeys() {
         const int x0 = i * kKeyW + 3, x1 = (i + 1) * kKeyW - 3, cx = i * kKeyW + kKeyW / 2;
         bool hot = false;
         uint32_t hotCol = 0;   // a lit key's own colour (0: the page's)
-        if (modeBar_) {
+        if (perfGlobal()) {   // the mixer in performance mode: the effects on every track; lit while on
+            static const char* const kPerfTitle[kPerfFxCount] = {"REPEAT",   "REPEAT",   "LOW-PASS", "HIGH-PASS",
+                                                                 "SWEEP DN", "SWEEP UP", "VIBRATO",  "TAPE STOP"};
+            title[i] = kPerfTitle[i];
+            perfValue(PerfFx(i), val[i], sizeof val[i]);
+            hot = perfKey_ == i || (perfLatch_[0] >> i & 1);
+        } else if (perfKeys()) {   // performance mode: the eight effects, their settings; lit while held
+            static const char* const kPerfTitle[kPerfFxCount] = {"REPEAT",   "REPEAT",   "LOW-PASS", "HIGH-PASS",
+                                                                 "SWEEP DN", "SWEEP UP", "VIBRATO",  "TAPE STOP"};
+            title[i] = kPerfTitle[i];
+            perfValue(PerfFx(i), val[i], sizeof val[i]);
+            hot = perfKey_ == i;
+        } else if (modeBar_) {
             const int m = kModeBarKeys[modePage_ & 1][i];
             title[i] = "";
             std::snprintf(val[i], sizeof val[i], "%s",
@@ -1681,6 +1728,14 @@ void App::drawFKeys() {
                     break;
                 default: title[i] = "HOME"; std::snprintf(val[i], sizeof val[i], "Loops"); break;
             }
+        } else if (mixer_ && shift_) {   // Shift: F1..F4 mute a track, lit while muted
+            static const char* const kNames[kTracks] = {"Track 1", "Track 2", "Track 3", "Track 4"};
+            title[i] = i < kTracks ? "MUTE" : (i == 7 ? "HOME" : "");
+            std::snprintf(val[i], sizeof val[i], "%s", i < kTracks ? kNames[i] : (i == 7 ? "Loops" : ""));
+            if (i < kTracks && engine_.view(i).muted.load()) {
+                hot = true;
+                hotCol = kMute;
+            }
         } else if (mixer_) {   // F1..F7 pick a strip, F8 home
             static const char* const kTitles[8] = {"TRACK", "TRACK", "TRACK", "TRACK", "FX 1", "FX 2", "MASTER", "HOME"};
             static const char* const kNames[8] = {"Track 1", "Track 2", "Track 3", "Track 4", "", "", "Level", "Loops"};
@@ -1753,7 +1808,7 @@ void App::drawFKeys() {
         if (config_ || file_ || inPage_) hc = kAmber;
         else if (edit_) hc = (i == 4 || i == 5) ? kAmber : kTrackColor[editTrack_];
         else if (fxPage_ >= 0) hc = stripColor(4 + fxPage_);
-        else if (mixer_ && !modeBar_) hc = stripColor(i);
+        else if (mixer_ && !modeBar_ && !perfGlobal()) hc = stripColor(i);
         if (hot && hotCol) hc = hotCol;
         // A lit key with no state colour of its own (the mode, the knob, the
         // chapter picked) shows the selection; states (recording, playing,
@@ -1773,8 +1828,10 @@ void App::drawFKeys() {
             else if (inPage_) tcol = i < 5 ? scale(hc, 0.9f) : kDim;
             else if (edit_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
             else if (fxPage_ >= 0) tcol = i < 6 ? scale(hc, 0.9f) : kDim;
+            else if (perfGlobal()) tcol = kSoft;   // the eight effects alike
             else if (mixer_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
             else if (manual_) tcol = kDim;   // the chapter keys alike
+            else if (perfKeys()) tcol = scale(tc, 0.9f);   // the eight effects alike
             else if (!modeBar_ && i == 3) tcol = engine_.opt(OptParam::kMetronome) ? kAmber : kDim;   // F4 is global
             else if (!modeBar_ && (i < 5 || i == 6)) tcol = scale(tc, 0.9f);
             color(tcol);
@@ -1787,7 +1844,7 @@ void App::drawFKeys() {
     // Home page: the input level inside the INPUT cell, the track's level inside VOLUME
     // (not under the Shift layer, where those keys do other things).
     if (!modeBar_ && !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !shiftLayer() &&
-        !grainPanel()) {
+        !grainPanel() && !perfKeys()) {
         const int x0 = 5 * kKeyW + 10, x1 = 6 * kKeyW - 10;
         for (int c = 0; c < 2; ++c) {
             const float m = inMeter_[c];
@@ -1851,6 +1908,11 @@ void App::mixerKey(uint8_t id) {
         goHome();
         return;
     }
+    if (shift_ && b::isFKey(id)) {   // Shift: F1..F4 mute / unmute a track (the strip stays)
+        const int k = id - b::F1;
+        if (k < kTracks) engine_.post(Engine::kMute, uint8_t(k));
+        return;
+    }
     if (b::isFKey(id)) strip_ = id - b::F1;
     else if (id == b::Left && strip_ > 0) --strip_;
     else if (id == b::Right && strip_ < kStrips - 1) ++strip_;
@@ -1903,13 +1965,28 @@ void App::drawMixer() {
     for (int s = 0; s < kStrips; ++s) drawStrip(s);
     // The eighth column, over F8: how to drive the page.
     const int cx = 7 * kKeyW + kKeyW / 2;
+    if (perfGlobal()) {   // Perform: the keys play the effects on every track
+        color(kSel);
+        text(cx, 182, kFontSmall, Disp::kOptCenter, "Perform:");
+        text(cx, 200, kFontSmall, Disp::kOptCenter, "all tracks");
+        color(kHelp);
+        text(cx, 236, kFontSmall, Disp::kOptCenter, "Hold F1-F8");
+        text(cx, 254, kFontSmall, Disp::kOptCenter, "+ encoder:");
+        text(cx, 272, kFontSmall, Disp::kOptCenter, "its knob");
+        text(cx, 302, kFontSmall, Disp::kOptCenter, "Shift + key:");
+        text(cx, 320, kFontSmall, Disp::kOptCenter, "latch");
+        text(cx, 350, kFontSmall, Disp::kOptCenter, "Left/Right");
+        text(cx, 368, kFontSmall, Disp::kOptCenter, "strip");
+        return;
+    }
     color(kHelp);
     text(cx, 200, kFontSmall, Disp::kOptCenter, "Up/Down");
     text(cx, 218, kFontSmall, Disp::kOptCenter, "row");
     text(cx, 248, kFontSmall, Disp::kOptCenter, "Encoder");
     text(cx, 266, kFontSmall, Disp::kOptCenter, "value");
     text(cx, 296, kFontSmall, Disp::kOptCenter, "Shift");
-    text(cx, 314, kFontSmall, Disp::kOptCenter, "fine");
+    text(cx, 314, kFontSmall, Disp::kOptCenter, "fine;");
+    text(cx, 332, kFontSmall, Disp::kOptCenter, "F1-F4 mute");
 }
 
 void App::drawStrip(int s) {
@@ -1921,8 +1998,9 @@ void App::drawStrip(int s) {
     const bool emptyTrack = s < kTracks && TrackState(engine_.view(s).state.load()) == TrackState::kEmpty;
     char buf[16];
 
-    color(sel ? kSel : (emptyTrack ? kFaint : kDim));
-    text(cx, 23, kFontSmall, Disp::kOptCenter, kStripName[s]);
+    const bool muted = s < kTracks && engine_.view(s).muted.load();
+    color(sel ? kSel : (muted ? kMute : (emptyTrack ? kFaint : kDim)));
+    text(cx, 23, kFontSmall, Disp::kOptCenter, muted ? "Muted" : kStripName[s]);
 
     // Two small parameters: label, value, bar. Track sends use their slot's colour.
     for (int row = 0; row < 2; ++row) {
@@ -3183,8 +3261,8 @@ void App::perfValue(PerfFx fx, char* buf, size_t n) const {
 }
 
 void App::drawPerfKnob() {
-    const PerfFx fx = PerfFx(heldFx_);
-    const PerfKnob& kn = kPerfKnobs[heldFx_];
+    const PerfFx fx = PerfFx(perfKey_);
+    const PerfKnob& kn = kPerfKnobs[perfKey_];
     char title[24], val[16];
     perfLabel(fx, title, sizeof title);
     perfValue(fx, val, sizeof val);

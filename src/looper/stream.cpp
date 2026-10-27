@@ -438,7 +438,11 @@ bool Streamer::serviceTrack(int t) {
         if (s > len) s = len;
     }
     uint32_t rS = sv.rStart.load(std::memory_order_relaxed), rE = sv.rEnd.load(std::memory_order_relaxed);
-    if (!pend_[t] && (s < rS || s > rE)) {   // a jump or the loop's wrap: start over at s
+    // A jump or the loop's wrap: start over at s. Not while the ring still holds
+    // the read position (a beat repeat's slice across a block line moves s a
+    // block back and forth: the ring keeps it).
+    const bool held = pos >= rS && pos < rE && rE > rS;
+    if (!pend_[t] && (s < rS || s > rE) && !held) {
         sv.rEnd.store(rS, std::memory_order_release);   // empty first: an overdub stops writing it
         pend_[t] = true;
         pendS_[t] = rS;
