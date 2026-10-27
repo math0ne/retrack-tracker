@@ -1504,10 +1504,15 @@ void App::drawFKeys() {
         else if (mixer_ && !modeBar_) hc = stripColor(i);
         else if (options_ && !modeBar_) hc = i < kTracks ? kTrackColor[i] : (i == 4 ? kAmber : kDim);
         if (hot && hotCol) hc = hotCol;
-        if (hot) panel(x0, kKeyY0, x1, kKeyY1, 6, hc);   // only lit keys get a cell; the rest are bare labels
+        // No cells: a lit key (recording, playing, muted, the picked mode...)
+        // has bright text and a bar under it in its lit colour.
+        if (hot) {
+            color(hc);
+            fillRect(x0 + 10, kKeyY1, x1 - 10, kKeyY1 + 3, 1);
+        }
         if (title[i][0]) {
             uint32_t tcol = kDim;
-            if (hot) tcol = kBg;
+            if (hot) tcol = kInk;
             else if (file_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
             else if (inPage_) tcol = i < 5 ? scale(hc, 0.9f) : kDim;
             else if (edit_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
@@ -1520,11 +1525,13 @@ void App::drawFKeys() {
             text(cx, kKeyY0 + 8, kFontSmall, Disp::kOptCenter, title[i]);
         }
         const bool bar = modeBar_ || (fxPage_ >= 0 && fxBar_);   // one-line labels
-        color(hot ? kBg : kInk);
+        color(hot ? 0xFFFFFF : kInk);
         text(cx, bar ? (kKeyY0 + kKeyY1) / 2 + 4 : kKeyY0 + 26, kFontSmall, Disp::kOptCenter, val[i]);
     }
     // Home page: the input level inside the INPUT cell, the track's level inside VOLUME
-    if (!modeBar_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_) {
+    // (not under the Shift layer, where those keys do other things).
+    const bool shiftLayer = shift_ && !f5Held_ && !f6Held_ && !f7Held_;
+    if (!modeBar_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !shiftLayer) {
         const int x0 = 5 * kKeyW + 10, x1 = 6 * kKeyW - 10;
         for (int c = 0; c < 2; ++c) {
             const float m = inMeter_[c];
@@ -1532,9 +1539,8 @@ void App::drawFKeys() {
             color(m > 0.9f ? kRed : (m > 0.6f ? kAmber : 0x3DDC97));
             hline(x0, x0 + int((x1 - x0) * m), kKeyY1 + c * 2, 16);
         }
-        // The selected track's volume inside the VOLUME cell, its output level over it
-        // (not under the Shift layer, where F7 is DOUBLE).
-        const int vx0 = 6 * kKeyW + 10, vx1 = shift_ ? vx0 : 7 * kKeyW - 10, vy = kKeyY1 + 1;   // under the value, with room
+        // The selected track's volume inside the VOLUME cell, its output level over it.
+        const int vx0 = 6 * kKeyW + 10, vx1 = 7 * kKeyW - 10, vy = kKeyY1 + 1;   // under the value, with room
         const uint8_t vol = engine_.volume(selected_);
         color(kFaint);
         hline(vx0, vx1, vy, 16);
