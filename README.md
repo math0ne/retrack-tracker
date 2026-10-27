@@ -40,7 +40,7 @@ way [SIDTracker](https://github.com/sandlbn/SidTracker) does it. See
 
 Each track records up to about 21.5 s of stereo (43 s mono) in the Tracker's
 16 MB SDRAM, and with an SD card up to **5 minutes** (10 mono): a longer take
-goes on to the card (see Long takes below). The first take sets the bar; every later take, every playback
+goes on to the card (see [Long takes](docs/REFERENCE.md#long-takes-on-the-sd-card)). The first take sets the bar; every later take, every playback
 mode and every effect follows the same bar clock, so nothing drifts. Takes
 start with a count-in (or at once, or when sound arrives), stop on the bar
 line, and blend their end into their start so the loop point does not click.
@@ -57,19 +57,6 @@ the selected track and show its state.
 A take in progress, a pulsing dot by the lane's tag, the REC key showing what a press does:
 
 ![Recording the third track](docs/img/recording.png)
-
-### Long takes on the SD card: up to 5 minutes a track
-
-With a card in, a take is no longer limited by RAM: past about 19.5 s it
-keeps recording onto the card, up to 5 minutes stereo (10 mono) per track.
-Nothing changes in how it plays: overdub, replace, undo / redo, every mode,
-tempo changes, jumps, the effects, the editor, saving and loading all work
-on it. Its lane says **card**. Below, track 1 is a 24 s take with the chord
-stabs overdubbed over its first half (undo is ready on F8), next to two
-ordinary 4 s loops. How it works is under
-[How the SD card streaming works](docs/REFERENCE.md#how-the-sd-card-streaming-works).
-
-![A 24 s take on the card next to two ordinary loops](docs/img/long.png)
 
 ### Playback modes
 

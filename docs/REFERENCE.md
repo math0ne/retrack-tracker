@@ -266,6 +266,11 @@ clears it. The bindings and the clock setting are saved with the settings.
 
 ## Long takes (on the SD card)
 
+![A 24 s take on the card next to two ordinary loops](img/long.png)
+
+Above, track 1 is a 24 s take with the chord stabs overdubbed over its first
+half (undo is ready on F8), next to two ordinary 4 s loops.
+
 With a card in, a take that outgrows its RAM (past about 19.5 s stereo, 39 s
 mono) keeps going onto the card, up to 5 minutes stereo or 10 mono per track.
 Every take is written to the card as it records; one that grows past its RAM
