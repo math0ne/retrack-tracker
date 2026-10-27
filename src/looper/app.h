@@ -12,8 +12,11 @@
 //                overdub feedback, and the metronome (on, click, tempo, beats / bar)
 //   F7 Volume    the selected track's volume (and level); hold + encoder: a knob
 //   F8 Undo      undo the last overdub / replace; after an undo it is Redo
-//   Shift + F1..F4 (home): Replace, Play / stop all, Solo, Click (hold + encoder).
-//                The labels change while Shift is held.
+//   Shift + F1..F8 (home): Replace, Play / stop all, Solo, Click (hold + encoder),
+//                Stop (tap: free / bar / beat; hold + encoder: length), Start
+//                (tap: now / count-in / on sound; hold + encoder: threshold),
+//                After (play / overdub / stop), Tempo (Tape / Stretch), for
+//                the selected track. The labels change while Shift is held.
 //   Encoder push tap tempo (three taps or more; before a loop the bar, after it the tape speed)
 //   The lanes are waveforms only; REC, PLAY and MUTE light up for the selected
 //   track's state, and a corner tag on each lane gives its number and length.
@@ -29,6 +32,7 @@
 //   Shift+Help   stress preset: the heaviest audio load, for measuring on the device
 //   Note         home: the loop lanes, from any page
 //   Song         the manual
+//   Instr        the loop editor (selected track)
 //   Master       mixer page on/off
 //   Instr        track options page on/off;  Song: the same page at the tempo column
 //   FX1 / FX2    that effect slot's page on/off
@@ -139,13 +143,6 @@ private:
     void drawStrip(int s);
 
     // track options page
-    static constexpr int kOptCols = 5;    // 4 tracks, tempo
-    static constexpr int kOptRows = 6;   // the tempo column has 5
-    bool optParam(int col, int row, OptParam& p, int& track) const;
-    void optKey(uint8_t id);
-    void optEncoder(int delta);
-    void drawOptions();
-    void drawOptColumn(int c);
     void drawGrid(int t, int wx, int wy, uint32_t span, int w = kWaveW, int h = kWaveH);
 
     // FX page
@@ -211,6 +208,14 @@ private:
     void shiftFKey(int key);
     void undoDub(bool redo);          // F8 / Insert (Shift + Insert: redo)
     int solo_ = -1;                   // the soloed track (Shift + F3), -1 none
+    // Shift + F5 / F6 are tap / hold keys: tap cycles Stop / Start, hold +
+    // encoder sets the length / the sound threshold.
+    int shiftHold_ = -1;              // the Shift-layer key held (4, 5), -1 none
+    bool shiftTurned_ = false;
+    uint32_t shiftDownMs_ = 0;
+    float lenShown_ = 0.0f, thrShown_ = 0.5f;
+    void shiftKeyUp(uint32_t ms);
+    bool shiftLayer() const;          // the Shift layer is on the F-keys
     uint32_t lastPos_[kTracks] = {};  // the playhead trail: last frame's read position
     int8_t pingDir_[kTracks] = {1, 1, 1, 1};   // ping-pong: the way it is going
     // F7 on the home page: hold + encoder = the selected track's volume
@@ -248,8 +253,6 @@ private:
     void grainText(int knob, char* buf, size_t n) const;
     bool mixer_ = false;         // mixer page shown
     int strip_ = 0, row_ = 2;    // mixer selection
-    bool options_ = false;       // track options page shown
-    int optCol_ = 0, optRow_ = 0;
     // performance mode
     void closePerf();
     void drawPerfCells(int t, int wx, int wy);

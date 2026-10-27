@@ -69,7 +69,7 @@ while it is muted.
 | F2 PLAY | Stop: the track goes silent and back to its start. Play: it starts again from its start on the next bar line (press again to cancel) |
 | F3 MUTE | Mute on/off |
 | F4 TEMPO | Tap: metronome on/off (the label is bright while it is on). Hold + encoder: tempo, 1 bpm a step (a knob shows while held). Shift + hold + encoder: click level. Delete clears tracks |
-| F5 MODE | Tap: the mode bar, two pages of playback modes; the key under one picks it, F5 in the bar turns the page (it opens on the page with the track's mode). Any other key closes it. Hold on a Granular track: its grain knobs (F1–F4 pick one, the encoder turns it) |
+| F5 MODE | Tap: the mode bar, two pages of playback modes; the key under one picks it, F8 in the bar turns the page (it opens on the page with the track's mode). Any other key closes it. Hold on a Granular track: its grain knobs (F1–F4 pick one, the encoder turns it) |
 | F6 INPUT | Tap: the Input page (the cell shows the source and the input level). Hold + encoder: input gain (a knob with the input level shows while held) |
 | F7 VOLUME | The selected track's volume, with its output level in the cell. Hold + encoder: a volume knob (the encoder alone sets it too) |
 | F8 UNDO | Undo the last overdub or replace; after an undo it reads REDO and brings it back |
@@ -96,7 +96,8 @@ encoder sets it (Shift: fine steps); F6 or F8 closes it.
 Quick keys on the page: F1 next source, F2 monitor on/off, F3 next channel
 mode, F4 metronome on/off, F5 feedback 100 / 90 / 75 / 50 %.
 
-**Shift layer.** Holding Shift on the home page relabels F1–F4:
+**Shift layer.** Holding Shift on the home page relabels the F-keys; F5–F8
+are the selected track's options (see Track options below):
 
 | Shift + | Action (selected track) |
 |---|---|
@@ -104,6 +105,10 @@ mode, F4 metronome on/off, F5 feedback 100 / 90 / 75 / 50 %.
 | F2 ALL | Play / stop all (the transport, as Play) |
 | F3 SOLO | Mute every other track; again: everything back |
 | F4 CLICK | Hold + encoder: click level |
+| F5 STOP | Tap: Free / On bar / On beat. Hold + encoder: a fixed length in whole bars, or off |
+| F6 START | Tap: Now / Count-in / On sound. Hold + encoder: the sound threshold (with the input level) |
+| F7 AFTER | Tap: Play / Overdub / Stop after the take |
+| F8 TEMPO | Tap: Tape / Stretch |
 
 | Other control | Action |
 |---|---|
@@ -121,9 +126,8 @@ mode, F4 metronome on/off, F5 feedback 100 / 90 / 75 / 50 %.
 | Encoder | Selected track volume; Shift + encoder = input gain |
 | Note | Home: the loop lanes, from any page |
 | Master | Mixer page on / off |
-| Instr | Track options page on / off |
+| Instr | Loop editor for the selected track |
 | FX1 / FX2 | That effect slot's page on / off |
-| S.Edit | Loop editor for the selected track |
 | Config | Settings page (F1 firmware, F2 MIDI) |
 | File | Projects (save / load) and WAV export |
 | Shift + Config | Show / hide the CPU, frame-rate and display-list readout (Help too, if the panel has one) |
@@ -182,7 +186,7 @@ keep going.
   under an overdub is kept at the end of the track's own memory, so undo works
   for loops up to half the track's memory (about 11 s stereo, 22 s mono);
   trims, cuts and erases clear it.
-- **Stop fade** (options page, Tempo column, last row): Stop fades the track
+- **Stop fade** (Input page, Tempo card, last row): Stop fades the track
   over 1 beat, 1 bar or 2 bars, then stops it; a second press stops at once.
 
 ### MIDI
@@ -232,9 +236,9 @@ position instead of jumping.
 | Granular | Clouds grains read around the playhead, so the loop keeps its time; page 2 | no |
 
 Page 1 of the mode bar, the playback modes: F1 Forward, F2 Reverse,
-F3 Ping-pong, F4 Half speed, F5 More, F6 Double, F7 Half rev, F8 Double rev.
+F3 Ping-pong, F4 Half speed, F5 Double, F6 Half rev, F7 Double rev, F8 More.
 Page 2, the grain modes: F1 Half time, F2 Octave up, F3 Octave dn,
-F4 Granular, F5 Back. The playhead trails a fading tail on the side it came
+F4 Granular, F8 Back. The playhead trails a fading tail on the side it came
 from, as long as its speed: backwards modes show it on the right, half speed
 short, double long.
 
@@ -251,25 +255,29 @@ shows a hint instead.
 
 ### Track options and tempo
 
-The **Instr** key opens the track options page: a column per track over
-F1–F4 and the tempo column over F5 (same navigation as the mixer, F8 back).
+The track options are on the home page's Shift layer and act on the selected
+track: **Shift + F5** Stop (hold + encoder: Length), **Shift + F6** Start
+(hold + encoder: the threshold), **Shift + F7** After rec, **Shift + F8**
+Tempo. The F-key labels show each one's value while Shift is held. Channels
+are on the Input page; the tempo settings below are on its Tempo card.
 
 | Option (per track) | Values |
 |---|---|
 | Stop | **Free**: the take ends when you press. **On bar** / **On beat**: it records on to the next bar / beat line (a press less than an eighth of a unit late stops on the line it just passed). Default On bar. |
-| Length | Off, or a fixed length: recording stops by itself. Encoder in bars, Shift + encoder in beats. |
+| Length | Off, or a fixed length in whole bars (up to 64 beats): recording stops by itself. A fixed length shows in place of the Stop value. |
 | Start | **Count-in** (default): one bar of click, then the take starts on the bar line; with loops running it waits for the next bar line at least half a bar away. **Now**: at once. **On sound**: the track arms and starts when the input crosses the threshold, keeping the 6 ms before it so the attack is not cut; with no loop yet the bar clock starts there. The armed lane shows the input level against the threshold. Press again to cancel. |
-| Input | Stereo, Mono L, Mono R, Mono sum. Mono uses half the memory, so a track holds about 44 s. Only while the track is empty. |
+| Channels (Input page) | Stereo, Mono L, Mono R, Mono sum. Mono uses half the memory, so a track holds about 44 s. Only while the track is empty. |
 | After rec | Play, Overdub or Stop when the take ends. |
 | Tempo | **Tape** (default): a tempo change speeds the track up or down and its pitch follows. **Stretch**: it keeps its pitch, played through two cross-faded 46 ms grains while the tempo is not 100 % (at 100 % it plays as recorded). Stretch tracks do not overdub off 100 %; a take recorded on one off 100 % is still resampled like tape. |
 
-| Tempo column | |
+| Tempo card (Input page) | |
 |---|---|
 | Tempo | 40–240 bpm (default 120). It sets the bar until there is a loop. After that it is tape-style varispeed: 50–200 % of the loop's own tempo, every loop speeds up or slows down together and the pitch follows (or, on a track set to Stretch, stays). The metronome, count-ins, beat repeats and delay times follow it; new takes are resampled onto the loops' timeline, and only Forward Tape tracks overdub off 100 %. Clearing every track goes back to 100 %. Projects save it. |
 | Beats / bar | 1–12 (default 4): the click, on-beat stops and the beat lines. |
 | Metronome | Click on every beat while the transport runs (the count-in always clicks). Also Shift + Play. |
 | Click | Click level. |
-| Threshold | Input level that starts an "on sound" take, −60 … 0 dB (default −30 dB). |
+| Threshold (Shift + hold F6) | Input level that starts an "on sound" take, −60 … 0 dB (default −30 dB). |
+| Stop fade | Off, 1 beat, 1 bar or 2 bars. |
 
 A free first take still sets the bar to its own length, as before; an on-bar,
 on-beat or fixed-length first take keeps the tempo's bar. Every waveform shows
@@ -313,7 +321,7 @@ the running effects.
 
 ### Loop editor
 
-**S.Edit** opens a big waveform of the selected track (Up/Down for another)
+**Instr** opens a big waveform of the selected track (Up/Down for another)
 with a start and an end marker. The selection is bright, the rest dim; the bar
 and beat lines are drawn over it, and the markers read bar.beat.sixteenth from
 the loop start.

@@ -37,7 +37,11 @@ Things the simulator could not check, because it maps them its own way:
 
 - [ ] Loop points: a sustained sound looped over a bar has no click at the
       loop point; a take started mid-bar does not click at its start.
-- [ ] Undo: overdub, Shift + F5, the overdub is gone; Shift + F6 brings it back.
+- [ ] Undo: overdub, F8, the overdub is gone; F8 again brings it back.
+- [ ] Shift layer: hold Shift, tap F5 / F6 / F7 / F8 and the labels step
+      (Stop, Start, After, Tempo); Shift + hold F5 + encoder sets a length in
+      bars, Shift + hold F6 + encoder the threshold (the popup shows the input).
+- [ ] Instr opens the loop editor; Stop fade is on the Input page's Tempo card.
 
 ## MIDI (if you have something to plug in)
 

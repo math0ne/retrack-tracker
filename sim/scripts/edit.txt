@@ -18,7 +18,7 @@ tap 0
 expect_len 1 2.0
 
 # Snap is a beat (0.5 s at 120 bpm). End marker two beats back: keep the first second.
-press SAMPLEEDITOR
+press INSTR
 press F2
 enc -2
 wait 100

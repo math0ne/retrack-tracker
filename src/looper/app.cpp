@@ -184,7 +184,7 @@ void App::loop() {
                 waveDrawnMs_[editTrack_] = now;
                 waveValid_[editTrack_] = false;   // the lane redraws when it is back on screen
             }
-        } else if (!mixer_ && !options_ && fxPage_ < 0 && !config_ && !file_ && !inPage_ && !manual_) {
+        } else if (!mixer_ && fxPage_ < 0 && !config_ && !file_ && !inPage_ && !manual_) {
             updateWaves(now);   // lanes only when they are on screen
         }
         render(now);
@@ -244,13 +244,13 @@ void App::record(int t, bool replace) {
 }
 
 namespace {
-// The mode bar: two pages of the eight keys, F5 turns the page (-1), -2 = blank.
+// The mode bar: two pages of the eight keys, F8 turns the page (-1), -2 = blank.
 constexpr int kModeMore = -1, kModeNone = -2;
 constexpr int kModeBarKeys[2][8] = {
     {int(PlayMode::kForward), int(PlayMode::kReverse), int(PlayMode::kPingPong), int(PlayMode::kHalfSpeed),
-     kModeMore, int(PlayMode::kDoubleSpeed), int(PlayMode::kHalfReverse), int(PlayMode::kDoubleReverse)},
+     int(PlayMode::kDoubleSpeed), int(PlayMode::kHalfReverse), int(PlayMode::kDoubleReverse), kModeMore},
     {int(PlayMode::kStretch), int(PlayMode::kOctaveUp), int(PlayMode::kOctaveDown), int(PlayMode::kGranular),
-     kModeMore, kModeNone, kModeNone, kModeNone},
+     kModeNone, kModeNone, kModeNone, kModeMore},
 };
 bool onModePage2(PlayMode m) {
     for (int k : kModeBarKeys[1])
@@ -261,7 +261,7 @@ bool onModePage2(PlayMode m) {
 
 void App::onFKey(int key) {
     const uint8_t t = uint8_t(selected_);
-    if (modeBar_) {   // the key under a mode label picks it; F5 turns the page
+    if (modeBar_) {   // the key under a mode label picks it; F8 turns the page
         const int m = kModeBarKeys[modePage_ & 1][key & 7];
         if (m == kModeMore) {
             modePage_ ^= 1;
@@ -296,9 +296,28 @@ void App::undoDub(bool redo) {
     hint(selected_, redo ? "Redo" : "Undo: the overdub is gone (redo brings it back)", now);
 }
 
+bool App::shiftLayer() const {
+    return (shift_ || shiftHold_ >= 0) && !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ &&
+           !manual_ && !modeBar_ && !f5Held_ && !f6Held_ && !f7Held_;
+}
+
+void App::shiftKeyUp(uint32_t ms) {
+    const int k = shiftHold_;
+    shiftHold_ = -1;
+    if (!shiftTurned_ && ms - shiftDownMs_ < kTapMs) shiftFKey(k);   // a tap
+}
+
 void App::shiftFKey(int key) {
     const uint32_t now = p_.clock->millis();
+    auto cycle = [&](OptParam p, int n) {   // the selected track's option, to its next value
+        const int v = (int(engine_.opt(p, selected_)) + 1) % n;
+        engine_.post(Engine::kOpt, uint8_t(selected_), int16_t((int(p) << 8) | v));
+    };
     switch (key) {
+        case 4: cycle(OptParam::kStop, 3); break;     // free / on bar / on beat
+        case 5: cycle(OptParam::kStart, 3); break;    // now / count-in / on sound
+        case 6: cycle(OptParam::kAfter, 3); break;    // play / overdub / stop
+        case 7: cycle(OptParam::kStretch, 2); break;  // tape / stretch
         case 0: record(selected_); break;   // Shift: replace
         case 1:   // every track from bar 1, or all stopped (the transport)
             engine_.post(Engine::kTransport);
@@ -363,6 +382,23 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     if (ev.type == E::kEncoder) {
+        if (shiftHold_ == 4) {   // Shift + F5 held: the track's fixed length, whole bars (0: off)
+            const int bar = engine_.beatsPerBar() ? engine_.beatsPerBar() : 4;
+            int v = engine_.opt(OptParam::kLength, selected_);
+            for (int i = 0; i < (ev.delta < 0 ? -ev.delta : ev.delta); ++i)
+                v = ev.delta > 0 ? (v / bar + 1) * bar : ((v + bar - 1) / bar - 1) * bar;
+            v = v < 0 ? 0 : (v > kMaxLenBeats ? kMaxLenBeats : v);
+            engine_.post(Engine::kOpt, uint8_t(selected_), int16_t((int(OptParam::kLength) << 8) | v));
+            shiftTurned_ = true;
+            return;
+        }
+        if (shiftHold_ == 5) {   // Shift + F6 held: the sound threshold (on-sound starts)
+            int v = int(engine_.opt(OptParam::kThreshold)) + ev.delta * 2;
+            v = v < 0 ? 0 : (v > 100 ? 100 : v);
+            engine_.post(Engine::kOpt, 0, int16_t((int(OptParam::kThreshold) << 8) | v));
+            shiftTurned_ = true;
+            return;
+        }
         if (grainPanel()) {   // F5 held on a Granular track: the selected grain knob
             const GrainKnob& gk = kGrainKnobInfo[grainSel_];
             int v = int(engine_.grainParam(selected_, grainSel_)) + ev.delta * (grainSel_ == 3 || shift_ ? 1 : 2);
@@ -432,10 +468,6 @@ void App::onInput(const ot::InputEvent& ev) {
             mixerEncoder(ev.delta);
             return;
         }
-        if (options_) {
-            optEncoder(ev.delta);
-            return;
-        }
         if (shift_) {
             int g = int(cfg_.gain) + ev.delta * 2;
             cfg_.gain = uint8_t(g < 0 ? 0 : (g > 100 ? 100 : g));
@@ -473,9 +505,22 @@ void App::onInput(const ot::InputEvent& ev) {
         }
         return;
     }
-    const bool home = !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !modeBar_;
+    const bool home = !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !modeBar_;
+    if (shiftHold_ >= 0 && ev.id == b::F1 + shiftHold_) {   // a held Shift-layer key, Shift or not
+        if (!down) shiftKeyUp(ev.timeMs);
+        return;
+    }
     if (home && shift_ && b::isFKey(ev.id) && ev.id != b::F4 && !f5Held_ && !f6Held_ && !f7Held_) {
-        if (down) shiftFKey(ev.id - b::F1);
+        if (down) {
+            const int k = ev.id - b::F1;
+            if (k == 4 || k == 5) {   // Stop / Start: a tap cycles, a hold + encoder sets
+                shiftHold_ = k;
+                shiftTurned_ = false;
+                shiftDownMs_ = ev.timeMs;
+            } else {
+                shiftFKey(k);
+            }
+        }
         return;
     }
     if (ev.id == b::EncPush) {   // tap tempo, on any page
@@ -546,11 +591,10 @@ void App::onInput(const ot::InputEvent& ev) {
         goHome();
         return;
     }
-    if (ev.id == b::Master || ev.id == b::Instr || ev.id == b::Song) {   // page keys toggle their page
-        const bool wasMixer = mixer_, wasOptions = options_, wasManual = manual_;
+    if (ev.id == b::Master || ev.id == b::Song) {   // page keys toggle their page
+        const bool wasMixer = mixer_, wasManual = manual_;
         goHome();
         if (ev.id == b::Master) mixer_ = !wasMixer;
-        else if (ev.id == b::Instr) options_ = !wasOptions;
         else manual_ = !wasManual;   // Song: the manual (where it was left)
         return;
     }
@@ -576,7 +620,7 @@ void App::onInput(const ot::InputEvent& ev) {
         }
         return;
     }
-    if (ev.id == b::SampleEditor) {   // S.Edit: the loop editor for the selected track
+    if (ev.id == b::Instr) {   // Instr: the loop editor for the selected track
         const bool was = edit_;
         goHome();
         if (!was) {
@@ -623,10 +667,6 @@ void App::onInput(const ot::InputEvent& ev) {
     }
     if (mixer_ && nav) {
         mixerKey(ev.id);
-        return;
-    }
-    if (options_ && nav) {
-        optKey(ev.id);
         return;
     }
     if (b::isFKey(ev.id)) {
@@ -701,7 +741,7 @@ void App::closePerf() {
 }
 
 void App::goHome() {
-    mixer_ = options_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = manual_ = false;
+    mixer_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = manual_ = false;
     midi_.learn(-1);
     fxPage_ = -1;
     fxBar_ = modeBar_ = false;
@@ -1013,7 +1053,7 @@ void App::render(uint32_t now) {
     words_ = 0;
     d_->dlStart();
     // The lanes sit on plain black; the other pages on a top-lit gradient.
-    const bool lanes = fxPage_ < 0 && !edit_ && !config_ && !mixer_ && !options_ && !file_ && !inPage_ && !manual_;
+    const bool lanes = fxPage_ < 0 && !edit_ && !config_ && !mixer_ && !file_ && !inPage_ && !manual_;
     d_->clearColorRGB(lanes ? 0 : r8(kBg), lanes ? 0 : g8(kBg), lanes ? 0 : b8(kBg));
     d_->clear(true, true, true);
     if (!lanes) d_->gradient(0, 0, 0x202020, 0, 479, 0x080808);   // light falls from the top
@@ -1026,12 +1066,26 @@ void App::render(uint32_t now) {
     else if (inPage_) drawInput();
     else if (manual_) drawManual();
     else if (mixer_) drawMixer();
-    else if (options_) drawOptions();
     else
         for (int t = 0; t < kTracks; ++t) drawLane(t, now);
     drawFKeys();
     // Pop-up knobs: F7 held (input gain), an effect pad held in performance mode.
-    if (grainPanel()) {
+    const bool shiftPop = shiftHold_ >= 0 && (shiftTurned_ || p_.clock->millis() - shiftDownMs_ >= 250);
+    if (shiftPop && shiftHold_ == 4) {   // Shift + F5 held: the length
+        char v[16], ttl[32];
+        const int len = engine_.opt(OptParam::kLength, selected_);
+        const int bar = engine_.beatsPerBar() ? engine_.beatsPerBar() : 4;
+        if (!len) std::snprintf(v, sizeof v, "Off");
+        else if (len % bar == 0) std::snprintf(v, sizeof v, "%d bar%s", len / bar, len == bar ? "" : "s");
+        else std::snprintf(v, sizeof v, "%d beats", len);
+        std::snprintf(ttl, sizeof ttl, "Track %d length", selected_ + 1);
+        drawPopupKnob(ttl, v, float(len) / float(kMaxLenBeats), lenShown_, kTrackColor[selected_], 0.0f);
+    } else if (shiftPop && shiftHold_ == 5) {   // Shift + F6 held: the threshold, with the input level
+        char v[16];
+        std::snprintf(v, sizeof v, "%d dB", int(std::lround(thresholdDb(engine_.opt(OptParam::kThreshold)))));
+        drawPopupKnob("Sound threshold", v, float(engine_.opt(OptParam::kThreshold)) / 100.0f, thrShown_, kAmber,
+                      inMeter_[0] > inMeter_[1] ? inMeter_[0] : inMeter_[1]);
+    } else if (grainPanel()) {
         drawGrainPanel();
     } else if (f7Held_) {
         char v[12], title[32];
@@ -1300,8 +1354,7 @@ void App::drawFKeys() {
             std::snprintf(val[i], sizeof val[i], "%s",
                           m >= 0 ? kModes[m].name : (m == kModeMore ? (modePage_ ? "< Back" : "More >") : ""));
             hot = m >= 0 && int(mode) == m;
-        } else if (shift_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ &&
-                   !f5Held_ && !f6Held_ && !f7Held_) {
+        } else if (shiftLayer()) {
             // The Shift layer of the home page.
             const bool dubbable = v.len.load() != 0 && modeInfo(mode).canDub;
             switch (i) {
@@ -1323,9 +1376,31 @@ void App::drawFKeys() {
                     title[i] = "CLICK";   // hold + encoder
                     std::snprintf(val[i], sizeof val[i], "%u", unsigned(engine_.opt(OptParam::kClick)));
                     break;
-                default:   // F5..F8: free under Shift
-                    title[i] = "";
-                    val[i][0] = '\0';
+                case 4: {   // the fixed length when there is one, else how a take stops
+                    const int len = engine_.opt(OptParam::kLength, selected_);
+                    const int bar = engine_.beatsPerBar() ? engine_.beatsPerBar() : 4;
+                    static const char* const kStop[3] = {"Free", "On bar", "On beat"};
+                    title[i] = "STOP";
+                    if (len && len % bar == 0) std::snprintf(val[i], sizeof val[i], "%d bar%s", len / bar, len == bar ? "" : "s");
+                    else if (len) std::snprintf(val[i], sizeof val[i], "%d beats", len);
+                    else std::snprintf(val[i], sizeof val[i], "%s", kStop[engine_.opt(OptParam::kStop, selected_) % 3]);
+                    break;
+                }
+                case 5: {
+                    static const char* const kStart[3] = {"Now", "Count-in", "On sound"};
+                    title[i] = "START";
+                    std::snprintf(val[i], sizeof val[i], "%s", kStart[engine_.opt(OptParam::kStart, selected_) % 3]);
+                    break;
+                }
+                case 6: {
+                    static const char* const kAfter[3] = {"Play", "Overdub", "Stop"};
+                    title[i] = "AFTER";
+                    std::snprintf(val[i], sizeof val[i], "%s", kAfter[engine_.opt(OptParam::kAfter, selected_) % 3]);
+                    break;
+                }
+                default:
+                    title[i] = "TEMPO";
+                    std::snprintf(val[i], sizeof val[i], "%s", engine_.opt(OptParam::kStretch, selected_) ? "Stretch" : "Tape");
                     break;
             }
         } else if (grainPanel() && i < kGrainKnobs) {   // F5 held: F1..F4 pick a grain knob
@@ -1455,12 +1530,6 @@ void App::drawFKeys() {
             std::snprintf(val[i], sizeof val[i], "%s",
                           i == 4 || i == 5 ? fxTypeInfo(engine_.fxType(i - 4)).name : kNames[i]);
             hot = strip_ == i;
-        } else if (options_) {   // F1..F5 pick a column, F8 home
-            static const char* const kTitles[8] = {"TRACK", "TRACK", "TRACK", "TRACK", "GLOBAL", "", "", "HOME"};
-            static const char* const kNames[8] = {"Track 1", "Track 2", "Track 3", "Track 4", "Tempo", "", "", "Loops"};
-            title[i] = kTitles[i];
-            std::snprintf(val[i], sizeof val[i], "%s", kNames[i]);
-            hot = optCol_ == i;
         } else {
             switch (i) {
                 case 0:   // lit while it records: red, overdub amber, waiting (count-in, sound) dim amber
@@ -1527,7 +1596,6 @@ void App::drawFKeys() {
         else if (edit_) hc = (i == 4 || i == 5) ? kAmber : kTrackColor[editTrack_];
         else if (fxPage_ >= 0) hc = stripColor(4 + fxPage_);
         else if (mixer_ && !modeBar_) hc = stripColor(i);
-        else if (options_ && !modeBar_) hc = i < kTracks ? kTrackColor[i] : (i == 4 ? kAmber : kDim);
         if (hot && hotCol) hc = hotCol;
         // No cells: a lit key (recording, playing, muted, the picked mode...)
         // has bright text and a bar under it in its lit colour.
@@ -1543,7 +1611,6 @@ void App::drawFKeys() {
             else if (edit_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
             else if (fxPage_ >= 0) tcol = i < 6 ? scale(hc, 0.9f) : kDim;
             else if (mixer_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
-            else if (options_) tcol = i < 5 ? scale(hc, 0.9f) : kDim;
             else if (manual_) tcol = kDim;   // the chapter keys alike
             else if (!modeBar_ && i == 3) tcol = engine_.opt(OptParam::kMetronome) ? kAmber : kDim;   // F4 is global
             else if (!modeBar_ && (i < 5 || i == 6)) tcol = scale(tc, 0.9f);
@@ -1556,8 +1623,7 @@ void App::drawFKeys() {
     }
     // Home page: the input level inside the INPUT cell, the track's level inside VOLUME
     // (not under the Shift layer, where those keys do other things).
-    const bool shiftLayer = shift_ && !f5Held_ && !f6Held_ && !f7Held_;
-    if (!modeBar_ && !mixer_ && !options_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !shiftLayer) {
+    if (!modeBar_ && !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !shiftLayer()) {
         const int x0 = 5 * kKeyW + 10, x1 = 6 * kKeyW - 10;
         for (int c = 0; c < 2; ++c) {
             const float m = inMeter_[c];
@@ -1873,200 +1939,6 @@ void App::drawPerfCells(int t, int wx, int wy) {
 }
 
 // ---------------------------------------------------------------------------
-// Track options page
-
-bool App::optParam(int col, int row, OptParam& p, int& track) const {
-    track = col < kTracks ? col : 0;
-    static const OptParam kTrackRows[kOptRows] = {OptParam::kStop,  OptParam::kLength, OptParam::kStart,
-                                                  OptParam::kInput, OptParam::kAfter,  OptParam::kStretch};
-    static const OptParam kTempoRows[kOptRows] = {OptParam::kTempo, OptParam::kBeats, OptParam::kMetronome,
-                                                  OptParam::kClick, OptParam::kThreshold, OptParam::kStopFade};
-    if (row < 0 || row >= kOptRows) return false;
-    if (col < kTracks) {
-        p = kTrackRows[row];
-        return true;
-    }
-    if (col == 4) {
-        p = kTempoRows[row];
-        return true;
-    }
-    return false;
-}
-
-void App::optKey(uint8_t id) {
-    OptParam p;
-    int t;
-    if (id == b::F8) {
-        goHome();
-        return;
-    }
-    if (b::isFKey(id)) {
-        if (id - b::F1 >= kOptCols) return;
-        optCol_ = id - b::F1;
-    } else if (id == b::Left && optCol_ > 0) --optCol_;
-    else if (id == b::Right && optCol_ < kOptCols - 1) ++optCol_;
-    else if (id == b::Up && optRow_ > 0) --optRow_;
-    else if (id == b::Down && optRow_ < kOptRows - 1 && optParam(optCol_, optRow_ + 1, p, t)) ++optRow_;
-    while (optRow_ > 0 && !optParam(optCol_, optRow_, p, t)) --optRow_;   // the tempo column is shorter
-    if (optCol_ < kTracks) selected_ = optCol_;
-}
-
-void App::optEncoder(int delta) {
-    OptParam p;
-    int t;
-    if (!optParam(optCol_, optRow_, p, t)) return;
-    int v = engine_.opt(p, t), lo = 0, hi = 1, step = 1;
-    switch (p) {
-        case OptParam::kStop: hi = 2; break;
-        case OptParam::kLength: hi = kMaxLenBeats; break;
-        case OptParam::kStart: hi = 2; break;
-        case OptParam::kInput: hi = 3; break;
-        case OptParam::kAfter: hi = 2; break;
-        case OptParam::kStretch: hi = 1; break;
-        case OptParam::kStopFade: hi = 3; break;
-        case OptParam::kMonitorFx: hi = 3; break;   // on the Input page, not here
-        case OptParam::kTempo: tempoRange(lo, hi); break;
-        case OptParam::kBeats: lo = 1; hi = 12; break;
-        case OptParam::kMetronome: hi = 1; break;
-        case OptParam::kClick: hi = 100; step = shift_ ? 1 : 5; break;
-        case OptParam::kThreshold: hi = 100; step = shift_ ? 1 : 2; break;   // 0.6 / 1.2 dB steps
-    }
-    if (p == OptParam::kLength && !shift_) {
-        // Whole bars; Shift moves single beats.
-        const int bar = engine_.beatsPerBar() ? engine_.beatsPerBar() : 4;
-        for (int i = 0; i < (delta < 0 ? -delta : delta); ++i)
-            v = delta > 0 ? (v / bar + 1) * bar : ((v + bar - 1) / bar - 1) * bar;
-    } else {
-        v += delta * step;
-    }
-    v = v < lo ? lo : (v > hi ? hi : v);
-    engine_.post(Engine::kOpt, uint8_t(t), int16_t((int(p) << 8) | v));
-}
-
-void App::drawOptions() {
-    for (int c = 0; c < kOptCols; ++c) drawOptColumn(c);
-    // Over F6..F8: what the selected option does.
-    static const char* const kHelp[12][4] = {
-        {"Stop", "Free: the take ends when you", "press. On bar / on beat: it", "records on to the next line."},
-        {"Length", "Recording stops by itself.", "Encoder: whole bars,", "Shift + encoder: beats."},
-        {"Start", "Now, or a bar of click first", "(count-in), or when the input", "goes over the threshold."},
-        {"Input", "Mono takes half the memory,", "so twice the time. Change it", "while the track is empty."},
-        {"After rec", "What the track does when", "the take ends: play, overdub", "or stop."},
-        {"Tempo", "Sets the bar until there is a", "loop; after that it follows", "the loop's bar."},
-        {"Beats / bar", "The click, on-beat stops and", "the beat lines on the", "waveforms."},
-        {"Metronome", "Click on every beat while the", "transport runs (Shift+Play).", "The count-in always clicks."},
-        {"Click", "Click level.", "", ""},
-        {"Threshold", "Input level that starts an", "\"on sound\" take. Watch the", "armed lane's meter."},
-        {"Tempo", "Tape: a tempo change moves", "the pitch too. Stretch: the", "track keeps its pitch."},
-        {"Stop fade", "Stop fades the track out over", "this long, then stops it. A", "second press stops at once."},
-    };
-    OptParam p;
-    int t;
-    if (!optParam(optCol_, optRow_, p, t)) return;
-    const int h = int(p);
-    const int x = 5 * kKeyW + 12;
-    color(kInk);
-    text(x, 60, kFontSmall, 0, kHelp[h][0]);
-    color(kDim);
-    for (int i = 1; i < 4; ++i) text(x, 60 + 22 * i, kFontSmall, 0, kHelp[h][i]);
-}
-
-void App::drawOptColumn(int c) {
-    static const char* const kRowName[kOptRows] = {"Stop", "Length", "Start", "Input", "After rec", "Tempo"};
-    static const char* const kTempoRow[kOptRows] = {"Tempo", "Beats/bar", "Metronome", "Click", "Threshold",
-                                                    "Stop fade"};
-    const int x0 = c * kKeyW + 4, x1 = (c + 1) * kKeyW - 4, cx = c * kKeyW + kKeyW / 2;
-    const uint32_t sc = c < kTracks ? kTrackColor[c] : kAmber;
-    const bool sel = optCol_ == c;
-    const bool empty = c < kTracks && (TrackState(engine_.view(c).state.load()) == TrackState::kEmpty ||
-                                       TrackState(engine_.view(c).state.load()) == TrackState::kClearing);
-    const bool haveLoop = engine_.masterLen() != 0;
-    char buf[20];
-
-    panel(x0, 6, x1, 428, 8, sel ? kLaneSel : kLane);
-    color(scale(sc, 0.85f));
-    fillRect(x0 + 4, 10, x1 - 4, 36, 6);
-    color(kBg);
-    if (c < kTracks) std::snprintf(buf, sizeof buf, "Track %d", c + 1);
-    else std::snprintf(buf, sizeof buf, "Tempo");
-    text(cx, 23, kFontSmall, Disp::kOptCenter, buf);
-
-    for (int row = 0; row < kOptRows; ++row) {
-        OptParam p;
-        int t;
-        if (!optParam(c, row, p, t)) continue;
-        const int by0 = 44 + row * 64, by1 = by0 + 58;
-        if (sel && optRow_ == row) {
-            color(sc);
-            fillRect(x0 + 2, by0 - 2, x1 - 2, by1 + 2, 8);
-        }
-        well(x0 + 4, by0, x1 - 4, by1, 6, kCell);
-        const uint8_t v = engine_.opt(p, t);
-        bool locked = false;
-        const char* note = nullptr;
-        char noteBuf[20];
-        switch (p) {
-            case OptParam::kStop: {
-                static const char* const n[3] = {"Free", "On bar", "On beat"};
-                std::snprintf(buf, sizeof buf, "%s", n[v < 3 ? v : 0]);
-                break;
-            }
-            case OptParam::kLength: {
-                const int bar = engine_.beatsPerBar() ? engine_.beatsPerBar() : 4;
-                if (!v) std::snprintf(buf, sizeof buf, "Off");
-                else if (v % bar == 0) std::snprintf(buf, sizeof buf, "%d bar%s", v / bar, v / bar == 1 ? "" : "s");
-                else std::snprintf(buf, sizeof buf, "%d beat%s", int(v), v == 1 ? "" : "s");
-                break;
-            }
-            case OptParam::kStart: {
-                static const char* const n[3] = {"Now", "Count-in", "On sound"};
-                std::snprintf(buf, sizeof buf, "%s", n[v < 3 ? v : 0]);
-                break;
-            }
-            case OptParam::kInput: {
-                static const char* const n[4] = {"Stereo", "Mono L", "Mono R", "Mono sum"};
-                std::snprintf(buf, sizeof buf, "%s", n[v < 4 ? v : 0]);
-                locked = !empty;
-                note = locked ? "clear first" : nullptr;
-                break;
-            }
-            case OptParam::kAfter: {
-                static const char* const n[3] = {"Play", "Overdub", "Stop"};
-                std::snprintf(buf, sizeof buf, "%s", n[v < 3 ? v : 0]);
-                break;
-            }
-            case OptParam::kStretch: std::snprintf(buf, sizeof buf, "%s", v ? "Stretch" : "Tape"); break;
-            case OptParam::kStopFade: {
-                static const char* const n[4] = {"Off", "1 beat", "1 bar", "2 bars"};
-                std::snprintf(buf, sizeof buf, "%s", n[v & 3]);
-                break;
-            }
-            case OptParam::kMonitorFx: std::snprintf(buf, sizeof buf, "%u", unsigned(v)); break;   // not a row here
-            case OptParam::kTempo:
-                std::snprintf(buf, sizeof buf, "%u bpm", unsigned(v));
-                if (haveLoop && engine_.speed() != 1.0f) {   // tape speed: the loop's own tempo beside it
-                    std::snprintf(noteBuf, sizeof noteBuf, "%d%% of %d", int(engine_.speed() * 100.0f + 0.5f),
-                                  int(engine_.baseTempo() + 0.5f));
-                    note = noteBuf;
-                }
-                break;
-            case OptParam::kBeats: std::snprintf(buf, sizeof buf, "%u", unsigned(v)); break;
-            case OptParam::kMetronome: std::snprintf(buf, sizeof buf, "%s", v ? "On" : "Off"); break;
-            case OptParam::kClick: std::snprintf(buf, sizeof buf, "%u", unsigned(v)); break;
-            case OptParam::kThreshold: std::snprintf(buf, sizeof buf, "%d dB", int(std::lround(thresholdDb(v)))); break;
-        }
-        color(kDim);
-        text(cx, by0 + 12, kFontSmall, Disp::kOptCenter, c < kTracks ? kRowName[row] : kTempoRow[row]);
-        color(locked ? kDim : kInk);
-        text(cx, by0 + 31, kFontSmall, Disp::kOptCenter, buf);
-        if (note) {
-            color(0x4A5563);
-            text(cx, by0 + 48, kFontSmall, Disp::kOptCenter, note);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Config page
 
 void App::markConfig() {
@@ -2086,9 +1958,9 @@ void App::applyConfig() {
 // Input page: the input card and the metronome card
 
 namespace {
-constexpr int kInRows[2] = {6, 4};
+constexpr int kInRows[2] = {6, 5};
 const char* const kInName[2][6] = {{"Source", "Gain", "Channels", "Monitor", "Monitor FX", "Overdub feedback"},
-                                   {"Metronome", "Click level", "Tempo", "Beats per bar", "", ""}};
+                                   {"Metronome", "Click level", "Tempo", "Beats per bar", "Stop fade", ""}};
 const char* const kInHelp[2][6] = {
     {"Line in, or the mic input at low or high gain.", "Codec input gain. Watch the meter while you play.",
      "Stereo or mono takes for the selected track (set while the track is empty).",
@@ -2097,7 +1969,7 @@ const char* const kInHelp[2][6] = {
      "How much of the loop stays under each overdub pass."},
     {"Click on every beat, accent on the bar line. Count-ins click either way.", "Click volume.",
      "Before the first loop: the bar length. After: tape speed, 50 to 200 %.", "Beats in a bar: the grid for stops, count-ins and the click.",
-     "", ""}};
+     "Stop fades a track out over this long first (a second Stop: at once).", ""}};
 const char* const kMonFxName[4] = {"Off", "FX 1", "FX 2", "Both"};
 const char* const kChName[4] = {"Stereo", "Mono L", "Mono R", "Mono sum"};
 }  // namespace
@@ -2240,7 +2112,8 @@ void App::inputEncoder(int delta) {
             opt(OptParam::kTempo, 0, lim(int(engine_.opt(OptParam::kTempo)) + delta, lo, hi));
             break;
         }
-        default: opt(OptParam::kBeats, 0, lim(int(engine_.opt(OptParam::kBeats)) + delta, 1, 12)); break;
+        case 3: opt(OptParam::kBeats, 0, lim(int(engine_.opt(OptParam::kBeats)) + delta, 1, 12)); break;
+        default: opt(OptParam::kStopFade, 0, lim(int(engine_.opt(OptParam::kStopFade)) + (delta > 0 ? 1 : -1), 0, 3)); break;
     }
 }
 
@@ -2250,7 +2123,7 @@ void App::drawInput() {
     for (int c = 0; c < 2; ++c) {
         const int x0 = c ? 405 : 20, x1 = c ? 780 : 395;
         color(kAmber);
-        text(x0, 22, kFontBig, Disp::kOptCenterY, c ? "METRONOME" : "INPUT");
+        text(x0, 22, kFontBig, Disp::kOptCenterY, c ? "TEMPO" : "INPUT");
         for (int r = 0; r < kInRows[c]; ++r) {
             const int y0 = 46 + r * 48, y1 = y0 + 40, cy = (y0 + y1) / 2;
             const bool sel = inCol_ == c && inRow_ == r;
@@ -2306,7 +2179,12 @@ void App::drawInput() {
                                           int(engine_.speed() * 100.0f + 0.5f));
                         else std::snprintf(v, sizeof v, "%u bpm", unsigned(engine_.opt(OptParam::kTempo)));
                         break;
-                    default: std::snprintf(v, sizeof v, "%u", unsigned(engine_.opt(OptParam::kBeats))); break;
+                    case 3: std::snprintf(v, sizeof v, "%u", unsigned(engine_.opt(OptParam::kBeats))); break;
+                    default: {
+                        static const char* const kFade[4] = {"Off", "1 beat", "1 bar", "2 bars"};
+                        std::snprintf(v, sizeof v, "%s", kFade[engine_.opt(OptParam::kStopFade) & 3]);
+                        break;
+                    }
                 }
             }
             if (frac >= 0.0f) {   // a level bar under the value

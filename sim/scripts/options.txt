@@ -15,13 +15,33 @@ wait 1500
 expect_state 1 PLAY
 expect_len 1 4.0
 
-# Track 2, stop "Free": the take is exactly as long as played.
-press INSTR
-press F2
-enc -1
+# Track 2, stop "Free": the take is exactly as long as played. Shift + F5
+# taps cycle On bar -> On beat -> Free on the selected track.
+press DOWN
+hold SHIFT
+press F5
+wait 50
+expect_opt 2 stop 2
+press F5
 wait 100
-shot ../build/sim/check/options_page.png
+expect_opt 2 stop 0
+shot ../build/sim/check/options_shift.png
+release SHIFT
+# Shift + F7 cycles After rec, Shift + F8 the tempo mode (back again after).
+hold SHIFT
+press F7
+wait 30
+expect_opt 2 after 1
+press F7
+press F7
 press F8
+wait 30
+expect_opt 2 after 0
+expect_opt 2 stretch 1
+press F8
+wait 30
+expect_opt 2 stretch 0
+release SHIFT
 tap 12
 wait 1300
 tap 12
@@ -29,13 +49,33 @@ expect_len 2 1.32
 
 # Track 3: fixed length 1 bar, with a count-in. The others are muted, so the
 # count-in click is the only sound.
-press INSTR
-press F3
+# Shift + hold F5 + encoder: the length in bars; Shift + F6 tap: count-in.
 press DOWN
+hold SHIFT
+hold F5
+wait 300
 enc 1
-press DOWN
-enc 1
-press F8
+wait 50
+shot ../build/sim/check/options_length.png
+release F5
+wait 30
+expect_opt 3 length 4
+expect_opt 3 stop 1
+press F6
+wait 30
+expect_opt 3 start 1
+# Shift + hold F6 + encoder: the sound threshold (global); a turned hold is not a tap.
+opt 1 threshold 50
+hold F6
+wait 300
+enc 2
+wait 50
+shot ../build/sim/check/options_threshold.png
+release F6
+wait 30
+expect_opt 1 threshold 54
+expect_opt 3 start 1
+release SHIFT
 tap 2
 tap 14
 tone off
@@ -51,11 +91,7 @@ expect_state 3 PLAY
 expect_len 3 2.0
 
 # Track 4, input "Mono L": a left-only tone plays back on both sides.
-press INSTR
-press F4
-press DOWN
-enc 1
-press F8
+opt 4 input 1
 tone 330
 tone_ch left
 tap 36
@@ -75,3 +111,17 @@ tap 14
 tap 26
 wait 300
 shot ../build/sim/check/options_lanes.png
+
+# Stop fade lives on the Input page's Tempo card (Right, last row).
+opt 1 stopfade 0
+press F6
+press RIGHT
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+enc 1
+wait 50
+expect_opt 1 stopfade 1
+shot ../build/sim/check/options_stopfade.png
+press F8

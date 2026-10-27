@@ -80,17 +80,13 @@ reset_levels
 wait 1000
 expect_pitch 248
 
-# The options page: Tempo row in each track column.
-press INSTR
-press F2
-press DOWN
-press DOWN
-press DOWN
-press DOWN
-press DOWN
+# Shift + F8: the selected track's tempo mode (track 2, selected by its pad).
+tap 14
+tap 14
+hold SHIFT
 wait 50
 shot ../build/sim/check/stretch_options.png
-enc -1
+press F8
 wait 30
 expect_opt 2 stretch 0
-press F8
+release SHIFT
