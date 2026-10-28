@@ -1,11 +1,6 @@
 # Retrack for Polyend Tracker
 
-A from-scratch 4-track looper firmware for the original Polyend Tracker. The
-app is new; the hardware layer (board bring-up, SDRAM, FT81x display,
-SGTL5000 codec, keypad, pad LEDs, SD card, USB) is copied from
-[OpenTracker](https://github.com/sandlbn/polyend-tracker-re), MIT, the same
-way [SIDTracker](https://github.com/sandlbn/SidTracker) does it. See
-`PROVENANCE.md` for exactly what was copied.
+A from-scratch 4-track looper firmware for the original Polyend Tracker.
 
 https://github.com/user-attachments/assets/0d21f3ef-e740-4524-94a1-e38987e352ee
 
@@ -474,3 +469,11 @@ the right channel below it.
 
 Every take starts in phase with the bar grid; how it ends is the Stop option
 (Shift + F5; on bar by default).
+
+## Credits
+
+The app is new; the hardware layer (board bring-up, SDRAM, FT81x display,
+SGTL5000 codec, keypad, pad LEDs, SD card, USB) is copied from
+[OpenTracker](https://github.com/sandlbn/polyend-tracker-re), MIT, the same
+way [SIDTracker](https://github.com/sandlbn/SidTracker) does it. See
+`PROVENANCE.md` for exactly what was copied.
