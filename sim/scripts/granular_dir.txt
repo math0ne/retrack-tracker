@@ -1,0 +1,77 @@
+# Granular's Direction knob moves the playhead (the grains' centre), as the
+# other modes: Forward, Reverse, Ping-pong. A 2-bar loop: 330 Hz for its first
+# bar, 660 Hz for its second.
+wait 300
+opt all start 0
+# Monitor off (Input page, F2): only the loops reach the output.
+press F6
+wait 30
+press F2
+press F8
+wait 30
+tone_shape steady
+tone 330
+tap 0
+wait 2000
+tone 660
+wait 2100
+tap 0
+wait 200
+tone off
+expect_len 1 4.0
+press F5
+press F8
+press F4
+expect_mode 1 Granular
+
+# Forward, from bar 1: the first bar's 330 Hz; the second loop length too.
+press PLAY
+wait 500
+press PLAY
+wait 300
+reset_levels
+wait 1000
+expect_pitch 330 6
+wait 3000
+reset_levels
+wait 1000
+expect_pitch 330 6
+
+# Reverse: from the end down, so the start of a pass is the second bar's 660 Hz.
+hold F5
+wait 300
+release F5
+press F7
+enc 1
+press F5
+expect_grain 1 6 1
+press PLAY
+wait 500
+press PLAY
+wait 300
+reset_levels
+wait 1000
+expect_pitch 660 6
+shot ../build/sim/check/granular_reverse.png
+
+# Ping-pong: forward the first length (330 Hz at its start), back the second
+# (660 Hz at its start: it turned at the end).
+hold F5
+wait 300
+release F5
+press F7
+enc 1
+press F5
+expect_grain 1 6 2
+press PLAY
+wait 500
+press PLAY
+wait 300
+reset_levels
+wait 1000
+expect_pitch 330 6
+wait 3000
+reset_levels
+wait 1000
+expect_pitch 660 6
+expect_audio 0.1

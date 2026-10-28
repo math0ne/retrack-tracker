@@ -102,8 +102,9 @@ the popups over the lanes keep a backing, to stay readable). The lanes
 are waveforms only, the full width of the screen; a tag in each lane's corner
 gives its name (when it has one), its length and, when they apply, **card**
 (a long take), its mode (other than Forward) and Muted. The bar and beat lines
-sit faintly behind the waveforms; down the screen's right edge the bar's
-beats light up one by one (the last one in yellow) while the transport runs.
+sit faintly behind the waveforms; in every fourth bar (bars 4, 8, 12 ... from
+bar 1) a thin line along the screen's right edge brightens slowly through the
+bar, so the end of the four bars can be seen coming.
 Pages carry no instructions: the screen keys' labels say what they do. A lane that records has a pulsing dot before its tag (a ring
 while it is armed or counting in). The selected track's state is on the keys: REC lights up while it
 records (brightest, pulsing; a softer pulse for an overdub, dim during a count-in
@@ -406,7 +407,8 @@ failed card commands).
   1 MB of the two FX slots' delay lines and the long-take waveforms); a RAM
   loop's undo needs it to fit in half of that, so a loop between about 10.8 s
   and 19.5 s keeps its undo on the card instead (without a card: none). Mono
-  tracks double it. Copy / paste works on loops in RAM up to half the memory. Longer takes go to
+  tracks double it. Copy / paste works on loops in RAM up to half the memory (duplicating a
+  track works on any, long takes too: a card job of a few seconds). Longer takes go to
   the SD card (5 minutes stereo), undo included (it uses the card's second
   file). Internal SRAM: about 243 of 256 KB in use.
 - **Long takes:** up to 5 minutes (the stream files' size). Granular's Spread

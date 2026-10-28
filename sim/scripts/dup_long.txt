@@ -1,0 +1,54 @@
+# Copy on the home page with a long take (its tail on the card): the copy is
+# a file job, read as the take plays, and goes into the next track in time
+# with it, its own tail on its own stream file. A 30 s take: 330 Hz for 15 s,
+# then 660 Hz (from 19.5 s on, on the card).
+wait 300
+opt all start 0
+tone_shape steady
+tone 330
+tap 0
+wait 14980
+tone 660
+wait 15000
+tap 0
+tone off
+wait 50
+expect_stream 1 long 1
+expect_len 1 30.0
+
+press COPY
+wait 4000
+expect_state 2 PLAY
+expect_len 2 30.0
+expect_stream 2 long 1
+shot ../build/sim/check/dup_long.png
+# Track 1 muted, from bar 1: track 2 alone, its RAM part, then its card part.
+tap 2
+press PLAY
+wait 500
+press PLAY
+wait 1000
+reset_levels
+wait 2000
+expect_pitch 330
+wait 18000
+reset_levels
+wait 2000
+expect_pitch 660
+expect_audio 0.1
+expect_stream 2 under 0
+# Both together, from bar 1: in time, so the card part is still one pitch.
+tap 2
+press PLAY
+wait 500
+press PLAY
+wait 22000
+reset_levels
+wait 2000
+expect_pitch 660
+expect_stream 1 under 0
+expect_stream 2 under 0
+# Copying again (track 2 holds a loop now) does nothing.
+press COPY
+wait 1000
+expect_len 3 0

@@ -135,7 +135,7 @@ private:
     void scissorOff();
 
     void drawLane(int t, uint32_t now);
-    void drawBarClock(uint32_t now);   // the bar's beats on the right edge: the bar's end coming
+    void drawBarClock(uint32_t now);   // a line on the right edge in every fourth bar: the phrase's end coming
     void drawFKeys();
     void drawStats();
 
@@ -176,14 +176,15 @@ private:
 
     // performance knob: hold an effect pad and turn the encoder
     void drawPerfKnob();
-    void perfLabel(PerfFx fx, char* buf, size_t n) const;   // "Rpt 1/8" etc.
-    void perfValue(PerfFx fx, char* buf, size_t n) const;
+    void perfLabel(int t, PerfFx fx, char* buf, size_t n) const;   // "Rpt 1/8" etc., track t's
+    void perfValue(int t, PerfFx fx, char* buf, size_t n) const;
+    int perfTrack() const;        // the track whose effect knob the encoder turns
     int heldFx_ = -1;             // effect of the pad held last (or -1)
+    int heldTrack_ = 0;           //   and its track
     int perfKey_ = -1;            // performance mode: the F-key held, its effect's knob on the encoder (or -1)
     // Performance mode on the mixer: F1..F8 play the eight effects on every track at once.
-    bool perfGlobal() const { return perf_ && mixer_; }
-    void perfAll(int fx, bool down);   // an effect key on the mixer: on / off (latched: Shift) on every track
-    bool perfKeys() const {       // performance mode on the home page: F1..F8 are the effects' knobs
+    void perfAll(int fx, bool down);   // an effect's F-key: on / off (latched: Shift) on every track
+    bool perfKeys() const {       // performance mode on the home page: F1..F8 play the effects on every track
         return perf_ && !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_;
     }
     uint8_t heldPads_[kTracks] = {};   // held effect pads per track

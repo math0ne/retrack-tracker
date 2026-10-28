@@ -74,7 +74,8 @@ void Engine::init(const TrackMemory mem[kTracks], uint8_t* fxMem) {
         retPeak_[s].store(0);
     }
     fx_[1].setType(FxType::kReverb);
-    for (int i = 0; i < kPerfFxCount; ++i) perfParam_[i] = kPerfKnobs[i].def;
+    for (auto& tp : perfParam_)
+        for (int i = 0; i < kPerfFxCount; ++i) tp[i] = kPerfKnobs[i].def;
     for (uint32_t i = 0; i < kWinSize; ++i) {
         const float s = std::sin(3.14159265f * float(i) / float(kWinSize));
         gWin[i] = s * s;
@@ -366,16 +367,27 @@ void Engine::setLength(Track& k, uint32_t len) {
     restartGrains(k, uint64_t(pos) << 16);
 }
 
+void Engine::copyTiming(int d, int s) {
+    Track &c = trk_[d], &k = trk_[s];
+    c.input = k.input;
+    c.anchor = k.anchor;
+    c.offset16 = k.offset16;
+    c.mode = k.mode;
+    for (int g = 0; g < kGrainKnobs; ++g) grain_[d][g] = grain_[s][g];
+    c.state = k.state == TrackState::kStopped || k.state == TrackState::kQueued ? TrackState::kStopped
+                                                                              : TrackState::kPlaying;
+}
+
 void Engine::restartGrains(Track& k, uint64_t pos16) {
     // The second grain starts at its window peak, so the sound carries on at once.
     k.grain[0] = Grain{pos16, 0};
     k.grain[1] = Grain{pos16, kGrainFrames / 2};
 }
 
-uint64_t Engine::cloudCentre16(const Track& k, int t, uint64_t step16, uint32_t f) const {
-    // The phase over two loop lengths (long enough for half speed), at the
-    // read position (the latency ahead), then times the speed.
-    const int64_t L16 = int64_t(k.len) << 16, M = 2 * L16;
+int64_t Engine::cloudRun16(const Track& k, int t, uint64_t step16, uint32_t f) const {
+    // The phase over four loop lengths (long enough for a ping-pong at half
+    // speed), at the read position (the latency ahead), then times the speed.
+    const int64_t L16 = int64_t(k.len) << 16, M = 4 * L16;
     if (!L16) return 0;
     const int64_t d = (int64_t(t_) - int64_t(k.anchor)) * 65536 + int64_t(tAcc_ & 0xFFFFu) +
                       int64_t(k.offset16 % uint64_t(L16)) + int64_t(latShift16(k) % uint64_t(L16)) +
@@ -383,10 +395,30 @@ uint64_t Engine::cloudCentre16(const Track& k, int t, uint64_t step16, uint32_t 
     int64_t e = d % M;
     if (e < 0) e += M;
     const uint8_t sv = grain_[t][kGrainSpeed];
-    int64_t c = (e * kGrainSpeed16[sv < 6 ? sv : kGrainSpeedOne]) >> 16;
-    c %= L16;
-    if (c < 0) c += L16;
+    return (e * kGrainSpeed16[sv < 3 ? sv : kGrainSpeedOne]) >> 16;
+}
+
+uint64_t Engine::cloudCentre16(const Track& k, int t, uint64_t step16, uint32_t f) const {
+    // Where the playhead is, the way it goes: forward, from the end down, or
+    // there and back.
+    const int64_t L16 = int64_t(k.len) << 16;
+    if (!L16) return 0;
+    int64_t c = cloudRun16(k, t, step16, f);
+    switch (grain_[t][kGrainDir]) {
+        case kGrainReverse: c = L16 - 1 - c % L16; break;
+        case kGrainPingPong:
+            c %= 2 * L16;
+            if (c >= L16) c = 2 * L16 - 1 - c;
+            break;
+        default: c %= L16; break;
+    }
     return uint64_t(c);
+}
+
+bool Engine::cloudBack(const Track& k, int t) const {
+    const int64_t L16 = int64_t(k.len) << 16;
+    const uint8_t dir = grain_[t][kGrainDir];
+    return dir == kGrainReverse || (dir == kGrainPingPong && L16 && cloudRun16(k, t, 0, 0) % (2 * L16) >= L16);
 }
 
 uint32_t Engine::posOf(const Track& k) const {
@@ -436,9 +468,9 @@ void Engine::renderGrains(int t, uint64_t ph0, uint64_t step16, uint32_t n) {
         // Centred on the playhead (the grain's middle plays when the loop is
         // there), scattered by Spread, panned a little at random.
         const int32_t here = int32_t(cloudCentre16(k, t, step16, f) >> 16);
-        // Grains: forward, backwards, or each at random. A backwards one
-        // reads the same stretch from its far end down.
-        const bool back = g[kGrainDir] == 1 || (g[kGrainDir] == 2 && stmlib::Random::GetFloat() < 0.5f);
+        // The grains read the way the playhead goes: a backwards one reads
+        // the same stretch from its far end down.
+        const bool back = cloudBack(k, t);
         const int32_t raw = here - int32_t(width * ratio * 0.5f) +
                             int32_t(scatter * (2.0f * stmlib::Random::GetFloat() - 1.0f));
         int32_t start = raw % len;
@@ -1069,6 +1101,7 @@ void Engine::apply(const Msg& m) {
                 sv.active.store(true, std::memory_order_relaxed);
                 sv.head.store(k.head, std::memory_order_release);
                 k.state = (m.arg & 2) ? TrackState::kStopped : TrackState::kPlaying;
+                if ((m.arg & 8) && m.b < uint32_t(kTracks) && int(m.b) != t) copyTiming(t, int(m.b));
                 restartGrains(k, uint64_t(posOf(k)) << 16);
                 view_[t].peakVersion.fetch_add(1, std::memory_order_relaxed);
                 break;
@@ -1084,6 +1117,7 @@ void Engine::apply(const Msg& m) {
                 k.offset16 = 0;
                 k.undo.has = false;
                 k.state = (m.arg & 2) ? TrackState::kStopped : TrackState::kPlaying;
+                if ((m.arg & 8) && m.b < uint32_t(kTracks) && int(m.b) != t) copyTiming(t, int(m.b));
                 restartGrains(k, uint64_t(posOf(k)) << 16);
                 view_[t].peakVersion.fetch_add(1, std::memory_order_relaxed);
             }
@@ -1198,17 +1232,11 @@ void Engine::apply(const Msg& m) {
                 (k.mono ? 2 * mem_[d].capacity : mem_[d].capacity) < k.len)   // it fits there as it is
                 break;
             c.mono = k.mono;
-            c.input = k.input;
             c.len = k.len;
             c.written = k.len;
             c.start = 0;
-            c.anchor = k.anchor;
-            c.offset16 = k.offset16;
-            c.mode = k.mode;
             c.undo.has = false;
-            for (int g = 0; g < kGrainKnobs; ++g) grain_[d][g] = grain_[t][g];
-            c.state = k.state == TrackState::kStopped || k.state == TrackState::kQueued ? TrackState::kStopped
-                                                                                      : TrackState::kPlaying;
+            copyTiming(d, t);
             c.busy = true;
             job_.track = uint8_t(d);
             job_.kind = kPaste;
@@ -1364,10 +1392,13 @@ void Engine::apply(const Msg& m) {
             const int fx = (uint16_t(m.arg) >> 8) & 0xFF;
             if (fx >= kPerfFxCount) break;
             const int v = m.arg & 0xFF;
-            perfParam_[fx] = uint8_t(v > kPerfKnobs[fx].max ? kPerfKnobs[fx].max : v);
-            // A repeat that is playing takes its new length at once.
-            for (Track& x : trk_)
-                if (x.perf.repFx == fx && ((x.perf.mask >> fx) & 1)) startRepeat(x, PerfFx(fx));
+            for (int x = 0; x < kTracks; ++x) {
+                if (m.track < kTracks && x != t) continue;   // kTracks or more: every track
+                perfParam_[x][fx] = uint8_t(v > kPerfKnobs[fx].max ? kPerfKnobs[fx].max : v);
+                // A repeat that is playing takes its new length at once.
+                Track& r = trk_[x];
+                if (r.perf.repFx == fx && ((r.perf.mask >> fx) & 1)) startRepeat(r, PerfFx(fx));
+            }
             break;
         }
         case kFxType:
@@ -1473,7 +1504,7 @@ void Engine::startRepeat(Track& k, PerfFx r) {
     // Repeat slice: its knob's note length, on the track's beat grid, around
     // the position playing now.
     Perf& p = k.perf;
-    const uint8_t v = perfParam_[int(r)];
+    const uint8_t v = perfParam_[&k - trk_][int(r)];
     uint32_t slice = beatLen() / kRepeatDiv[v < sizeof kRepeatDiv ? v : 0];
     if (slice < 64) slice = 64;
     if (slice > k.len) slice = k.len;
@@ -1877,7 +1908,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             const bool lpOn = has(PerfFx::kLowPass) || has(PerfFx::kSweepDown);
             const bool hpOn = has(PerfFx::kHighPass) || has(PerfFx::kSweepUp);
             auto sweepLen = [&](PerfFx x) {
-                const uint8_t v = perfParam_[int(x)];
+                const uint8_t v = perfParam_[t][int(x)];
                 return bar * kSweepBars[v < sizeof kSweepBars / sizeof kSweepBars[0] ? v : 2];
             };
             float lpFc = 20000.0f, hpFc = 20.0f;
@@ -1886,13 +1917,13 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                 const float pr = len > 0 ? std::fmin(1.0f, float(t_ - pf.lpT0) / len) : 1.0f;
                 lpFc = 18000.0f * std::pow(200.0f / 18000.0f, pr);
             }
-            if (has(PerfFx::kLowPass)) lpFc = std::fmin(lpFc, lowPassHz(perfParam_[int(PerfFx::kLowPass)]));
+            if (has(PerfFx::kLowPass)) lpFc = std::fmin(lpFc, lowPassHz(perfParam_[t][int(PerfFx::kLowPass)]));
             if (has(PerfFx::kSweepUp)) {
                 const float len = sweepLen(PerfFx::kSweepUp);
                 const float pr = len > 0 ? std::fmin(1.0f, float(t_ - pf.hpT0) / len) : 1.0f;
                 hpFc = 20.0f * std::pow(4000.0f / 20.0f, pr);
             }
-            if (has(PerfFx::kHighPass)) hpFc = std::fmax(hpFc, highPassHz(perfParam_[int(PerfFx::kHighPass)]));
+            if (has(PerfFx::kHighPass)) hpFc = std::fmax(hpFc, highPassHz(perfParam_[t][int(PerfFx::kHighPass)]));
             // Wet amounts ramp over a block (no clicks on press / release).
             const float lpW0 = pf.lpWet, hpW0 = pf.hpWet;
             pf.lpWet = lpOn ? 1.0f : 0.0f;
@@ -1951,10 +1982,10 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             };
             // Tape stop over its knob's time: 1 beat, 2 beats, 1 bar, 2 bars.
             static const uint8_t kTapeBeats[] = {1, 2, 0, 0};
-            const uint8_t tv = perfParam_[int(PerfFx::kTapeStop)] & 3u;
+            const uint8_t tv = perfParam_[t][int(PerfFx::kTapeStop)] & 3u;
             const uint32_t tapeFrames = kTapeBeats[tv] ? beatLen() * kTapeBeats[tv] : barLen() * (tv == 2 ? 1u : 2u);
             // Vibrato depth: up to +-60 frames (about +-80 cents at 5.5 Hz).
-            const float vibDepth = 0.6f * float(perfParam_[int(PerfFx::kVibrato)]);
+            const float vibDepth = 0.6f * float(perfParam_[t][int(PerfFx::kVibrato)]);
             // At a changed tempo every reader moves speed16_ times as far per output frame.
             const uint32_t sp = speed16_;
             const bool vari = sp != 65536;
@@ -2211,7 +2242,8 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             if (k.head)   // a long take: the ring follows a repeat or a tape stop while it lasts
                 stream_[t].fxAt.store(fxIp == StreamView::kNoFx ? fxIp : k.start + fxIp, std::memory_order_relaxed);
             if (sh)   // which way the Streamer fills the ring
-                stream_[t].back.store(mi.reverse || (mi.pingPong && (phase16(k) >> 16) >= k.len),
+                stream_[t].back.store(mi.reader == ModeInfo::kCloud ? cloudBack(k, t)
+                                                                     : mi.reverse || (mi.pingPong && (phase16(k) >> 16) >= k.len),
                                       std::memory_order_relaxed);
         }
         if (wrote) view_[t].peakVersion.fetch_add(1, std::memory_order_relaxed);

@@ -1,7 +1,8 @@
 # Performance mode: the pads only play effects (holding them shows no knob),
-# so several can run on several tracks at once; F1..F8 are the eight
-# effects' knobs, hold one and turn the encoder (its knob shows meanwhile).
-# Holding a pad and turning the encoder still sets that effect, no knob shown.
+# so several can run on several tracks at once; F1..F8 play the eight effects
+# on every track: hold one and turn the encoder, its knob shows and every
+# track's is set. Holding a pad and turning the encoder sets that track's own.
+# Each track keeps its own settings.
 wait 300
 opt all start 0
 tone_shape steady
@@ -24,21 +25,29 @@ wait 400
 shot ../build/sim/check/perf_two.png
 up 4
 up 18
-# F3 held: the low-pass knob, the encoder sets it (default 450 Hz, position 38).
+# F3 held: the low-pass on every track, its knob shown; the encoder sets it
+# (default 450 Hz, position 38) on every track.
 expect_perfknob 3 38
 hold F3
 wait 100
+expect_perf 1 3 on
+expect_perf 2 3 on
 enc 3
 wait 200
 shot ../build/sim/check/perf_fkey.png
 release F3
-expect_perfknob 3 44
-# A pad held and the encoder: a quick tweak of that effect (column 7: the low-pass).
+wait 100
+expect_perf 1 3 off
+expect_perfknob 3 44 1
+expect_perfknob 3 44 2
+# A pad held and the encoder: a quick tweak of that track's own (track 1,
+# column 7: the low-pass). Track 2's stays.
 down 6
 enc -2
 wait 100
 up 6
-expect_perfknob 3 40
+expect_perfknob 3 40 1
+expect_perfknob 3 44 2
 # Leaving performance mode gives the keys back to the track.
 press PERFORMANCE
 wait 100

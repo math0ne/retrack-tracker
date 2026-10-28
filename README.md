@@ -53,9 +53,9 @@ land where they were played and do not drift.
 
 The home page is the four waveforms, left channel above the line and right
 below, with the bar and beat lines faintly behind them. The playhead leaves a
-fading trail as long as its speed, on the side it came from. Down the right
-edge, the bar's beats light up one by one, the last one in yellow: the end of
-the bar coming. The eight screen keys act on the selected track and show its
+fading trail as long as its speed, on the side it came from. In every fourth
+bar a thin line along the right edge brightens slowly: the end of the four
+bars coming. The eight screen keys act on the selected track and show its
 state; the selected track stays selected from page to page.
 
 A take in progress, a pulsing dot by the lane's tag, the REC key showing what a press does:
@@ -75,9 +75,9 @@ mode and a switch carries on from where it is.
 
 **Granular** plays the loop through Clouds grains around the playhead. Hold
 F5 for the grain menu with its six knobs (Spread, Size, Density, Pitch on
-F1–F4; Speed and Grains on F6–F7: the grains' centre moving through the loop
-at 1/2, 1 or 2x, forwards or backwards, and the grains themselves played
-forwards, backwards or mixed); it stays open until F5 again. The lane draws every
+F1–F4; Speed and Direction on F6–F7: the playhead moving through the loop at
+1/2, 1 or 2x, forward, reverse or ping-pong, the grains reading the way it
+goes); it stays open until F5 again. The lane draws every
 grain where it reads, as long as it is and as bright as it sounds. Below,
 track 2 plays in Half rev (the trail on the right of its playhead) and track 4
 is Granular, its grains scattered by Spread:
@@ -142,10 +142,11 @@ F1–F4, and Shift + F8 to name the strip's track.
 Perform turns pad columns 5 to 12 into eight effects per track: two beat
 repeats, low-pass, high-pass, two filter sweeps, vibrato and tape stop. Hold
 a pad to play one, Shift + pad to latch it; play as many as you like on as many
-tracks at once. The screen keys become the eight effects' knobs: hold one and
-turn the encoder. Repeats and tape stop land back in time when released, and
-the playhead shows where they read. On the mixer, Perform turns the screen keys
-into the eight effects for **every track at once**.
+tracks at once. The screen keys along the bottom play the eight effects on
+**every track at once** (Shift + key latches); hold one and turn the encoder to
+set its knob on every track. Each track keeps its own settings: hold a pad and
+turn the encoder to set that track's alone. Repeats and tape stop land back in
+time when released, and the playhead shows where they read.
 
 ![Performance mode, a filter sweep held](docs/img/perform.png)
 
@@ -156,7 +157,8 @@ markers on a bar / beat / 1/16 grid: trim (instant, with undo), cut and erase.
 Copy copies the selection; Shift + Copy (Paste) puts it at the start marker
 over what is there, Insert puts it in there (the loop gets longer), on the same
 track or another. On the home page Copy duplicates the selected track into
-the next one (empty), in time with it.
+the next one (empty), in time with it; long takes too (a few seconds through
+the card).
 
 ![The loop editor](docs/img/editor.png)
 
@@ -299,10 +301,10 @@ Granular). The knobs: **Spread** (0 %: at the
 playhead … 100 %: a second either way, or a quarter of a shorter loop; finer
 at the bottom), **Size** (20–500 ms), **Density**
 (from a grain every four lengths, with gaps, to eight overlapping), **Pitch**
-(±24 semitones), **Speed** (how fast the grains' centre moves through the
-loop: Rev 2x, Rev 1x, Rev 1/2, 1/2, 1x, 2x; the loop keeps its time, so at
-1/2 it takes two loop lengths to get round; the playhead shows the centre)
-and **Grains** (each grain played forwards, backwards, or either at random).
+(±24 semitones), **Speed** (how fast the playhead, the grains' centre, moves
+through the loop: 1/2, 1x, 2x; the loop keeps its time, so at 1/2 it takes two
+loop lengths to get round) and **Direction** (Forward, Reverse or Ping-pong,
+as the other modes; the grains read the way the playhead goes).
 With the track's Tempo option on Tape, a tempo change moves the grains' pitch
 too; on Stretch it stays. Projects save the knobs.
 
@@ -353,20 +355,21 @@ again. Leaving performance mode turns everything off. Pad columns 1–3 keep
 record / play / mute; column 4 is **Freeze** for a Clouds slot (row 1 FX 1,
 row 2 FX 2; lit while frozen) instead of clear.
 
-Each effect has one knob, on the screen keys while performance mode is on:
-F1–F8 are the eight effects (labelled with their settings); **hold one and turn
-the encoder** to set it (its big knob shows while the key is held). Holding a
-pad and turning the encoder sets that effect too, without the knob. Holding pads
-never covers the lanes, so effects can run on several tracks at once. The knobs
-are shared by the four tracks; each cell shows its setting. The track keys come
-back when performance mode is left (pad columns 1–3 keep record / play / mute
-meanwhile). A beat repeat or a tape stop moves the playhead to where it reads.
+Each effect has one knob, and **each track its own settings** (each cell shows
+its track's). Along the bottom, F1–F8 are the eight effects for **all tracks at
+once**, labelled with the selected track's settings: hold a key and its effect
+runs on every track with a loop, Shift + key latches it on all of them (again:
+off), and holding a key and turning the encoder sets its knob on every track
+(its big knob shows while the key is held). Holding a pad and turning the
+encoder sets that track's effect alone, without the knob. Holding pads never
+covers the lanes, so effects can run on several tracks at once. The track keys
+come back when performance mode is left (pad columns 1–3 keep record / play /
+mute meanwhile). A beat repeat or a tape stop moves the playhead to where it
+reads.
 
-**On the mixer** (Master), Perform keeps the mixer on screen and makes F1–F8
-the eight effects for all tracks at once: hold a key and its effect runs on
-every track with a loop, Shift + key latches it on all of them (again: off),
-and holding a key and turning the encoder sets its knob. Left / Right still
-pick a strip. The pads keep playing effects per track meanwhile.
+Perform opens the performance page from anywhere, the mixer included. The
+mixer opened while performance mode is on keeps its own keys: F1–F7 pick a
+strip, Shift + F1–F4 mute; the pads keep playing effects per track.
 
 | Pad column | Effect | Knob (default) |
 |---|---|---|
@@ -433,16 +436,17 @@ knobs and the encoder turns the selected one. Changing the type silences the
 slot for about 0.2 s while its delay line is cleared.
 
 The **Master** key opens the mixer page: seven strips, each over its screen
-key, plus F8 home. On the two FX strips the second row is **To FX 2** /
-**To FX 1**: that slot's output into the other one (taken before its
-return), so Clouds can run into a reverb. One way at a time: with both up,
-FX 1 → FX 2 runs and the other shows "off".
+key, plus F8 home. The sends are named after the effect in their slot (**To
+Delay**, **To Reverb**, ...). On the two FX strips the second row is the slot's
+output into the other one (taken before its return), so Clouds can run into a
+reverb. One way at a time: with both up, FX 1 → FX 2 runs and the other shows
+"off".
 
-| Strip (key) | Top row | Middle row | Fader |
-|---|---|---|---|
-| Track 1–4 (F1–F4) | Send to FX 1 | Send to FX 2 | Track level |
-| FX 1 (F5), FX 2 (F6) | The slot's first knob | Its second knob | Return level |
-| Master (F7) | – | – | Master level |
+| Strip (key) | Row 1 | Row 2 | Row 3 | Fader |
+|---|---|---|---|---|
+| Track 1–4 (F1–F4) | Send to FX 1 | Send to FX 2 | DJ filter | Track level |
+| FX 1 (F5), FX 2 (F6) | The slot's first knob | Into the other slot | – | Return level |
+| Master (F7) | – | – | – | Master level |
 
 F1–F7 or Left/Right pick a strip, Up/Down a row (the row stays when you change
 strip), the encoder sets the value, Shift + encoder in single steps. Holding

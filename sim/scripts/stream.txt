@@ -467,3 +467,27 @@ wait 800
 reset_levels
 wait 1500
 expect_audio 0.05
+# Direction Reverse, then Ping-pong: the ring follows the playhead backwards
+# (nothing played as silence), from the card part.
+hold F5
+wait 300
+release F5
+press F7
+enc 1
+wait 50
+expect_grain 3 6 1
+tap 34
+wait 3000
+reset_levels
+wait 1500
+expect_audio 0.05
+enc 1
+wait 50
+expect_grain 3 6 2
+tap 34
+wait 3000
+reset_levels
+wait 1500
+expect_audio 0.05
+press F5
+expect_stream 3 under 0

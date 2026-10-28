@@ -782,11 +782,12 @@ struct Headless {
                             val.c_str(), pass ? "PASS" : "FAIL", got);
                 ok = ok && pass;
             } else if (cmd == "expect_perfknob") {
-                // expect_perfknob FX VALUE: performance effect FX (1..8) knob value
-                std::string val;
-                in >> val;
-                const int e = std::atoi(arg.c_str()) - 1;
-                const int got = e >= 0 && e < looper::kPerfFxCount ? m.app.engine().perfParam(looper::PerfFx(e)) : -1;
+                // expect_perfknob FX VALUE [TRACK]: performance effect FX (1..8) knob value (track 1..4, default 1)
+                std::string val, tr;
+                in >> val >> tr;
+                const int e = std::atoi(arg.c_str()) - 1, t = tr.empty() ? 0 : std::atoi(tr.c_str()) - 1;
+                const int got = e >= 0 && e < looper::kPerfFxCount && t >= 0 && t < looper::kTracks
+                                    ? m.app.engine().perfParam(t, looper::PerfFx(e)) : -1;
                 const bool pass = got == std::atoi(val.c_str());
                 std::printf("%s:%d: expect_perfknob %s %s %s (%d)\n", path.c_str(), lineNo, arg.c_str(), val.c_str(),
                             pass ? "PASS" : "FAIL", got);

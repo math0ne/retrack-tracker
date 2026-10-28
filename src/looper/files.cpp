@@ -251,7 +251,7 @@ void Files::snapshot(ProjectFile& pf) const {
     const Engine& e = *engine_;
     std::memset(&pf, 0, sizeof pf);
     std::memcpy(pf.magic, "LPRJ", 4);
-    pf.version = 4;
+    pf.version = 5;
     pf.accent = e.opt(OptParam::kAccent);
     pf.clickSound = e.opt(OptParam::kClickSound);
     pf.clickWhen = e.opt(OptParam::kClickWhen);
@@ -284,7 +284,10 @@ void Files::snapshot(ProjectFile& pf) const {
             pf.fxKnob2[s][k] = e.fxKnob(s, kFxBank + k);
         }
     }
-    for (int i = 0; i < kPerfFxCount; ++i) pf.perf[i] = e.perfParam(PerfFx(i));
+    for (int i = 0; i < kPerfFxCount; ++i) {
+        pf.perf[i] = e.perfParam(0, PerfFx(i));
+        for (int t = 0; t < kTracks; ++t) pf.perfTrack[t][i] = e.perfParam(t, PerfFx(i));
+    }
     for (int t = 0; t < kTracks; ++t) {
         const TrackView& v = e.view(t);
         ProjectTrack& pt = pf.track[t];
@@ -345,7 +348,9 @@ void Files::postSettings(const ProjectFile& pf, bool tracks) {
                 e.post(Engine::kFxKnob, uint8_t(s), int16_t(((kFxBank + k) << 8) | pf.fxKnob2[s][k]));
             }
         }
-        for (int i = 0; i < kPerfFxCount; ++i) e.post(Engine::kPerfParam, 0, int16_t((i << 8) | pf.perf[i]));
+        for (int t = 0; t < kTracks; ++t)
+            for (int i = 0; i < kPerfFxCount; ++i)
+                e.post(Engine::kPerfParam, uint8_t(t), int16_t((i << 8) | pf.perfTrack[t][i]));
         for (int t = 0; t < kTracks; ++t) {
             const ProjectTrack& pt = pf.track[t];
             opt(t, OptParam::kStop, pt.stop);
@@ -503,7 +508,8 @@ bool Files::load(int number) {
                ((pf_.version == 1 && got == int32_t(kProjectV1Bytes)) ||
                 (pf_.version == 2 && got == int32_t(kProjectV2Bytes)) ||
                 (pf_.version == 3 && got == int32_t(kProjectV3Bytes)) ||
-                (pf_.version == 4 && got == int32_t(sizeof pf_)));
+                (pf_.version == 4 && got == int32_t(kProjectV4Bytes)) ||
+                (pf_.version == 5 && got == int32_t(sizeof pf_)));
     };
     // No project.bin but a project.tmp: a save was cut off in its commit;
     // finish it first.
@@ -529,6 +535,19 @@ bool Files::load(int number) {
         pf_.stopFade = 0;
         pf_.monitorFx = 3;   // the default: both
         for (uint8_t& c : pf_.chain) c = 0;
+    }
+    if (pf_.version < 5)   // one set for every track
+        for (int t = 0; t < kTracks; ++t) std::memcpy(pf_.perfTrack[t], pf_.perf, kPerfFxCount);
+    if (pf_.version == 4) {
+        // Version 4's Speed went Rev 2x .. 2x (0..5) and its direction knob
+        // turned the grains alone: now Speed is 1/2, 1x, 2x and Direction
+        // moves the playhead.
+        for (int t = 0; t < kTracks; ++t) {
+            uint8_t* g = pf_.grain2[t];
+            const uint8_t s = g[kGrainSpeed - kGrainKnobsV2] < 6 ? g[kGrainSpeed - kGrainKnobsV2] : 4;
+            g[kGrainSpeed - kGrainKnobsV2] = uint8_t(s < 3 ? 2 - s : s - 3);
+            g[kGrainDir - kGrainKnobsV2] = s < 3 ? kGrainReverse : kGrainForward;
+        }
     }
     if (pf_.version < 4) {
         for (int t = 0; t < kTracks; ++t) {
@@ -579,15 +598,15 @@ bool Files::openWav(int t) {
     return p_->storage->write(h_, hdr, sizeof hdr) == int32_t(sizeof hdr);
 }
 
-bool Files::takeOk() const {
+bool Files::takeOk(int t) const {
     // Not cleared, re-recorded, trimmed, cut, multiplied or being moved since
     // openWav: else the WAV would hold parts of two takes (or of no buffer).
-    const TrackView& v = engine_->view(track_);
+    const TrackView& v = engine_->view(t);
     const TrackState s = TrackState(v.state.load());
     const bool loop = s == TrackState::kPlaying || s == TrackState::kOverdubbing || s == TrackState::kStopped ||
                       s == TrackState::kQueued;
     return loop && v.len.load() == total_ && v.start.load() == start_ && v.mono.load() == mono_ && !v.busy.load() &&
-           engine_->longTake(track_) == longTake_ && engine_->stream(track_).take.load() == take_;
+           engine_->longTake(t) == longTake_ && engine_->stream(t).take.load() == take_;
 }
 
 bool Files::writeStep() {
@@ -616,7 +635,9 @@ bool Files::readStep() {
     const bool isLong = (long_ >> track_) & 1, card = isLong && done_ >= head_;
     int16_t* dst = card ? reinterpret_cast<int16_t*>(p_->scratch)
                         : m.frames + (mono_ ? size_t(done_) : size_t(done_) * 2);
-    if (p_->storage->read(h_, dst, n * fb) != int32_t(n * fb)) return false;
+    if (kind_ == kDup ? !stream_ || !stream_->read(src_, start_ + done_, reinterpret_cast<uint8_t*>(dst), n)
+                      : p_->storage->read(h_, dst, n * fb) != int32_t(n * fb))
+        return false;
     if (isLong && (!stream_ || !stream_->write(track_, mono_, done_, reinterpret_cast<const uint8_t*>(dst), n)))
         return false;
     for (uint32_t c = done_ / kPeakFrames; c * kPeakFrames < done_ + n; ++c) {
@@ -838,6 +859,79 @@ bool Files::sampleStep() {
     return true;
 }
 
+bool Files::duplicateLong(int t) {
+    const int d = t + 1;
+    if (busy() || !cardReady() || !stream_ || t < 0 || d >= kTracks) return false;
+    const TrackView& v = engine_->view(t);
+    if (!engine_->longTake(t) || TrackState(engine_->view(d).state.load()) != TrackState::kEmpty) return false;
+    // The source is pinned as a save pins it (takeOk): one that changes
+    // meanwhile stops the copy, so it never holds parts of two takes.
+    src_ = t;
+    track_ = d;
+    mono_ = v.mono.load();
+    start_ = v.start.load();
+    total_ = v.len.load();
+    longTake_ = true;
+    take_ = engine_->stream(t).take.load();
+    const uint32_t cap = mono_ ? 2 * engine_->memory(d).capacity : engine_->memory(d).capacity;
+    head_ = engine_->headFor(d, mono_);
+    long_ = total_ > cap ? uint8_t(1u << d) : 0;
+    if (!takeOk(t) || (long_ && (!head_ || total_ > stream_->capacity(d, mono_)))) {
+        std::snprintf(status_, sizeof status_, "Track %d's card file is not ready: not duplicated", d + 1);
+        return false;
+    }
+    kind_ = kDup;
+    phase_ = 1;
+    h_ = -1;
+    done_ = 0;
+    jobFrames_ = total_;
+    jobDone_ = 0;
+    std::snprintf(status_, sizeof status_, "Duplicating track %d to track %d...", t + 1, d + 1);
+    return true;
+}
+
+void Files::dupStep() {
+    // Copy the take a chunk a step (RAM, ring and card, as it plays) into the
+    // empty track (its RAM part, its stream file, its peaks); then the engine
+    // takes it in, with the source's place on the clock, mode and play state.
+    const int d = track_;
+    const uint32_t now = p_->clock ? p_->clock->millis() : 0;
+    if (phase_ == 1) {
+        if (TrackState(engine_->view(d).state.load()) != TrackState::kEmpty) {
+            fail("The next track was recorded meanwhile: not duplicated");
+            return;
+        }
+        if (!takeOk(src_)) {
+            fail("The track changed meanwhile: not duplicated");
+            return;
+        }
+        if (!readStep()) {
+            fail("Reading the take from the card failed");
+            return;
+        }
+        if (done_ < total_) return;
+        if (!takeOk(src_)) {
+            fail("The track changed meanwhile: not duplicated");
+            return;
+        }
+        engine_->post(Engine::kInstall, uint8_t(d), int16_t((mono_ ? 1 : 0) | (long_ ? 4 : 0) | 8), total_, uint32_t(src_));
+        phase_ = 2;
+        waitMs_ = now;
+        return;
+    }
+    const TrackView& v = engine_->view(d);
+    const TrackState s = TrackState(v.state.load());
+    if ((s == TrackState::kEmpty || v.len.load() != total_) && now - waitMs_ < 1000) return;
+    if (s == TrackState::kEmpty || v.len.load() != total_) {
+        fail("The next track did not take the copy");
+        return;
+    }
+    char msg[sizeof status_];
+    std::snprintf(msg, sizeof msg, "Duplicated track %d to track %d", src_ + 1, d + 1);
+    kind_ = kNone;   // no rescan: nothing on the card's project list changed
+    std::snprintf(status_, sizeof status_, "%s", msg);
+}
+
 void Files::service() {
     if (kind_ == kNone) {
         if (count_ && cardReady()) readName();   // idle: a project name a call
@@ -847,6 +941,11 @@ void Files::service() {
     if (kind_ == kSample) {
         if (!cardReady()) fail("The SD card went away");
         else sampleStep();
+        return;
+    }
+    if (kind_ == kDup) {
+        if (!cardReady()) fail("The SD card went away");
+        else dupStep();
         return;
     }
     if (!cardReady()) {
@@ -1063,12 +1162,14 @@ void Files::skip(int t, const char* why) {
 uint8_t Files::lockedTracks() const {
     if (kind_ == kLoad) return (1u << kTracks) - 1;
     if (kind_ == kSample) return uint8_t(1u << track_);
+    if (kind_ == kDup) return uint8_t((1u << track_) | (1u << src_));
     return kind_ == kNone ? 0 : todo_;   // save / export: the tracks not written yet
 }
 
 const char* Files::lockReason() const {
     return kind_ == kLoad ? "Loading a project: wait until it is done"
                           : kind_ == kSample ? "Loading a sample into this track: wait until it is done"
+                          : kind_ == kDup ? "Duplicating this track: wait until it is done"
                           : kind_ == kSave ? "Saving this track: wait until it is done"
                                            : "Exporting this track: wait until it is done";
 }

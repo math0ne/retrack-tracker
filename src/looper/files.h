@@ -92,9 +92,12 @@ public:
     const char* sampleName(int i) const { return i >= 0 && i < sampleCount_ ? sampleName_[i] : ""; }
     bool sampleIsDir(int i) const { return i >= 0 && i < sampleCount_ && sampleIsDir_[i]; }
     bool loadSample(int t, int i);   // a job; false: busy, no card, not a WAV, or the track holds a loop
+    // Duplicate a long take (part of it on the card) into the next track,
+    // empty: a job, the copy read as it plays now; it goes in in time with it.
+    bool duplicateLong(int t);
 
 private:
-    enum Kind : uint8_t { kNone, kSave, kLoad, kExport, kSample };
+    enum Kind : uint8_t { kNone, kSave, kLoad, kExport, kSample, kDup };
     struct ProjectTrack {
         uint32_t len;        // frames; 0 = empty
         uint32_t phase;      // where its start sits in the bar (anchor mod bar)
@@ -121,22 +124,27 @@ private:
         uint8_t grain2[kTracks][kGrainKnobs - kGrainKnobsV2];   // Granular's speed and direction
         char trackName[kTracks][kNameLen];
         uint8_t reserved4[16];                  // zero
+        // Version 5 (perf[] above: track 1's, for older firmware):
+        uint8_t perfTrack[kTracks][kPerfFxCount];   // each track's performance effect knobs
     };
     static constexpr uint32_t kProjectV1Bytes = 136, kProjectV2Bytes = 160, kProjectV3Bytes = 176;
     static_assert(sizeof(ProjectTrack) == 24, "fixed layout");
     static_assert(kProjectV2Bytes == kProjectV1Bytes + kFxSlots * kFxBank + kTracks * kGrainKnobsV2, "fixed layout");
     static_assert(kProjectV3Bytes == kProjectV2Bytes + 16, "fixed layout");
-    static_assert(sizeof(ProjectFile) == kProjectV3Bytes + 4 + 4 + 8 + 4 * kNameLen + 16, "fixed layout");
+    static constexpr uint32_t kProjectV4Bytes = kProjectV3Bytes + 4 + 4 + 8 + 4 * kNameLen + 16;
+    static_assert(sizeof(ProjectFile) == kProjectV4Bytes + kTracks * kPerfFxCount, "fixed layout");
     void readName();                // one project name not read yet, from its name.txt
     bool sampleStep();              // the sample load, a step
+    void dupStep();                 // the duplicate, a step
 
     void snapshot(ProjectFile& pf) const;
     void postSettings(const ProjectFile& pf, bool tracks);
     bool nextFolder(const char* parent, int& number, char* path, size_t n);
     bool openWav(int t);            // start writing track t (save / export)
-    bool takeOk() const;            // the take openWav started on is still there, unchanged
+    bool takeOk() const { return takeOk(track_); }   // the take openWav started on is still there, unchanged
+    bool takeOk(int t) const;
     bool writeStep();               // one chunk of the open WAV; false when that track is done
-    bool readStep();                // load: one chunk of track loadTrack_
+    bool readStep();                // load: one chunk into track_ (duplicate: from src_, as it plays)
     bool commit(const ProjectFile& pf);   // save: the temporary files take the place of the old save
     void tidy();                    // a save that failed: its temporary files go
     void skip(int t, const char* why);    // load: track t stays empty
@@ -161,6 +169,7 @@ private:
     uint32_t head_ = 0;             // load: the track's RAM part (a long take's)
     Streamer* stream_ = nullptr;
     int track_ = -1;
+    int src_ = -1;                  // duplicate: the track copied (track_ the copy)
     ot::IStorage::Handle h_ = -1;
     uint32_t done_ = 0, total_ = 0, start_ = 0;
     bool mono_ = false;

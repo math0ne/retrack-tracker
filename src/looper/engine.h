@@ -152,11 +152,14 @@ constexpr int kGrainKnobsV2 = 4;        // the first four: what a version 2 proj
 constexpr int kLoopGrains = 8;          // grains per track at most (each reads the SDRAM)
 constexpr int kGrainPitchZero = 24;     // pitch 0..48 = -24..+24 semitones
 constexpr int kGrainSpeed = 4, kGrainDir = 5;   // the speed and direction knobs
-// Speed: how fast (and which way) the grains' centre moves through the loop,
+// Speed: how fast the grains' centre (the playhead) moves through the loop,
 // in loop speeds (16.16). The loop keeps its time: at 1/2 it takes two loop
 // lengths to get round, at 2x half of one.
-constexpr int32_t kGrainSpeed16[6] = {-131072, -65536, -32768, 32768, 65536, 131072};
-constexpr int kGrainSpeedOne = 4;       // 1x
+constexpr int32_t kGrainSpeed16[3] = {32768, 65536, 131072};
+constexpr int kGrainSpeedOne = 1;       // 1x
+// Direction: which way the playhead goes, as the other modes: forward,
+// reverse, ping-pong. The grains read the way it goes.
+enum GrainDir : uint8_t { kGrainForward, kGrainReverse, kGrainPingPong };
 struct GrainKnob {
     const char* name;
     uint8_t max, def;
@@ -166,8 +169,8 @@ constexpr GrainKnob kGrainKnobInfo[kGrainKnobs] = {
     {"Size", 100, 40},                  // 20 .. 500 ms
     {"Density", 100, 70},               // 0.25 (gaps between the grains) .. 8 grains overlapping
     {"Pitch", 48, kGrainPitchZero},
-    {"Speed", 5, kGrainSpeedOne},       // kGrainSpeed16
-    {"Grains", 2, 0},                   // forward, reverse, or each at random
+    {"Speed", 2, kGrainSpeedOne},       // kGrainSpeed16
+    {"Direction", 2, kGrainForward},    // GrainDir
 };
 inline const ModeInfo& modeInfo(PlayMode m) { return kModes[int(m) < kModeCount ? int(m) : 0]; }
 
@@ -294,7 +297,7 @@ public:
         kOpt,          // arg = (OptParam << 8) | value
         kPerf,         // arg = (PerfFx << 8) | on (0/1)
         kPerfOff,      // every performance effect off on every track
-        kPerfParam,    // arg = (PerfFx << 8) | value
+        kPerfParam,    // track (kTracks or more: every track), arg = (PerfFx << 8) | value
         kFxType,       // track = slot, arg = FxType
         kFxKnob,       // track = slot, arg = (knob << 8) | value
         // Loop edits; a, b = selection in loop frames [a, b).
@@ -305,6 +308,8 @@ public:
         // Project load: the app has written an empty track's audio and peaks.
         kInstall,      // a = length, b = bar phase of its start, arg = mono | stopped << 1 | long << 2
                        // (long: past its RAM, the whole take is in its stream file A already)
+                       // | copy << 3 (a duplicate: b is the source track, whose place on the
+                       // clock, mode, grains and play state it takes)
         kSetBar,       // a = bar length (the master loop), only while every track is empty
         kSetMute,      // arg = 0 / 1
         kGrainParam,   // arg = (knob << 8) | value, Granular mode's knobs
@@ -378,7 +383,7 @@ public:
     uint8_t fxKnob(int slot, int i) const { return fx_[slot].knob(i); }
     bool fxBusy(int slot) const { return fx_[slot].busy(); }
     float fxLfo(int slot) const { return fx_[slot].lfo(); }
-    uint8_t perfParam(PerfFx fx) const { return perfParam_[int(fx)]; }
+    uint8_t perfParam(int t, PerfFx fx) const { return perfParam_[t < kTracks ? t : 0][int(fx)]; }
     uint8_t grainParam(int t, int knob) const { return grain_[t][knob]; }
     // Granular mode, for the screen: the track's sounding grains (where each
     // reads now in the loop, its length, its envelope 0..1 now, its pan 0..1).
@@ -563,6 +568,9 @@ private:
     uint64_t latShift16(const Track& k) const;   // the latency as phase, 16.16
     uint64_t readPhase16(const Track& k) const;  // phase16 + the latency
     void restartGrains(Track& k, uint64_t pos16);
+    // A duplicate d of track s: s's place on the clock (anchor, offset: they
+    // play as one), input, mode, grain knobs and play state (stopped or playing).
+    void copyTiming(int d, int s);
     bool allEmpty() const;
     void publish();
 
@@ -636,13 +644,15 @@ private:
     uint8_t focus_ = 0;                 // the selected track (kFocus): its sends carry the monitored input
     float monSend_[kFxSlots] = {};      // those sends, smoothed
     int16_t preRoll_[kPreRollFrames * 2] = {};   // the input before this block, oldest first
-    uint8_t perfParam_[kPerfFxCount] = {};
+    uint8_t perfParam_[kTracks][kPerfFxCount] = {};   // each track's own effect knobs
     uint8_t grain_[kTracks][kGrainKnobs] = {};
     float grainOut_[128 * 2], grainEnv_[128];   // Granular mode, one track at a time
     void renderGrains(int t, uint64_t ph0, uint64_t step16, uint32_t n);
     // Granular: the grains' centre f output frames into the block, 16.16 loop
     // frames (it moves at the Speed knob through the loop).
     uint64_t cloudCentre16(const Track& k, int t, uint64_t step16, uint32_t f) const;
+    int64_t cloudRun16(const Track& k, int t, uint64_t step16, uint32_t f) const;   // unfolded, 0 .. 8 lengths
+    bool cloudBack(const Track& k, int t) const;   // Granular's playhead going backwards now
 
     // mixer and send effects (kept across track clears)
     void setMix(MixParam p, int track, int value);
