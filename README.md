@@ -7,7 +7,7 @@ SGTL5000 codec, keypad, pad LEDs, SD card, USB) is copied from
 way [SIDTracker](https://github.com/sandlbn/SidTracker) does it. See
 `PROVENANCE.md` for exactly what was copied.
 
-https://github.com/user-attachments/assets/df161972-1f1b-4b29-91dd-ddb47853369a
+https://github.com/user-attachments/assets/0d21f3ef-e740-4524-94a1-e38987e352ee
 
 > [!WARNING]
 > **Very beta.** This runs on the Tracker and is being tested on the device,
