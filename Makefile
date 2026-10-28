@@ -41,10 +41,13 @@ LDFLAGS   := $(CPUFLAGS) -O2 -Wl,--gc-sections,--defsym=__rtc_localtime=0 -T$(CO
              --specs=nano.specs -u _printf_float
 LIBS      := -lm -lstdc++
 
-CORE_C    := $(wildcard $(CORE)/*.c)
-CORE_CXX  := $(filter-out $(CORE)/main.cpp,$(wildcard $(CORE)/*.cpp))
-APP_C     := $(shell find src -name '*.c') third_party/fatfs/ff.c third_party/fatfs/ffunicode.c
-APP_CXX   := $(shell find src -name '*.cpp')
+# Sorted sources, and __DATE__ / __TIME__ from the last commit, so any machine
+# (or CI) builds a byte-identical image from the same commit.
+CORE_C    := $(sort $(wildcard $(CORE)/*.c))
+CORE_CXX  := $(sort $(filter-out $(CORE)/main.cpp,$(wildcard $(CORE)/*.cpp)))
+APP_C     := $(sort $(shell find src -name '*.c')) third_party/fatfs/ff.c third_party/fatfs/ffunicode.c
+APP_CXX   := $(sort $(shell find src -name '*.cpp'))
+export SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct 2>/dev/null)
 OBJS      := $(patsubst %,$(BUILD)/%.o,$(CORE_C) $(CORE_CXX) $(APP_C) $(APP_CXX))
 
 SDCARD    := $(BUILD)/sdcard/Firmware/$(PTF_NAME)
