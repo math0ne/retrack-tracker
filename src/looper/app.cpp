@@ -2748,7 +2748,7 @@ void App::fwScan() {
 }
 
 void App::runningImage(char* out, size_t n) const {
-    // "looper-0.1" -> PolyendTracLooperv01.ptf (the Makefile's image name).
+    // "retrack-0.1" -> PolyendTracLooperv01.ptf (the Makefile's image name).
     char digits[16];
     size_t d = 0;
     for (const char* c = p_.version; *c && d + 1 < sizeof digits; ++c)
@@ -2970,7 +2970,8 @@ void App::drawConfig() {
     const uint32_t cap = engine_.memory(0).capacity;
     const uint32_t st = cap / kSampleRate, mo = 2 * cap / kSampleRate;
     color(kDim);
-    std::snprintf(buf, sizeof buf, "Tracker Looper %s", p_.version);
+    const char* ver = std::strchr(p_.version, '-');   // "retrack-1.0" -> "1.0"
+    std::snprintf(buf, sizeof buf, "Retrack %s", ver ? ver + 1 : p_.version);
     text(40, 340, kFontSmall, 0, buf);
     if (streamer_.ready(0))
         std::snprintf(buf, sizeof buf, "Recording time per track: %lu min stereo, %lu min mono (on the card)",

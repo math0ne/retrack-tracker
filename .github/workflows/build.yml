@@ -55,12 +55,12 @@ jobs:
         run: |
           mkdir -p dist
           cp build/${{ steps.ver.outputs.ptf }} dist/
-          (cd build/sdcard && zip -qr ../../dist/tracker-looper-${{ steps.ver.outputs.version }}-sdcard.zip Firmware)
+          (cd build/sdcard && zip -qr ../../dist/retrack-${{ steps.ver.outputs.version }}-sdcard.zip Firmware)
           ls -l dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: tracker-looper-${{ steps.ver.outputs.version }}
+          name: retrack-${{ steps.ver.outputs.version }}
           path: dist/
 
       - name: Release
@@ -76,5 +76,5 @@ jobs:
           from Config > F1 Firmware (or the stock updater).
           EOF
           gh release create "$GITHUB_REF_NAME" dist/* \
-            --title "Tracker Looper ${{ steps.ver.outputs.version }}" \
+            --title "Retrack ${{ steps.ver.outputs.version }}" \
             --notes-file notes.md --generate-notes --verify-tag

@@ -1,4 +1,4 @@
-# Tracker Looper: reference
+# Retrack: reference
 
 The rest of the [README](../README.md): the source layout, building and the
 simulator, every control, and the deeper details (projects, long takes and

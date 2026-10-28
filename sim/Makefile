@@ -1,4 +1,4 @@
-# Tracker Looper desktop simulator: src/looper + src/platform + the OpenTracker host HAL in sim/src.
+# Retrack desktop simulator: src/looper + src/platform + the OpenTracker host HAL in sim/src.
 #   make -C sim   -> build/sim/looper-sim
 #   make -C sim check  -> run the headless scripts in sim/scripts, each on a fresh SD folder
 #                         (build/sim/check/sd_<script>)

@@ -1,4 +1,4 @@
-# Tracker Looper
+# Retrack for Polyend Tracker
 
 A from-scratch 4-track looper firmware for the original Polyend Tracker. The
 app is new; the hardware layer (board bring-up, SDRAM, FT81x display,

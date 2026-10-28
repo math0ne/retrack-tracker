@@ -1,4 +1,4 @@
-// Tracker Looper simulator: the looper app on the OpenTracker host HAL
+// Retrack simulator: the looper app on the OpenTracker host HAL
 // (software FT81x, SDL audio, the front panel drawn around the screen).
 //
 //   looper-sim [--line-in] [--tone HZ] [--tone-ch left|right|both] [--scale N] [--quit-after MS]
@@ -366,7 +366,7 @@ struct Machine {
             std::fprintf(stderr, "no SD folder: settings and projects are off\n");
         }
         p.midi = &midi;
-        p.version = "looper-0.1";   // as the device build, so the Firmware page can mark its image
+        p.version = "retrack-0.1";   // as the device build, so the Firmware page can mark its image
         // The simulator has no bootloader: it notes the image and carries on.
         p.firmwareUpdate = [](const char* name) {
             gFlashed = name;
@@ -390,7 +390,7 @@ void panelShot(Machine& m, const std::string& path, bool screenOnly) {
         ok = writePng(path.c_str(), fb.data(), 800, 480);
     } else {
         Canvas c(Panel::kW, Panel::kH);
-        Panel().draw(c, fb.data(), m.input, m.leds, 0, "Tracker Looper (headless)");
+        Panel().draw(c, fb.data(), m.input, m.leds, 0, "Retrack (headless)");
         ok = writePng(path.c_str(), c.pixels(), Panel::kW, Panel::kH);
     }
     std::printf("%s %s\n", ok ? "saved" : "FAILED to save", path.c_str());
@@ -887,7 +887,7 @@ int runInteractive(Machine& m, const Options& o) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
-    SDL_Window* win = SDL_CreateWindow("Tracker Looper simulator", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+    SDL_Window* win = SDL_CreateWindow("Retrack simulator", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                        Panel::kW * o.scale, Panel::kH * o.scale, SDL_WINDOW_RESIZABLE);
     if (!win) {
         std::fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());

@@ -1,4 +1,4 @@
-# Tracker Looper firmware for the original Polyend Tracker hardware (MK66FX1M0).
+# Retrack: looper firmware for the original Polyend Tracker hardware (MK66FX1M0).
 # make            -> build/looper.hex and build/PolyendTracLooperv<ver digits>.ptf (24 chars),
 #                    also at build/sdcard/Firmware/ (copy that Firmware folder onto the SD card)
 # make SELFTEST=1 -> build/selftest/PolyendTracLooperST1.ptf, the OpenTracker hardware selftest
@@ -31,7 +31,7 @@ SIZE      := $(CROSS)size
 CPUFLAGS  := -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
 DEFS      := -D__MK66FX1M0__ -DF_CPU=180000000 -DUSB_MIDI_SERIAL -DLAYOUT_US_ENGLISH \
              -DF_BUS=90000000 -DSERIAL5_TX_BUFFER_SIZE=512 -DSERIAL5_RX_BUFFER_SIZE=512 \
-             -DTEENSYDUINO=159 -DARDUINO=10819 -DOT_VERSION=\"looper-$(VERSION)\" -DOT_TARGET_DEVICE=1 \
+             -DTEENSYDUINO=159 -DARDUINO=10819 -DOT_VERSION=\"retrack-$(VERSION)\" -DOT_TARGET_DEVICE=1 \
              $(USB_ID) $(DEFS_EXTRA)
 INCS      := -I$(CORE) -Isrc -Isrc/platform -Isrc/hal -Ithird_party/fatfs
 COMMON    := $(CPUFLAGS) $(DEFS) $(INCS) -O2 -g -ffunction-sections -fdata-sections -Wall -MMD
