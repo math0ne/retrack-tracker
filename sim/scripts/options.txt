@@ -120,6 +120,10 @@ press DOWN
 press DOWN
 press DOWN
 press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
 enc 1
 wait 50
 expect_opt 1 stopfade 1

@@ -23,15 +23,17 @@ way [SIDTracker](https://github.com/sandlbn/SidTracker) does it. See
 - Count-in, start on sound, stop on the bar or beat, fixed lengths
 - Click-free loop points
 - Playback modes: reverse, ping-pong, half and double speed, half time, octave up / down
-- Granular playback, with the grains drawn on the waveform
+- Granular playback (speed and direction too), with the grains drawn on the waveform
 - Tempo changes as tape varispeed or time-stretch, tap tempo
 - Two send effects: delay, ping-pong, reverb, chorus, flanger, Mutable Instruments Clouds
-- A mixer with sends, returns, FX chaining, meters and mutes
+- A mixer with sends, DJ filters, returns, FX chaining, meters and mutes
 - Performance mode: beat repeats, filters, sweeps, vibrato, tape stop, on one track or all at once
-- A loop editor: trim, cut, erase
+- A loop editor: trim, cut, erase, copy and paste; duplicate a track into the next
+- Load any WAV on the card into a track; name tracks and projects
 - Projects saved to the SD card, WAV export
 - MIDI clock in and out, learnable footswitch actions
-- Metronome, input monitoring through the effects
+- Metronome with accent, four sounds, count-in length, click only while recording
+- Input monitoring through the effects, at the selected track's sends
 - An on-device manual, and a firmware flasher back to stock
 
 ## Features
@@ -50,9 +52,11 @@ latency, measured with a cable from an output into the input), so layers
 land where they were played and do not drift.
 
 The home page is the four waveforms, left channel above the line and right
-below, with the bar and beat lines. The playhead leaves a fading trail as
-long as its speed, on the side it came from. The eight screen keys act on
-the selected track and show its state.
+below, with the bar and beat lines faintly behind them. The playhead leaves a
+fading trail as long as its speed, on the side it came from. Down the right
+edge, the bar's beats light up one by one, the last one in yellow: the end of
+the bar coming. The eight screen keys act on the selected track and show its
+state; the selected track stays selected from page to page.
 
 A take in progress, a pulsing dot by the lane's tag, the REC key showing what a press does:
 
@@ -70,8 +74,10 @@ mode and a switch carries on from where it is.
 | ![Mode bar, page 1](docs/img/modes.png) | ![Mode bar, page 2](docs/img/modes2.png) |
 
 **Granular** plays the loop through Clouds grains around the playhead. Hold
-F5 for the grain menu with its four knobs (Spread, Size, Density, Pitch); it
-stays open until F5 again. The lane draws every
+F5 for the grain menu with its six knobs (Spread, Size, Density, Pitch on
+F1–F4; Speed and Grains on F6–F7: the grains' centre moving through the loop
+at 1/2, 1 or 2x, forwards or backwards, and the grains themselves played
+forwards, backwards or mixed); it stays open until F5 again. The lane draws every
 grain where it reads, as long as it is and as bright as it sounds. Below,
 track 2 plays in Half rev (the trail on the right of its playhead) and track 4
 is Granular, its grains scattered by Spread:
@@ -98,9 +104,11 @@ input level against the threshold:
 
 Hold F4 and turn for the tempo: before a loop it sets the bar, after it it is
 tape-style varispeed from 50 to 200 % (Stretch tracks keep their pitch). Hold
-F7 for the selected track's volume; hold F6 for the input gain, tap it for the
-Input page (source, gain, channels, monitoring through the effects, overdub
-feedback, and the tempo card: metronome, click, beats per bar, stop fade).
+F7 for the selected track's volume, tap it for its strip on the mixer; hold
+F6 for the input gain, tap it for the Input page (source, gain, channels,
+monitoring through the effects, overdub feedback, and the tempo card:
+metronome, click level and sound, accent, click always or only while
+recording, count-in length, tempo, beats per bar, stop fade).
 
 | Tempo (F4) | Volume (F7) |
 |---|---|
@@ -121,9 +129,11 @@ its knobs. One slot can feed the other, so Clouds can run into the reverb.
 
 ### Mixer
 
-Master opens seven strips: per track the two pre-fader sends and the level,
-per FX slot a knob, the chain send to the other slot and the return, and the
-master, with meters on every fader. Hold Shift for the mutes on F1–F4.
+Master opens seven strips: per track the two pre-fader sends, a DJ filter
+(down from the middle a low-pass closing, up a high-pass opening) and the
+level, per FX slot a knob, the chain send to the other slot and the return,
+and the master, with meters on every fader. Hold Shift for the mutes on
+F1–F4, and Shift + F8 to name the strip's track.
 
 ![The mixer](docs/img/mixer.png)
 
@@ -141,15 +151,24 @@ into the eight effects for **every track at once**.
 
 ### Loop editor
 
-Instr opens the selected track's waveform with start and end markers on a
-bar / beat / 1/16 grid: trim (instant, with undo), cut and erase.
+Note (or S.Edit) opens the selected track's waveform with start and end
+markers on a bar / beat / 1/16 grid: trim (instant, with undo), cut and erase.
+Copy copies the selection; Shift + Copy (Paste) puts it at the start marker
+over what is there, Insert puts it in there (the loop gets longer), on the same
+track or another. On the home page Copy duplicates the selected track into
+the next one (empty), in time with it.
 
 ![The loop editor](docs/img/editor.png)
 
-### Projects, export, settings, MIDI and the manual
+### Projects, samples, export, settings, MIDI and the manual
 
-File saves and loads projects (every loop as a WAV plus all settings) and
-exports tracks as WAVs, in the background while the loops play. Config holds
+File saves and loads projects (every loop as a WAV plus all settings, the
+track names too) and exports tracks as WAVs, in the background while the
+loops play; F4 names the selected project. S.Load lists the card's folders
+and WAV files (16-bit, 44.1 kHz, mono or stereo) and loads one into the
+selected track (empty): it comes in stopped, its Play starts it on the bar,
+and on an empty session it sets the bar. Longer than the track's RAM, it goes
+on to the card like a long take. Config holds
 the settings, the recording latency, a firmware flasher (the way back to the
 stock firmware) and MIDI: clock out or follow, and eight learnable footswitch actions. Song opens
 a seven-chapter manual on the device.
@@ -188,16 +207,18 @@ included, is in [the reference](docs/REFERENCE.md#controls).
 |---|---|
 | Play | Transport: everything stops, or starts from bar 1. Shift + Play: metronome on / off |
 | Rec | Record / overdub the selected track only; Shift + Rec: replace |
-| Insert | Undo the last overdub / replace; Shift + Insert: redo |
+| Insert | Undo the last overdub / replace; Shift + Insert: redo. In the editor: paste, inserted at the start marker |
 | Delete | Clear the selected track; Shift + Delete: clear all |
+| Copy | Duplicate the selected track into the next one (empty). In the editor: copy the selection; Shift + Copy pastes it at the start marker |
 | Encoder | The selected track's volume, or the value being set; Shift + encoder: input gain (on pages: fine steps) |
 | Encoder push | Tap tempo, three taps or more |
 | Up / Down | Select a track (on pages: a row) |
 | Left / Right | On pages: a column, strip or knob |
-| Note | Home: the loop lanes, from any page |
-| Perform (or Pattern) | Performance mode: tap to latch, hold for while held |
+| Pattern | Home: the loop lanes, from any page |
+| Perform (or Instr) | Performance mode: tap to latch, hold for while held |
 | Master | The mixer |
-| Instr | The loop editor for the selected track |
+| Note (or S.Edit) | The loop editor for the selected track |
+| S.Load | Load a WAV from the card into the selected track |
 | FX1 / FX2 | That send effect's page |
 | Config | Settings |
 | File | Projects and WAV export |
@@ -232,11 +253,11 @@ included, is in [the reference](docs/REFERENCE.md#controls).
 - **Replace** (Shift + REC / pad 1 / F1) records over the loop; the REC key
   lights brightest while it does.
 - **Undo / redo** (F8, or Insert / Shift + Insert) take back the
-  last overdub or replace and bring it back, as often as you like. The audio
-  under an overdub is kept at the end of the track's own memory, so in RAM undo
-  works for loops up to half the track's memory (about 10.8 s stereo, 21.5 s
-  mono); a long take's undo uses the card's second file. Trims, cuts and
-  erases clear it.
+  last overdub or replace and bring it back, as often as you like, at any
+  length. The audio under an overdub is kept at the end of the track's own
+  memory for loops up to half of it (about 10.8 s stereo, 21.5 s mono); a
+  longer one (with a card) keeps its passes on the card's two files, like a
+  long take, though it plays all from RAM. Trims, cuts and erases clear it.
 - **Stop fade** (Input page, Tempo card, last row): Stop fades the track
   over 1 beat, 1 bar or 2 bars, then stops it; a second press stops at once.
 
@@ -272,13 +293,18 @@ Instruments' grain and window code), each centred on where the loop is now.
 The lane draws each sounding grain where it reads, as wide as it is long,
 taller and brighter as it gets louder, higher the more it is panned left.
 Hold **F5** on a Granular track for the grain menu: it stays open after the
-release, F1–F4 pick one of its four knobs, F6–F8 are blank and a tap on F5
-closes it (so do Note, the page keys and selecting a track that is not
+release, F1–F4 and F6–F7 pick one of its six knobs, F8 is blank and a tap on F5
+closes it (so do Pattern, the page keys and selecting a track that is not
 Granular). The knobs: **Spread** (0 %: at the
-playhead … 100 %: anywhere in the loop), **Size** (20–500 ms), **Density**
-(1–8 grains overlapping) and **Pitch** (±24 semitones). With the track's Tempo
-option on Tape, a tempo change moves the grains' pitch too; on Stretch it
-stays. Projects save the knobs.
+playhead … 100 %: a second either way, or a quarter of a shorter loop; finer
+at the bottom), **Size** (20–500 ms), **Density**
+(from a grain every four lengths, with gaps, to eight overlapping), **Pitch**
+(±24 semitones), **Speed** (how fast the grains' centre moves through the
+loop: Rev 2x, Rev 1x, Rev 1/2, 1/2, 1x, 2x; the loop keeps its time, so at
+1/2 it takes two loop lengths to get round; the playhead shows the centre)
+and **Grains** (each grain played forwards, backwards, or either at random).
+With the track's Tempo option on Tape, a tempo change moves the grains' pitch
+too; on Stretch it stays. Projects save the knobs.
 
 Overdub needs speed 1 so it can write where it reads; in the other modes REC
 shows a hint instead.
@@ -295,7 +321,7 @@ are on the Input page; the tempo settings below are on its Tempo card.
 |---|---|
 | Stop | **Free**: the take ends when you press. **On bar** / **On beat**: it records on to the next bar / beat line (a press less than an eighth of a unit late stops on the line it just passed). Default On bar. |
 | Length | Off, or a fixed length in whole bars (up to 64 beats): recording stops by itself. A fixed length shows in place of the Stop value. |
-| Start | **Count-in** (default): one bar of click, then the take starts on the bar line; with loops running it waits for the next bar line at least half a bar away. **Now**: at once. **On sound**: the track arms and starts when the input crosses the threshold, keeping the 6 ms before it so the attack is not cut; with no loop yet the bar clock starts there. The armed lane shows the input level against the threshold. Press again to cancel. |
+| Start | **Count-in** (default): the count-in's bars of click (Tempo card), then the take starts on the bar line; with loops running it waits for the next bar line at least half a bar away. **Now**: at once. **On sound**: the track arms and starts when the input crosses the threshold, keeping the 6 ms before it so the attack is not cut; with no loop yet the bar clock starts there. The armed lane shows the input level against the threshold. Press again to cancel. |
 | Channels (Input page) | Stereo, Mono L, Mono R, Mono sum. Mono uses half the memory, so a track holds about 43 s in RAM (10 minutes with long takes on the card). Only while the track is empty. |
 | After rec | Play, Overdub or Stop when the take ends. |
 | Tempo | **Tape** (default): a tempo change speeds the track up or down and its pitch follows. **Stretch**: it keeps its pitch, played through two cross-faded 46 ms grains while the tempo is not 100 % (at 100 % it plays as recorded). Stretch tracks do not overdub off 100 %; a take recorded on one off 100 % is still resampled like tape. |
@@ -305,7 +331,11 @@ are on the Input page; the tempo settings below are on its Tempo card.
 | Tempo | 40–240 bpm (default 94). It sets the bar until there is a loop. After that it is tape-style varispeed: 50–200 % of the loop's own tempo, every loop speeds up or slows down together and the pitch follows (or, on a track set to Stretch, stays). The metronome, count-ins, beat repeats and delay times follow it; new takes are resampled onto the loops' timeline, and only Forward Tape tracks overdub off 100 %. Clearing every track goes back to 100 %. Projects save it. |
 | Beats / bar | 1–12 (default 4): the click, on-beat stops and the beat lines. |
 | Metronome | Click on every beat while the transport runs (the count-in always clicks). Also Shift + Play. |
-| Click | Click level. |
+| Click level | Its volume. |
+| Click sound | Beep, wood block, hi-hat or cowbell. |
+| Accent | On (default): beat 1 louder (and higher, but for the hi-hat and cowbell). |
+| Click | Always, or only while a track records or overdubs (and in count-ins). |
+| Count-in | Off (a Count-in take then starts at once), 1 bar (default), 2 or 4 bars. |
 | Threshold (Shift + hold F6) | Input level that starts an "on sound" take, −60 … 0 dB (default −30 dB). |
 | Stop fade | Off, 1 beat, 1 bar or 2 bars. |
 
@@ -315,7 +345,7 @@ the bar lines (numbered) and the beat lines where they fall in that take.
 
 ## Performance mode
 
-**Perform** (or **Pattern**, which does the same): tap it to latch performance mode on (tap again to leave), or hold
+**Perform** (or **Instr**, which does the same): tap it to latch performance mode on (tap again to leave), or hold
 it to use it only while held. Each lane's waveform shows eight effect cells,
 laid out like pad columns 5–12 of that track's row. Hold a pad to play its
 effect on that track; Shift + pad latches it (a dot in the cell) until pressed
@@ -362,7 +392,7 @@ the running effects.
 
 ## Loop editor
 
-**Instr** opens a big waveform of the selected track (Up/Down for another)
+**Note** (or **S.Edit**) opens a big waveform of the selected track (Up/Down for another)
 with a start and an end marker. The selection is yellow, the rest dim; the bar
 and beat lines are drawn over it, and the markers read bar.beat.sixteenth from
 the loop start.
@@ -390,7 +420,7 @@ mute and stop do). Either slot can hold any of six effects:
 | Reverb | Size (decay 0.3–9 s), Tone (dark … bright), Width |
 | Chorus | Rate (0.1–5 Hz), Depth, Width |
 | Flanger | Rate (0.05–2 Hz), Depth, Feedback, Manual (0.5–8 ms) |
-| Clouds | Mutable Instruments' granular processor on a 4.1 s record buffer (at 32 kHz, as in the OpenTracker fork; Density asks for as many grains as the 40-grain original, up to 24; defaults as in the OpenTracker fork). Knobs 1: Position (how far back the grains read), Size, Pitch (±24 semitones), Density (Clouds' deadband at noon; up from there grains come at random, down from there evenly). Knobs 2 (**Shift + F2–F5**): Texture (window shape; past 75 % a diffuser), Feedback, Spread (stereo), Freeze (the buffer stops recording; also pad 4 in performance mode) |
+| Clouds | Mutable Instruments' granular processor on a 4.1 s record buffer (at 32 kHz, as in the OpenTracker fork; Density asks for as many grains as the 40-grain original, up to 12; defaults as in the OpenTracker fork). Knobs 1: Position (how far back the grains read), Size, Pitch (±24 semitones), Density (Clouds' deadband at noon; up from there grains come at random, down from there evenly). Knobs 2 (**Shift + F2–F5**): Texture (window shape; past 75 % a diffuser), Feedback, Spread (stereo), Freeze (the buffer stops recording; also pad 4 in performance mode) |
 
 **FX1 / FX2** open that slot's page: a live picture of the effect on top (the
 echo taps on the beat grid, the reverb's decay, the LFOs moving, Clouds'

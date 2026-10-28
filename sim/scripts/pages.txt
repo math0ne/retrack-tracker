@@ -43,7 +43,7 @@ press F3
 wait 400
 expect_fx 2 Reverb
 # Note: home.
-press NOTE
+press PATTERN
 wait 50
 shot ../build/sim/check/pages_home.png
 

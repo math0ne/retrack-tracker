@@ -17,7 +17,7 @@ class CloudsFx {
 public:
     static constexpr uint32_t kRate = 32000;
     static constexpr uint32_t kFrames = 131072;   // stereo int16: 512 KB, the size of an FX slot's line (4.1 s)
-    static constexpr int kMaxGrains = 24;         // a cap: density asks for as many as Clouds' 40 would, up to here
+    static constexpr int kMaxGrains = 12;         // a cap: density asks for as many as Clouds' 40 would, up to here
     static constexpr float kInputGain = 1.2f;     // the OpenTracker fork's default input gain
     static constexpr int kBlockMax = 128;
 
@@ -51,8 +51,9 @@ private:
     // (continuous across blocks; the fork restarted it every block).
     float downPhase_ = 0.0f, lastInL_ = 0.0f, lastInR_ = 0.0f;
     float upPos_ = 0.0f, prevOutL_ = 0.0f, prevOutR_ = 0.0f;
-    // Feedback: the previous block's output, high-passed (one pole).
+    // Feedback: the previous block's output, limited, high- and low-passed.
     float fbHpL_ = 0.0f, fbHpR_ = 0.0f, fbXL_ = 0.0f, fbXR_ = 0.0f;
+    float fbLpL_ = 0.0f, fbLpR_ = 0.0f;   // and low-passed (one pole)
     float fbL_[kBlockMax] = {}, fbR_[kBlockMax] = {};
     int fbN_ = 0;
     float inL_[kBlockMax], inR_[kBlockMax];

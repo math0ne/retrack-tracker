@@ -23,9 +23,9 @@ BADGE = (16, 16, 18, 225)
 # "": its own arrow says it).
 KEYS = [
     [None, "Perform", "Projects", "Settings", "Mixer"],
-    [None, None, None, None, "Manual"],
-    ["Home", "Editor", "FX 1", "FX 2", "Perform"],
-    ["Play all", None, "Undo", "Track", "Clear"],
+    ["Samples", None, "Editor", None, "Manual"],
+    ["Editor", "Perform", "FX 1", "FX 2", "Home"],
+    ["Play all", "Duplicate", "Undo", "Track", "Clear"],
     ["Rec track", "Shift", "", "Track", ""],
 ]
 PADS = ["Rec", "Play", "Mute", "Clear"] + [f"Jump {i}" for i in range(1, 9)]

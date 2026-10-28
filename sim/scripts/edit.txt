@@ -18,7 +18,7 @@ tap 0
 expect_len 1 2.0
 
 # Snap is a beat (0.5 s at 120 bpm). End marker two beats back: keep the first second.
-press INSTR
+press SAMPLEEDITOR
 press F2
 enc -2
 wait 100
@@ -62,6 +62,6 @@ expect_len 1 1.0
 reset_levels
 wait 1100
 expect_silent
-press NOTE
+press PATTERN
 wait 100
 shot ../build/sim/check/edit_home.png

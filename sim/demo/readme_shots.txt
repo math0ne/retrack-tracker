@@ -103,7 +103,7 @@ screen ../docs/img/fx_clouds.png
 press MASTER
 wait 50
 screen ../docs/img/mixer.png
-press NOTE
+press PATTERN
 
 # Performance mode, a filter sweep held on track 1.
 press PERFORMANCE
@@ -118,10 +118,10 @@ press PERFORMANCE
 press F6
 wait 50
 screen ../docs/img/input.png
-press NOTE
+press PATTERN
 tap 2
 tap 2
-press INSTR
+press SAMPLEEDITOR
 wait 100
 press F1
 enc 1
@@ -129,31 +129,31 @@ press F2
 enc -2
 wait 100
 screen ../docs/img/editor.png
-press NOTE
+press PATTERN
 press SONG
 wait 50
 screen ../docs/img/manual.png
-press NOTE
+press PATTERN
 press FILE
 wait 50
 press F1
 wait 6000
 screen ../docs/img/file.png
-press NOTE
+press PATTERN
 press CONFIG
 wait 50
 screen ../docs/img/config.png
 press F2
 wait 50
 screen ../docs/img/midi.png
-press NOTE
+press PATTERN
 sd_file /Firmware/PolyendTracker_1.9.2.ptf 4096
 sd_file /Firmware/PolyendTracLooperv01.ptf 4096
 press CONFIG
 press F1
 wait 100
 screen ../docs/img/firmware.png
-press NOTE
+press PATTERN
 
 # Track 4 cleared (its pad in column 4), then armed to start on sound.
 tap 39

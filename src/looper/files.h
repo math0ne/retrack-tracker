@@ -38,6 +38,10 @@ struct Config {
 class Files {
 public:
     static constexpr int kMaxProjects = 99;
+    static constexpr int kNameLen = 12;          // a track's name: 11 characters
+    static constexpr int kProjectNameLen = 16;   // a project's: 15 (in its folder's name.txt)
+    static constexpr int kMaxSamples = 40;       // entries the sample browser lists (internal RAM is tight)
+    static constexpr int kSampleNameLen = 28;
 
     void init(Engine* engine, const Platform* p);
     void setStreamer(Streamer* s) { stream_ = s; }   // long takes: their audio is on the card
@@ -71,8 +75,26 @@ public:
     // project (current() is 0, so F1 saves a new one).
     bool partial() const { return partial_; }
 
+    // Names: the tracks' go with the project (project.bin); a project's in
+    // its folder (name.txt), so renaming it rewrites nothing else. Project
+    // names are read in the background (service(), one a call): "" until then.
+    const char* trackName(int t) const { return t >= 0 && t < kTracks ? trackName_[t] : ""; }
+    void setTrackName(int t, const char* s);
+    const char* projectName(int i) const { return i >= 0 && i < count_ ? projName_[i] : ""; }
+    bool renameProject(int i, const char* name);   // list index i; false: card error
+
+    // The sample loader (S.Load): a WAV from anywhere on the card into an
+    // empty track. Folders first, then .wav files, by name.
+    void openSampleDir(const char* sub);   // into sub of the current folder; nullptr: up; "": the top
+    void listSamples();                    // the current folder, listed again
+    const char* sampleDir() const { return sampleDir_; }
+    int sampleCount() const { return sampleCount_; }
+    const char* sampleName(int i) const { return i >= 0 && i < sampleCount_ ? sampleName_[i] : ""; }
+    bool sampleIsDir(int i) const { return i >= 0 && i < sampleCount_ && sampleIsDir_[i]; }
+    bool loadSample(int t, int i);   // a job; false: busy, no card, not a WAV, or the track holds a loop
+
 private:
-    enum Kind : uint8_t { kNone, kSave, kLoad, kExport };
+    enum Kind : uint8_t { kNone, kSave, kLoad, kExport, kSample };
     struct ProjectTrack {
         uint32_t len;        // frames; 0 = empty
         uint32_t phase;      // where its start sits in the bar (anchor mod bar)
@@ -90,14 +112,23 @@ private:
         ProjectTrack track[kTracks];
         // Version 2:
         uint8_t fxKnob2[kFxSlots][kFxBank];     // the second bank (Clouds)
-        uint8_t grain[kTracks][kGrainKnobs];    // Granular mode's knobs
+        uint8_t grain[kTracks][kGrainKnobsV2];  // Granular mode's first four knobs
         // Version 3:
         uint8_t stopFade, monitorFx, midiClock, chain[kFxSlots], reserved[11];   // reserved: zero
+        // Version 4:
+        uint8_t filter[kTracks];                // the mixer's DJ filters
+        uint8_t accent, clickSound, clickWhen, countIn;   // the metronome
+        uint8_t grain2[kTracks][kGrainKnobs - kGrainKnobsV2];   // Granular's speed and direction
+        char trackName[kTracks][kNameLen];
+        uint8_t reserved4[16];                  // zero
     };
-    static constexpr uint32_t kProjectV1Bytes = 136, kProjectV2Bytes = 160;
+    static constexpr uint32_t kProjectV1Bytes = 136, kProjectV2Bytes = 160, kProjectV3Bytes = 176;
     static_assert(sizeof(ProjectTrack) == 24, "fixed layout");
-    static_assert(kProjectV2Bytes == kProjectV1Bytes + kFxSlots * kFxBank + kTracks * kGrainKnobs, "fixed layout");
-    static_assert(sizeof(ProjectFile) == kProjectV2Bytes + 16, "fixed layout");
+    static_assert(kProjectV2Bytes == kProjectV1Bytes + kFxSlots * kFxBank + kTracks * kGrainKnobsV2, "fixed layout");
+    static_assert(kProjectV3Bytes == kProjectV2Bytes + 16, "fixed layout");
+    static_assert(sizeof(ProjectFile) == kProjectV3Bytes + 4 + 4 + 8 + 4 * kNameLen + 16, "fixed layout");
+    void readName();                // one project name not read yet, from its name.txt
+    bool sampleStep();              // the sample load, a step
 
     void snapshot(ProjectFile& pf) const;
     void postSettings(const ProjectFile& pf, bool tracks);
@@ -140,6 +171,14 @@ private:
     char status_[64] = {};
     int number_ = 0;
     ProjectFile pf_ = {};
+    char trackName_[kTracks][kNameLen] = {};
+    char projName_[kMaxProjects][kProjectNameLen] = {};
+    uint8_t nameRead_[(kMaxProjects + 7) / 8] = {};   // bit i: projName_[i] is read
+    char sampleDir_[64] = {};
+    char sampleName_[kMaxSamples][kSampleNameLen] = {};
+    bool sampleIsDir_[kMaxSamples] = {};
+    int sampleCount_ = 0;
+    char samplePath_[96] = {};      // the WAV loading
 };
 
 }  // namespace looper

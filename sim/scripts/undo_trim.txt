@@ -16,12 +16,12 @@ tone off
 expect_state 1 PLAY
 expect_len 1 18.0
 # Keep the first 4 s, then replace a pass of it with 880 Hz.
-press INSTR
+press SAMPLEEDITOR
 press F2
 enc -28
 press F4
 wait 100
-press NOTE
+press PATTERN
 expect_len 1 4.0
 tone 880
 hold SHIFT
@@ -32,10 +32,10 @@ press F1
 tone off
 wait 500
 # The trim undone: 18 s again, 17.5 s .. 18 s (under the cells) still 550 Hz.
-press INSTR
+press SAMPLEEDITOR
 press F7
 wait 100
-press NOTE
+press PATTERN
 expect_len 1 18.0
 press PLAY
 wait 500

@@ -409,6 +409,10 @@ bool Streamer::serviceTrack(int t) {
     if (sv.editReq.load(std::memory_order_acquire) && !sv.editDone.load(std::memory_order_relaxed))
         return editStep(t, c);
 
+    // All in RAM (a take kept on the card for its undo): no ring, only the
+    // changed blocks back to the card once the playhead has left them.
+    if (c.len <= c.head) return writeBack(t, c, start + v.pos.load(std::memory_order_relaxed), false, 0, c.len);
+
     // Playing: the ring holds [rStart, rEnd), whole blocks around the playhead:
     // reading forwards from kStreamBehind before it (from head while it is in
     // the RAM part), backwards up to kStreamBehind after it (to the loop's end

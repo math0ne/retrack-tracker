@@ -298,7 +298,7 @@ expect_file /Looper/Projects/001/track2.wav 4400000
 press F3
 press F3
 wait 8000
-press NOTE
+press PATTERN
 expect_stream 2 long 1
 expect_len 2 50.0
 expect_mode 2 Reverse
@@ -320,7 +320,7 @@ press FILE
 press F6
 wait 4000
 expect_file /Looper/Export/001/track2.wav 4400000
-press NOTE
+press PATTERN
 
 # The loop editor on a long take (track 2: 440 Hz to 30 s, 880 Hz to 50 s),
 # Forward again. Markers move a beat (0.5 s) a detent.
@@ -328,7 +328,7 @@ press F5
 press F1
 wait 50
 expect_mode 2 Forward
-press INSTR
+press SAMPLEEDITOR
 wait 100
 shot ../build/sim/check/stream_editor.png
 # Trim to 30..50 s: 20 s of 880 Hz (its RAM part, then the card).
@@ -337,7 +337,7 @@ enc 60
 press F4
 wait 300
 expect_len 2 20.0
-press NOTE
+press PATTERN
 tap 16
 wait 300
 reset_levels
@@ -349,21 +349,21 @@ reset_levels
 wait 1500
 expect_pitch 880
 # Undo the trim (F7): 50 s again.
-press INSTR
+press SAMPLEEDITOR
 wait 100
 press F7
 wait 300
 expect_len 2 50.0
 # Erase 40..50 s (the card part): silence there, the rest untouched.
-press NOTE
-press INSTR
+press PATTERN
+press SAMPLEEDITOR
 wait 100
 press F1
 enc 80
 press F6
 press F6
 wait 3000
-press NOTE
+press PATTERN
 tap 23
 wait 300
 reset_levels
@@ -376,7 +376,7 @@ wait 1500
 expect_pitch 880
 # Cut 0..20 s: the rest moves up over it (the card part into the RAM part):
 # 30 s, 440 Hz to 10 s, 880 Hz to 20 s, then the erased silence.
-press INSTR
+press SAMPLEEDITOR
 wait 100
 press F2
 enc -60
@@ -384,7 +384,7 @@ press F5
 press F5
 wait 4000
 expect_len 2 30.0
-press NOTE
+press PATTERN
 tap 16
 wait 300
 reset_levels

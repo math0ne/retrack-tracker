@@ -1,0 +1,69 @@
+# The editor's Copy / Paste / Insert, and Copy on the home page (the selected
+# track duplicated into the next one).
+wait 300
+opt all start 0
+tone_shape steady
+tone 330
+# Track 1: a 2 s loop, the tone on the left for its first second, on the right for the second.
+# (Off 100 ms early: the loop-point tail, blended into the start, stays silent.)
+tone_ch left
+tap 0
+wait 1000
+tone_ch right
+wait 900
+tone off
+wait 100
+tap 0
+expect_len 1 2.0
+
+# Copy on the home page: track 2 gets the same loop, in time with track 1.
+press COPY
+wait 200
+expect_state 2 PLAY
+expect_len 2 2.0
+shot ../build/sim/check/copy_duplicate.png
+# Track 1 muted: track 2 alone sounds the same, both sides.
+tap 2
+reset_levels
+wait 2000
+expect_ch left 0.1
+expect_ch right 0.1
+# Copying again (track 2 holds a loop now) does nothing.
+press COPY
+wait 100
+expect_len 3 0
+press DOWN
+
+# The editor on track 2: its first half (left) copied, pasted over its
+# second (the length kept): no right channel any more.
+press SAMPLEEDITOR
+wait 100
+# (the markers step a beat, half a second)
+press F2
+enc -2
+wait 50
+press COPY
+wait 50
+shot ../build/sim/check/copy_copied.png
+press F2
+enc 2
+press F1
+enc 2
+wait 50
+hold SHIFT
+press COPY
+release SHIFT
+wait 300
+expect_len 2 2.0
+reset_levels
+wait 2100
+expect_ch left 0.1
+expect_ch right silent
+
+# Insert at the same marker: the loop gets a second longer.
+press INSERT
+wait 400
+expect_len 2 3.0
+shot ../build/sim/check/copy_inserted.png
+press PATTERN
+tap 2

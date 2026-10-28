@@ -17,7 +17,7 @@ press F3
 wait 3000
 expect_latency 400 2
 shot ../build/sim/check/latency_config.png
-press NOTE
+press PATTERN
 
 # One bar of the metronome, recorded through the cable after its count-in.
 opt all metronome 1

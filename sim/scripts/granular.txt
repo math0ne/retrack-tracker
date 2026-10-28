@@ -54,7 +54,7 @@ enc -12
 press F2
 enc 10
 press F3
-enc 20
+enc 10
 wait 30
 expect_grain 1 4 24
 expect_grain 1 2 60
@@ -102,12 +102,13 @@ press F1
 press F6
 wait 400
 expect_fx 2 Clouds 4 75
-# Mixer: track 1 strip, up one row from Level to its FX 2 send.
+# Mixer: track 1 strip, up two rows from Level (past the filter) to its FX 2 send.
 press MASTER
 press F1
 press UP
+press UP
 enc 50
-press NOTE
+press PATTERN
 wait 2000
 shot ../build/sim/check/granular_clouds_page.png
 press FX2
@@ -140,7 +141,7 @@ press F2
 enc 2
 wait 30
 expect_fx 2 Clouds 1 9
-press NOTE
+press PATTERN
 
 # Performance: pad 4 of row 2 toggles FX 2's freeze.
 press PERFORMANCE
@@ -157,7 +158,7 @@ press PERFORMANCE
 press FX2
 wait 30
 shot ../build/sim/check/granular_clouds_frozen.png
-press NOTE
+press PATTERN
 press F2
 wait 300
 expect_state 1 STOP
@@ -172,7 +173,7 @@ release SHIFT
 enc -1
 wait 30
 expect_fx 2 Clouds 8 0
-press NOTE
+press PATTERN
 wait 6000
 reset_levels
 wait 500
@@ -196,7 +197,7 @@ expect_audio 0.02
 press MASTER
 wait 50
 shot ../build/sim/check/granular_chain_mixer.png
-press NOTE
+press PATTERN
 # The chain off: once the delay has rung out, nothing.
 mix 0 chain2 0
 wait 4000

@@ -45,7 +45,7 @@ constexpr uint32_t kSel = 0xD7CD64;
 // The rest of the palette, greys too: help text, level meters, the grid,
 // the track lanes' empty line, mute.
 constexpr uint32_t kHelp = 0x535353, kMeter = 0xA4A4A4, kMute = 0x979797;
-constexpr uint32_t kBeatLine = 0x222222, kBarLine = 0x4E4E4E, kBarNum = 0x747474;
+constexpr uint32_t kBeatLine = 0x1E1E1E, kBarLine = 0x3A3A3A, kBarNum = 0x5E5E5E;   // behind the waveforms
 constexpr uint32_t kTrackDim = 0x2C2C2C, kMeterBack = 0x242424, kCellOff = 0x424242;
 constexpr float kUnsel = 0.6f;
 constexpr uint32_t kRed = 0xFFFFFF, kAmber = 0xC6C6C6;   // recording = the brightest; the page accent
@@ -208,6 +208,14 @@ void App::loop() {
         f5Used_ = true;   // its release is not a tap
     }
     if (grainMenu_ && engine_.mode(selected_) != PlayMode::kGranular) grainMenu_ = false;
+    if (selected_ != focusSent_) {   // the engine monitors the input through this track's sends
+        focusSent_ = selected_;
+        engine_.post(Engine::kFocus, uint8_t(selected_));
+    }
+    if (edit_ && editTrack_ != selected_) {   // a pad picked another track: the editor follows
+        editTrack_ = selected_;
+        editReset();
+    }
     if (now - lastFrameMs_ >= kFrameMs && d_->frameReady()) {
         lastFrameMs_ = now;
         if (edit_) {
@@ -226,7 +234,7 @@ void App::loop() {
                 waveDrawnMs_[editTrack_] = now;
                 waveValid_[editTrack_] = false;   // the lane redraws when it is back on screen
             }
-        } else if (!mixer_ && fxPage_ < 0 && !config_ && !file_ && !inPage_ && !manual_) {
+        } else if (!mixer_ && fxPage_ < 0 && !config_ && !file_ && !inPage_ && !manual_ && !nameEdit_ && !samples_) {
             updateWaves(now);   // lanes only when they are on screen
         }
         render(now);
@@ -295,6 +303,7 @@ void App::record(int t, bool replace) {
     // Shift: replace (punch-in) instead of overdub, on a track with a loop.
     const bool repl = (shift_ || replace) &&
                       (s == TrackState::kPlaying || s == TrackState::kStopped || s == TrackState::kQueued);
+    if (perf_) closePerf();   // recording leaves performance mode
     engine_.post(Engine::kRecord, uint8_t(t), int16_t(repl ? 1 : 0));
 }
 
@@ -357,6 +366,7 @@ void App::undoDub(bool redo) {
 
 bool App::shiftLayer() const {
     return (shift_ || shiftHold_ >= 0) && !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ &&
+           !nameEdit_ && !samples_ &&
            !manual_ && !modeBar_ && !grainMenu_ && !f5Held_ && !f6Held_ && !f7Held_;
 }
 
@@ -460,7 +470,8 @@ void App::onInput(const ot::InputEvent& ev) {
         }
         if (grainPanel()) {   // the grain submenu: the selected grain knob
             const GrainKnob& gk = kGrainKnobInfo[grainSel_];
-            int v = int(engine_.grainParam(selected_, grainSel_)) + ev.delta * (grainSel_ == 3 || shift_ ? 1 : 2);
+            const bool steps = grainSel_ == 3 || grainSel_ >= kGrainSpeed;   // semitones, lists
+            int v = int(engine_.grainParam(selected_, grainSel_)) + ev.delta * (steps || shift_ ? 1 : 2);
             v = v < 0 ? 0 : (v > gk.max ? gk.max : v);
             engine_.post(Engine::kGrainParam, uint8_t(selected_), int16_t((grainSel_ << 8) | v));
             return;
@@ -468,6 +479,7 @@ void App::onInput(const ot::InputEvent& ev) {
         if (f7Held_) {   // F7 held: the selected track's volume
             const int vol = int(engine_.volume(selected_)) + ev.delta * (shift_ ? 1 : 2);
             engine_.post(Engine::kVolume, uint8_t(selected_), int16_t(vol < 0 ? 0 : (vol > 100 ? 100 : vol)));
+            f7Turned_ = true;
             return;
         }
         if (f6Held_) {   // F6 held: input gain
@@ -503,6 +515,17 @@ void App::onInput(const ot::InputEvent& ev) {
             int v = int(engine_.perfParam(PerfFx(pfx))) + ev.delta * step;
             v = v < 0 ? 0 : (v > kn.max ? kn.max : v);
             engine_.post(Engine::kPerfParam, 0, int16_t((pfx << 8) | v));
+            return;
+        }
+        if (nameEdit_) {
+            nameEncoder(ev.delta);
+            return;
+        }
+        if (samples_) {   // the encoder scrolls the list
+            const int n = files_.sampleCount();
+            sampleSel_ += ev.delta;
+            sampleSel_ = sampleSel_ >= n ? n - 1 : sampleSel_;
+            sampleSel_ = sampleSel_ < 0 ? 0 : sampleSel_;
             return;
         }
         if (fxPage_ >= 0) {
@@ -554,7 +577,7 @@ void App::onInput(const ot::InputEvent& ev) {
         powerHeld_ = down;
         powerDownMs_ = ev.timeMs;
     }
-    if (ev.id == b::Performance || ev.id == b::Pattern) {   // Pattern is a second Perform key
+    if (ev.id == b::Performance || ev.id == b::Instr) {   // Instr is a second Perform key
         // Tap: latch on (a second tap turns it off). Hold: on until released.
         if (down) {
             perfToggleOff_ = perf_;
@@ -568,7 +591,8 @@ void App::onInput(const ot::InputEvent& ev) {
         }
         return;
     }
-    const bool home = !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !modeBar_;
+    const bool home = !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !modeBar_ &&
+                      !nameEdit_ && !samples_;
     if (shiftHold_ >= 0 && ev.id == b::F1 + shiftHold_) {   // a held Shift-layer key, Shift or not
         if (!down) shiftKeyUp(ev.timeMs);
         return;
@@ -582,8 +606,8 @@ void App::onInput(const ot::InputEvent& ev) {
             } else {
                 f5Held_ = false;
             }
-        } else if (down && ev.id <= b::F4) {
-            grainSel_ = ev.id - b::F1;
+        } else if (down && grainKnobOfKey(ev.id - b::F1) >= 0) {
+            grainSel_ = grainKnobOfKey(ev.id - b::F1);
         }
         return;
     }
@@ -630,10 +654,23 @@ void App::onInput(const ot::InputEvent& ev) {
         }
         return;
     }
-    // Home page F7: hold + encoder sets the selected track's volume (the
-    // encoder alone does too; holding shows the knob).
+    // Home page F7: a tap opens the mixer on the selected track's strip (its
+    // level, sends and filter); hold + encoder sets its volume (the encoder
+    // alone does too; holding shows the knob).
     if (ev.id == b::F7 && (home || f7Held_)) {
-        f7Held_ = down;
+        if (down) {
+            f7Held_ = true;
+            f7Turned_ = false;
+            f7DownMs_ = ev.timeMs;
+        } else if (f7Held_) {
+            f7Held_ = false;
+            if (!f7Turned_ && ev.timeMs - f7DownMs_ < kTapMs) {   // a tap, not a hold
+                goHome();
+                mixer_ = true;
+                strip_ = selected_;
+                row_ = kRows - 1;
+            }
+        }
         return;
     }
     // Home page F6: a tap opens the Input page; held, the encoder sets the input gain.
@@ -667,14 +704,17 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     if (!down) return;
-    if (ev.id == b::Note) {   // home: the lanes
+    if (ev.id == b::Pattern) {   // home: the lanes
         goHome();
         return;
     }
     if (ev.id == b::Master || ev.id == b::Song) {   // page keys toggle their page
         const bool wasMixer = mixer_, wasManual = manual_;
         goHome();
-        if (ev.id == b::Master) mixer_ = !wasMixer;
+        if (ev.id == b::Master) {
+            mixer_ = !wasMixer;
+            if (mixer_) strip_ = selected_;   // the mixer opens on the selected track's strip
+        }
         else manual_ = !wasManual;   // Song: the manual (where it was left)
         return;
     }
@@ -700,13 +740,23 @@ void App::onInput(const ot::InputEvent& ev) {
         }
         return;
     }
-    if (ev.id == b::Instr) {   // Instr: the loop editor for the selected track
+    if (ev.id == b::Note || ev.id == b::SampleEditor) {   // the loop editor for the selected track
         const bool was = edit_;
         goHome();
         if (!was) {
             edit_ = true;
             editTrack_ = selected_;
             editReset();
+        }
+        return;
+    }
+    if (ev.id == b::SampleLoader) {   // the sample loader: a WAV into the selected track
+        const bool was = samples_;
+        goHome();
+        if (!was) {
+            samples_ = true;
+            files_.listSamples();   // listed again (the card may have changed)
+            if (sampleSel_ >= files_.sampleCount()) sampleSel_ = 0;
         }
         return;
     }
@@ -721,6 +771,14 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     const bool nav = b::isFKey(ev.id) || ev.id == b::Left || ev.id == b::Right || ev.id == b::Up || ev.id == b::Down;
+    if (nameEdit_ && (nav || ev.id == b::Delete)) {
+        nameKey(ev.id);
+        return;
+    }
+    if (samples_ && nav) {
+        sampleKey(ev.id);
+        return;
+    }
     if (fxPage_ >= 0 && nav) {
         fxKey(ev.id);
         return;
@@ -751,6 +809,14 @@ void App::onInput(const ot::InputEvent& ev) {
     }
     if (b::isFKey(ev.id)) {
         onFKey(ev.id - b::F1);
+        return;
+    }
+    if (edit_ && (ev.id == b::Copy || ev.id == b::Insert)) {   // the editor: copy, paste over, paste inserted
+        editClip(ev.id == b::Insert ? 2 : (shift_ ? 1 : 0));
+        return;
+    }
+    if (ev.id == b::Copy && home) {   // the home page: the selected track into the next one
+        duplicateTrack();
         return;
     }
     if (modeBar_ && ev.id != b::Shift && ev.id != b::Power) {   // any other key closes the mode bar
@@ -846,16 +912,32 @@ void App::closePerf() {
 
 void App::goHome() {
     mixer_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = manual_ = grainMenu_ = false;
+    nameEdit_ = samples_ = false;
     midi_.learn(-1);
     fxPage_ = -1;
     fxBar_ = modeBar_ = false;
     confirm_ = -1;
 }
 
+namespace {
+// The name page's keyboard, laid out as the pads: row by row, 12 a row.
+constexpr char kNamePads[4][13] = {"ABCDEFGHIJKL", "MNOPQRSTUVWX", "YZ0123456789", " -_.!?&+#'()"};
+// What the encoder steps through.
+constexpr char kNameChars[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!?&+#'()";
+}  // namespace
+
 void App::onPad(int pad, bool down) {
     if (pad < 0 || pad >= ot::kPadCount) return;
     const int t = pad / ot::kPadCols, col = pad % ot::kPadCols;
     if (t >= kTracks) return;
+    if (nameEdit_) {   // a key of the keyboard; Shift: lower case
+        if (down) {
+            char c = kNamePads[t][col];
+            if (shift_ && c >= 'A' && c <= 'Z') c = char(c + 32);
+            nameType(c);
+        }
+        return;
+    }
     if (perf_ && col == 3) {   // performance: Freeze for a Clouds slot (row 1 FX 1, row 2 FX 2)
         if (down && t < kFxSlots && engine_.fxType(t) == FxType::kClouds) {
             const int on = engine_.fxKnob(t, kCloudsFreeze) ? 0 : 1;
@@ -1229,9 +1311,13 @@ void App::render(uint32_t now) {
     else if (file_) drawFile();
     else if (inPage_) drawInput();
     else if (manual_) drawManual();
+    else if (nameEdit_) drawName();
+    else if (samples_) drawSamples();
     else if (mixer_) drawMixer();
-    else
+    else {
         for (int t = 0; t < kTracks; ++t) drawLane(t, now);
+        drawBarClock(now);
+    }
     drawFKeys();
     // Pop-up knobs: F7 held (input gain), an effect pad held in performance mode.
     const bool shiftPop = shiftHold_ >= 0 && (shiftTurned_ || p_.clock->millis() - shiftDownMs_ >= 250);
@@ -1382,6 +1468,9 @@ void App::drawLane(int t, uint32_t now) {
                           (sel ? 1.0f : 0.45f);   // the selected track bright, the others dimmer
         const bool rev = modeInfo(mode).reverse && s != TrackState::kRecording;
         const float leftK = rev ? 0.45f * dim : dim, rightK = rev ? dim : 0.45f * dim;
+        // The bar and beat lines first, behind the waveform (the effect cells
+        // take their place in performance mode: display-list budget).
+        if (!perf_) drawGrid(t, wx, wy, span);
         if (px > wx) {
             scissor(wx, wy, px - wx, kWaveH);
             color(scale(sel ? kSel : tc, leftK));
@@ -1395,8 +1484,6 @@ void App::drawLane(int t, uint32_t now) {
             words_ += 13;
         }
         scissorOff();
-
-        if (!perf_) drawGrid(t, wx, wy, span);   // the effect cells take its place (display-list budget)
         if (s == TrackState::kQueued) {   // waiting for its bar line
             color(kAmber);
             text(wx1 - 24, wy + 2, kFontSmall, Disp::kOptRightX, "starts on the next bar");
@@ -1469,16 +1556,17 @@ void App::drawLane(int t, uint32_t now) {
     // Corner tag: what is not the default (length, mode, mute), no box. The
     // selected track's full state is on the F-keys.
     {
-        char tag[48];
+        char tag[64];
         int n = 0;
+        if (files_.trackName(t)[0]) n = std::snprintf(tag, sizeof tag, "%s  ", files_.trackName(t));
         if (len) {
-            fmtSeconds(tag, sizeof tag, len);
+            fmtSeconds(tag + n, sizeof tag - size_t(n), len);
             n = int(std::strlen(tag));
         } else if (s == TrackState::kRecording) {
-            fmtSeconds(tag, sizeof tag, written);
+            fmtSeconds(tag + n, sizeof tag - size_t(n), written);
             n = int(std::strlen(tag));
         }
-        if (engine_.longTake(t) && n < int(sizeof tag) - 2)   // its tail plays from the SD card
+        if (engine_.onCard(t) && n < int(sizeof tag) - 2)   // its tail plays from the SD card
             n += std::snprintf(tag + n, sizeof tag - size_t(n), "%scard", n ? "  " : "");
         if (mode != PlayMode::kForward && n < int(sizeof tag) - 2)
             n += std::snprintf(tag + n, sizeof tag - size_t(n), "%s%s", n ? "  " : "", modeInfo(mode).name);
@@ -1513,6 +1601,30 @@ void App::drawLane(int t, uint32_t now) {
         alpha(255);
         color(kAmber);
         text(wx + kWaveW / 2, wy + kWaveH / 2, kFontSmall, Disp::kOptCenter, hintText_);
+    }
+}
+
+void App::drawBarClock(uint32_t now) {
+    // The bar's beats down the screen's right edge, beside the lanes: those
+    // gone by lit faintly, the current one brighter, and the bar's last beat
+    // in the selection colour, so the end of the bar can be seen coming.
+    const uint32_t bar = engine_.barFrames();
+    const int beats = engine_.beatsPerBar() ? engine_.beatsPerBar() : 4;
+    if (!engine_.running() || !bar) return;
+    const uint32_t ph = engine_.transportFrame() % bar;
+    const int cur = int(uint64_t(ph) * uint32_t(beats) / bar);
+    const float within = float(uint64_t(ph) * uint32_t(beats) % bar) / float(bar);   // through the beat, 0..1
+    constexpr int x0 = kWaveX + kWaveW + 5, x1 = 797, top = kLaneY0, bottom = kLaneY0 + 4 * (kLaneH + kLaneGap) - kLaneGap;
+    constexpr int gap = 4;
+    const int seg = (bottom - top - gap * (beats - 1)) / beats;
+    (void)now;
+    for (int i = 0; i < beats; ++i) {
+        const int y = top + i * (seg + gap);
+        const bool last = i == beats - 1;
+        if (i < cur) color(kFaint);
+        else if (i == cur) color(last ? scale(kSel, 0.55f + 0.45f * within) : kDim);
+        else color(kTrackDim);
+        fillRect(x0, y, x1, y + seg, 2);
     }
 }
 
@@ -1596,11 +1708,12 @@ void App::drawFKeys() {
                     std::snprintf(val[i], sizeof val[i], "%s", engine_.opt(OptParam::kStretch, selected_) ? "Stretch" : "Tape");
                     break;
             }
-        } else if (grainPanel()) {   // the grain submenu: F1..F4 its knobs, F5 closes it
-            if (i < kGrainKnobs) {
-                title[i] = kGrainKnobInfo[i].name;
-                grainText(i, val[i], sizeof val[i]);
-                hot = grainSel_ == i;
+        } else if (grainPanel()) {   // the grain submenu: F1..F4, F6, F7 its knobs, F5 closes it
+            const int gk = grainKnobOfKey(i);
+            if (gk >= 0) {
+                title[i] = kGrainKnobInfo[gk].name;
+                grainText(gk, val[i], sizeof val[i]);
+                hot = grainSel_ == gk;
             } else if (i == 4) {
                 title[i] = "GRAIN";
                 std::snprintf(val[i], sizeof val[i], "Close");
@@ -1635,6 +1748,18 @@ void App::drawFKeys() {
                 title[i] = "HOME";
                 std::snprintf(val[i], sizeof val[i], "Loops");
             }
+        } else if (nameEdit_) {   // F1 space, F2 delete, F3 clear, F7 cancel, F8 done
+            static const char* const kT[8] = {"SPACE", "DELETE", "CLEAR", "", "", "", "CANCEL", "DONE"};
+            static const char* const kV[8] = {"Insert", "Back", "All", "", "", "", "Keep old", "Save name"};
+            title[i] = kT[i];
+            std::snprintf(val[i], sizeof val[i], "%s", kV[i]);
+        } else if (samples_) {   // F1 open / load, F2 up a folder, F8 home
+            const bool dir = files_.sampleIsDir(sampleSel_);
+            static const char* const kT[8] = {"", "FOLDER", "", "", "", "", "", "HOME"};
+            title[i] = i == 0 ? (dir ? "OPEN" : "LOAD") : kT[i];
+            const char* v = i == 0 ? (dir ? "Folder" : (files_.sampleCount() ? "Into track" : "-"))
+                            : i == 1 ? (files_.sampleDir()[0] ? "Up" : "-") : i == 7 ? "Loops" : "";
+            std::snprintf(val[i], sizeof val[i], "%s", v);
         } else if (config_ && fwPage_) {   // F1 flash (twice), F2 rescan, F7 back, F8 home
             const bool armed = confirm_ == 0 && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0;
             static const char* const kT[8] = {"FLASH", "RESCAN", "", "", "", "", "BACK", "HOME"};
@@ -1703,6 +1828,7 @@ void App::drawFKeys() {
                     std::snprintf(val[i], sizeof val[i], "%s", armed ? "Sure?" : "Selected");
                     hot = armed;
                     break;
+                case 3: title[i] = "NAME"; std::snprintf(val[i], sizeof val[i], "Project"); break;
                 case 4:
                     title[i] = "EXPORT";
                     std::snprintf(val[i], sizeof val[i], "Track %c", char('1' + selected_));
@@ -1730,8 +1856,8 @@ void App::drawFKeys() {
             }
         } else if (mixer_ && shift_) {   // Shift: F1..F4 mute a track, lit while muted
             static const char* const kNames[kTracks] = {"Track 1", "Track 2", "Track 3", "Track 4"};
-            title[i] = i < kTracks ? "MUTE" : (i == 7 ? "HOME" : "");
-            std::snprintf(val[i], sizeof val[i], "%s", i < kTracks ? kNames[i] : (i == 7 ? "Loops" : ""));
+            title[i] = i < kTracks ? "MUTE" : (i == 7 && strip_ < kTracks ? "NAME" : "");
+            std::snprintf(val[i], sizeof val[i], "%s", i < kTracks ? kNames[i] : (i == 7 && strip_ < kTracks ? "Track" : ""));
             if (i < kTracks && engine_.view(i).muted.load()) {
                 hot = true;
                 hotCol = kMute;
@@ -1805,7 +1931,7 @@ void App::drawFKeys() {
             }
         }
         uint32_t hc = tc;
-        if (config_ || file_ || inPage_) hc = kAmber;
+        if (config_ || file_ || inPage_ || nameEdit_ || samples_) hc = kAmber;
         else if (edit_) hc = (i == 4 || i == 5) ? kAmber : kTrackColor[editTrack_];
         else if (fxPage_ >= 0) hc = stripColor(4 + fxPage_);
         else if (mixer_ && !modeBar_ && !perfGlobal()) hc = stripColor(i);
@@ -1844,7 +1970,7 @@ void App::drawFKeys() {
     // Home page: the input level inside the INPUT cell, the track's level inside VOLUME
     // (not under the Shift layer, where those keys do other things).
     if (!modeBar_ && !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !shiftLayer() &&
-        !grainPanel() && !perfKeys()) {
+        !grainPanel() && !perfKeys() && !nameEdit_ && !samples_) {
         const int x0 = 5 * kKeyW + 10, x1 = 6 * kKeyW - 10;
         for (int c = 0; c < 2; ++c) {
             const float m = inMeter_[c];
@@ -1876,13 +2002,15 @@ bool App::mixParam(int strip, int row, MixParam& p, int& track, int& fxKnob) con
     fxKnob = -1;
     p = MixParam::kLevel;
     if (strip < kTracks) {
-        p = row == 0 ? MixParam::kSend1 : (row == 1 ? MixParam::kSend2 : MixParam::kLevel);
+        static const MixParam kTrackRow[kRows] = {MixParam::kSend1, MixParam::kSend2, MixParam::kFilter, MixParam::kLevel};
+        p = kTrackRow[row];
         return true;
     }
     if (strip == 4 || strip == 5) {
         const int slot = strip - 4;
         track = slot;
-        if (row == 2) {
+        if (row == 2) return false;
+        if (row == kRows - 1) {
             p = slot == 0 ? MixParam::kReturn1 : MixParam::kReturn2;
             return true;
         }
@@ -1894,7 +2022,7 @@ bool App::mixParam(int strip, int row, MixParam& p, int& track, int& fxKnob) con
         fxKnob = row;
         return true;
     }
-    if (strip == 6 && row == 2) {
+    if (strip == 6 && row == kRows - 1) {
         p = MixParam::kMaster;
         return true;
     }
@@ -1904,20 +2032,27 @@ bool App::mixParam(int strip, int row, MixParam& p, int& track, int& fxKnob) con
 void App::mixerKey(uint8_t id) {
     MixParam p;
     int t, k;
-    if (id == b::F8) {
+    if (id == b::F8 && !shift_) {
         goHome();
         return;
     }
-    if (shift_ && b::isFKey(id)) {   // Shift: F1..F4 mute / unmute a track (the strip stays)
+    if (shift_ && b::isFKey(id)) {   // Shift: F1..F4 mute / unmute a track (the strip stays); F8 names it
         const int k = id - b::F1;
         if (k < kTracks) engine_.post(Engine::kMute, uint8_t(k));
+        else if (k == 7 && strip_ < kTracks) openName(strip_);
         return;
     }
     if (b::isFKey(id)) strip_ = id - b::F1;
     else if (id == b::Left && strip_ > 0) --strip_;
     else if (id == b::Right && strip_ < kStrips - 1) ++strip_;
-    else if (id == b::Up && row_ > 0 && mixParam(strip_, row_ - 1, p, t, k)) --row_;
-    else if (id == b::Down && row_ < kRows - 1) ++row_;
+    else if (id == b::Up || id == b::Down) {   // the next row this strip has
+        const int d = id == b::Up ? -1 : 1;
+        for (int r = row_ + d; r >= 0 && r < kRows; r += d)
+            if (mixParam(strip_, r, p, t, k)) {
+                row_ = r;
+                break;
+            }
+    }
     if (!mixParam(strip_, row_, p, t, k)) row_ = kRows - 1;   // master has only the fader
     if (strip_ < kTracks) selected_ = strip_;
 }
@@ -1933,6 +2068,20 @@ void App::mixerEncoder(int delta) {
     int v = int(engine_.mix(p, t)) + delta * (shift_ ? 1 : 2);
     v = v < 0 ? 0 : (v > 100 ? 100 : v);
     engine_.post(Engine::kMix, uint8_t(t), int16_t((int(p) << 8) | v));
+}
+
+void App::filterText(uint8_t v, char* buf, size_t n) {
+    // As the engine sets it (Engine: kFilter): Off round the middle, else the
+    // kind and its cutoff.
+    if (v >= kFilterOff - 2 && v <= kFilterOff + 2) {
+        std::snprintf(buf, n, "Off");
+        return;
+    }
+    const bool hp = v > kFilterOff;
+    const float x = hp ? float(v - kFilterOff - 2) / 48.0f : float(kFilterOff - 2 - v) / 48.0f;
+    const float hz = hp ? 20.0f * std::pow(6000.0f / 20.0f, x) : 20000.0f * std::pow(150.0f / 20000.0f, x);
+    if (hz >= 1000.0f) std::snprintf(buf, n, "%s %.1fk", hp ? "HP" : "LP", double(hz / 1000.0f));
+    else std::snprintf(buf, n, "%s %d", hp ? "HP" : "LP", int(hz));
 }
 
 void App::stepFxKnob(int slot, int knob, int delta) {
@@ -1963,30 +2112,10 @@ float App::fxKnobFrac(int slot, int knob) const {
 
 void App::drawMixer() {
     for (int s = 0; s < kStrips; ++s) drawStrip(s);
-    // The eighth column, over F8: how to drive the page.
-    const int cx = 7 * kKeyW + kKeyW / 2;
-    if (perfGlobal()) {   // Perform: the keys play the effects on every track
+    if (perfGlobal()) {   // Perform: the keys play the effects on every track (the eighth column, over F8)
         color(kSel);
-        text(cx, 182, kFontSmall, Disp::kOptCenter, "Perform:");
-        text(cx, 200, kFontSmall, Disp::kOptCenter, "all tracks");
-        color(kHelp);
-        text(cx, 236, kFontSmall, Disp::kOptCenter, "Hold F1-F8");
-        text(cx, 254, kFontSmall, Disp::kOptCenter, "+ encoder:");
-        text(cx, 272, kFontSmall, Disp::kOptCenter, "its knob");
-        text(cx, 302, kFontSmall, Disp::kOptCenter, "Shift + key:");
-        text(cx, 320, kFontSmall, Disp::kOptCenter, "latch");
-        text(cx, 350, kFontSmall, Disp::kOptCenter, "Left/Right");
-        text(cx, 368, kFontSmall, Disp::kOptCenter, "strip");
-        return;
+        text(7 * kKeyW + kKeyW / 2, 200, kFontSmall, Disp::kOptCenter, "All tracks");
     }
-    color(kHelp);
-    text(cx, 200, kFontSmall, Disp::kOptCenter, "Up/Down");
-    text(cx, 218, kFontSmall, Disp::kOptCenter, "row");
-    text(cx, 248, kFontSmall, Disp::kOptCenter, "Encoder");
-    text(cx, 266, kFontSmall, Disp::kOptCenter, "value");
-    text(cx, 296, kFontSmall, Disp::kOptCenter, "Shift");
-    text(cx, 314, kFontSmall, Disp::kOptCenter, "fine;");
-    text(cx, 332, kFontSmall, Disp::kOptCenter, "F1-F4 mute");
 }
 
 void App::drawStrip(int s) {
@@ -2000,14 +2129,16 @@ void App::drawStrip(int s) {
 
     const bool muted = s < kTracks && engine_.view(s).muted.load();
     color(sel ? kSel : (muted ? kMute : (emptyTrack ? kFaint : kDim)));
-    text(cx, 23, kFontSmall, Disp::kOptCenter, muted ? "Muted" : kStripName[s]);
+    char nm[Files::kNameLen + 8];
+    text(cx, 23, kFontSmall, Disp::kOptCenter, muted ? "Muted" : (s < kTracks ? trackLabel(s, nm, sizeof nm) : kStripName[s]));
 
-    // Two small parameters: label, value, bar. Track sends use their slot's colour.
-    for (int row = 0; row < 2; ++row) {
+    // Small parameters: label, value, bar. Track sends use their slot's colour;
+    // the filter's bar runs out from the middle.
+    for (int row = 0; row < kRows - 1; ++row) {
         MixParam p;
         int t, k;
         if (!mixParam(s, row, p, t, k)) continue;
-        const int by0 = 52 + row * 64;
+        const int by0 = 44 + row * 58;
         const bool on = sel && row_ == row;
         const char* label;
         float fr;
@@ -2015,6 +2146,10 @@ void App::drawStrip(int s) {
             label = fxTypeInfo(engine_.fxType(t)).knob[k].name;
             fxKnobText(t, k, buf, sizeof buf);
             fr = fxKnobFrac(t, k);
+        } else if (p == MixParam::kFilter) {
+            label = "Filter";
+            filterText(engine_.mix(p, t), buf, sizeof buf);
+            fr = float(engine_.mix(p, t)) / 100.0f;
         } else {
             // Track sends; on the FX strips the chain into the other slot.
             label = p == MixParam::kChain1 ? "To FX 2" : (p == MixParam::kChain2 ? "To FX 1" : (row == 0 ? "To FX 1" : "To FX 2"));
@@ -2033,17 +2168,22 @@ void App::drawStrip(int s) {
         color(kFaint);
         fillRect(x0 + 12, by0 + 46, x1 - 12, by0 + 50, 2);
         color(on ? kSel : scale(bc, (emptyTrack ? 0.4f : 1.0f) * kUnsel));
-        fillRect(x0 + 12, by0 + 46, x0 + 16 + int((x1 - x0 - 28) * fr), by0 + 50, 2);
+        if (p == MixParam::kFilter) {   // from the middle towards the side that runs
+            const int mid = (x0 + x1) / 2, fx = x0 + 12 + int((x1 - x0 - 24) * fr);
+            fillRect(fx < mid ? fx : mid - 2, by0 + 46, fx < mid ? mid + 2 : fx, by0 + 50, 2);
+        } else {
+            fillRect(x0 + 12, by0 + 46, x0 + 16 + int((x1 - x0 - 28) * fr), by0 + 50, 2);
+        }
     }
 
     // The fader: level, return or master, with its meter beside it.
     MixParam p;
     int t, kk;
-    if (!mixParam(s, 2, p, t, kk)) return;
+    if (!mixParam(s, kRows - 1, p, t, kk)) return;
     auto valueText = [&](uint8_t v) { std::snprintf(buf, sizeof buf, "%u", unsigned(v)); };
     auto frac = [](uint8_t v) { return float(v) / 100.0f; };
-    const int fy0 = 184, fy1 = 424;
-    const bool on = sel && row_ == 2;
+    const int fy0 = 220, fy1 = 424;
+    const bool on = sel && row_ == kRows - 1;
     color(on ? kSel : kDim);
     text(cx, fy0 + 15, kFontSmall, Disp::kOptCenter, s < kTracks || s == 6 ? "Level" : "Return");
     const uint8_t v = engine_.mix(p, t);
@@ -2206,18 +2346,23 @@ void App::applyConfig() {
 // Input page: the input card and the metronome card
 
 namespace {
-constexpr int kInRows[2] = {6, 5};
-const char* const kInName[2][6] = {{"Source", "Gain", "Channels", "Monitor", "Monitor FX", "Overdub feedback"},
-                                   {"Metronome", "Click level", "Tempo", "Beats per bar", "Stop fade", ""}};
-const char* const kInHelp[2][6] = {
+constexpr int kInRows[2] = {6, 9};
+const char* const kInName[2][9] = {{"Source", "Gain", "Channels", "Monitor", "Monitor FX", "Overdub feedback"},
+                                   {"Metronome", "Click level", "Click sound", "Accent", "Click", "Count-in", "Tempo",
+                                    "Beats per bar", "Stop fade"}};
+const char* const kInHelp[2][9] = {
     {"Line in, or the mic input at low or high gain.", "Codec input gain. Watch the meter while you play.",
      "Stereo or mono takes for the selected track (set while the track is empty).",
      "Hear the input through the outputs.",
-     "Hear the input through the effects too (full send). Takes are still recorded dry.",
+     "Hear the input through the effects too, at the selected track's sends. Takes stay dry.",
      "How much of the loop stays under each overdub pass."},
-    {"Click on every beat, accent on the bar line. Count-ins click either way.", "Click volume.",
+    {"Click on every beat. Count-ins click either way.", "Click volume.", "Beep, wood block, hi-hat or cowbell.",
+     "A louder (higher) click on the bar line.", "Always, or only while a track records or overdubs.",
+     "Bars of click before a Count-in take (Off: it starts at once).",
      "Before the first loop: the bar length. After: tape speed, 50 to 200 %.", "Beats in a bar: the grid for stops, count-ins and the click.",
-     "Stop fades a track out over this long first (a second Stop: at once).", ""}};
+     "Stop fades a track out over this long first (a second Stop: at once)."}};
+const char* const kClickName[kClickSounds] = {"Beep", "Wood block", "Hi-hat", "Cowbell"};
+const char* const kCountInName[4] = {"Off", "1 bar", "2 bars", "4 bars"};
 const char* const kMonFxName[4] = {"Off", "FX 1", "FX 2", "Both"};
 const char* const kChName[4] = {"Stereo", "Mono L", "Mono R", "Mono sum"};
 }  // namespace
@@ -2351,17 +2496,22 @@ void App::inputEncoder(int delta) {
         markConfig();
         return;
     }
+    auto step = [&](OptParam p, int hi) { opt(p, 0, lim(int(engine_.opt(p)) + (delta > 0 ? 1 : -1), 0, hi)); };
     switch (inRow_) {
         case 0: opt(OptParam::kMetronome, 0, delta > 0 ? 1 : 0); break;
         case 1: opt(OptParam::kClick, 0, lim(int(engine_.opt(OptParam::kClick)) + delta * (shift_ ? 1 : 5), 0, 100)); break;
-        case 2: {
+        case 2: step(OptParam::kClickSound, kClickSounds - 1); break;
+        case 3: opt(OptParam::kAccent, 0, delta > 0 ? 1 : 0); break;
+        case 4: opt(OptParam::kClickWhen, 0, delta > 0 ? 1 : 0); break;
+        case 5: step(OptParam::kCountInBars, 3); break;
+        case 6: {
             int lo, hi;
             tempoRange(lo, hi);
             opt(OptParam::kTempo, 0, lim(int(engine_.opt(OptParam::kTempo)) + delta, lo, hi));
             break;
         }
-        case 3: opt(OptParam::kBeats, 0, lim(int(engine_.opt(OptParam::kBeats)) + delta, 1, 12)); break;
-        default: opt(OptParam::kStopFade, 0, lim(int(engine_.opt(OptParam::kStopFade)) + (delta > 0 ? 1 : -1), 0, 3)); break;
+        case 7: opt(OptParam::kBeats, 0, lim(int(engine_.opt(OptParam::kBeats)) + delta, 1, 12)); break;
+        default: step(OptParam::kStopFade, 3); break;
     }
 }
 
@@ -2373,7 +2523,7 @@ void App::drawInput() {
         color(kAmber);
         text(x0, 22, kFontBig, Disp::kOptCenterY, c ? "TEMPO" : "INPUT");
         for (int r = 0; r < kInRows[c]; ++r) {
-            const int y0 = 46 + r * 48, y1 = y0 + 40, cy = (y0 + y1) / 2;
+            const int y0 = 46 + r * 38, y1 = y0 + 34, cy = (y0 + y1) / 2;
             const bool sel = inCol_ == c && inRow_ == r;
             const char* name = kInName[c][r];
             if (c == 0 && r == 2) {
@@ -2416,13 +2566,17 @@ void App::drawInput() {
                         frac = k / 100.0f;
                         break;
                     }
-                    case 2:
+                    case 2: std::snprintf(v, sizeof v, "%s", kClickName[engine_.opt(OptParam::kClickSound) % kClickSounds]); break;
+                    case 3: std::snprintf(v, sizeof v, "%s", engine_.opt(OptParam::kAccent) ? "On" : "Off"); break;
+                    case 4: std::snprintf(v, sizeof v, "%s", engine_.opt(OptParam::kClickWhen) ? "Recording" : "Always"); break;
+                    case 5: std::snprintf(v, sizeof v, "%s", kCountInName[engine_.opt(OptParam::kCountInBars) & 3]); break;
+                    case 6:
                         if (engine_.masterLen() && engine_.speed() != 1.0f)
                             std::snprintf(v, sizeof v, "%u bpm  %d%%", unsigned(engine_.opt(OptParam::kTempo)),
                                           int(engine_.speed() * 100.0f + 0.5f));
                         else std::snprintf(v, sizeof v, "%u bpm", unsigned(engine_.opt(OptParam::kTempo)));
                         break;
-                    case 3: std::snprintf(v, sizeof v, "%u", unsigned(engine_.opt(OptParam::kBeats))); break;
+                    case 7: std::snprintf(v, sizeof v, "%u", unsigned(engine_.opt(OptParam::kBeats))); break;
                     default: {
                         static const char* const kFade[4] = {"Off", "1 beat", "1 bar", "2 bars"};
                         std::snprintf(v, sizeof v, "%s", kFade[engine_.opt(OptParam::kStopFade) & 3]);
@@ -2449,9 +2603,7 @@ void App::drawInput() {
     color(kDim);
     const char* help = kInHelp[inCol_][inRow_];
     if (inCol_ == 0 && inRow_ == 2 && !empty) help = "This track holds a loop: clear it to change its channels.";
-    text(20, 340, kFontSmall, 0, help);
-    color(kHelp);
-    text(20, 384, kFontSmall, 0, "Up / Down: setting   Left / Right: card   Encoder: value (Shift: fine)");
+    text(20, 406, kFontSmall, 0, help);
 }
 
 namespace {
@@ -2854,6 +3006,9 @@ void App::fileKey(uint8_t id) {
                 return;
             }
             break;
+        case b::F4:   // name the selected project
+            if (n && !files_.busy()) openName(kNameProject + projSel_);
+            return;
         case b::F5: files_.exportTracks(uint8_t(1u << selected_)); break;
         case b::F6: files_.exportTracks(0x0F); break;
         case b::F8: goHome(); break;
@@ -2891,7 +3046,8 @@ void App::drawFile() {
     for (int i = first; i < n && i < first + rows; ++i) {
         const int y0 = 76 + (i - first) * 38, y1 = y0 + 32;
         const bool sel = i == projSel_, cur = files_.projectNumber(i) == files_.current();
-        std::snprintf(buf, sizeof buf, "Project %03d", files_.projectNumber(i));
+        if (files_.projectName(i)[0]) std::snprintf(buf, sizeof buf, "%03d  %s", files_.projectNumber(i), files_.projectName(i));
+        else std::snprintf(buf, sizeof buf, "Project %03d", files_.projectNumber(i));
         color(sel ? kSel : kDim);
         text(40, (y0 + y1) / 2, kFontBody, Disp::kOptCenterY, buf);
         if (cur) {
@@ -2913,9 +3069,11 @@ void App::drawFile() {
         if (len) {
             char s[16];
             fmtSeconds(s, sizeof s, len);
-            std::snprintf(buf, sizeof buf, "Track %d   %s   %s", t + 1, s, v.mono.load() ? "mono" : "stereo");
+            char nm[Files::kNameLen + 8];
+            std::snprintf(buf, sizeof buf, "%s   %s   %s", trackLabel(t, nm, sizeof nm), s, v.mono.load() ? "mono" : "stereo");
         } else {
-            std::snprintf(buf, sizeof buf, "Track %d   empty", t + 1);
+            char nm[Files::kNameLen + 8];
+            std::snprintf(buf, sizeof buf, "%s   empty", trackLabel(t, nm, sizeof nm));
         }
         text(456, y, kFontSmall, Disp::kOptCenterY, buf);
     }
@@ -2941,6 +3099,270 @@ void App::drawFile() {
 
 // ---------------------------------------------------------------------------
 // Loop editor (S.Edit)
+
+const char* App::trackLabel(int t, char* buf, size_t n) const {
+    if (files_.trackName(t)[0]) std::snprintf(buf, n, "%s", files_.trackName(t));
+    else std::snprintf(buf, n, "Track %d", t + 1);
+    return buf;
+}
+
+void App::openName(int target) {
+    const char* now = target >= kNameProject ? files_.projectName(target - kNameProject) : files_.trackName(target);
+    const bool proj = target >= kNameProject;
+    goHome();
+    nameEdit_ = true;
+    nameTarget_ = target;
+    nameMax_ = (proj ? Files::kProjectNameLen : Files::kNameLen) - 1;
+    std::snprintf(nameBuf_, sizeof nameBuf_, "%s", now);
+    nameBuf_[nameMax_] = 0;
+    nameCur_ = int(std::strlen(nameBuf_));
+}
+
+void App::nameType(char c) {
+    // At the cursor, pushing the rest along (while there is room).
+    const int len = int(std::strlen(nameBuf_));
+    if (len >= nameMax_) return;
+    for (int i = len; i >= nameCur_; --i) nameBuf_[i + 1] = nameBuf_[i];
+    nameBuf_[nameCur_++] = c;
+}
+
+void App::nameEncoder(int delta) {
+    // The character at the cursor (past the end: a new one) through kNameChars.
+    const int len = int(std::strlen(nameBuf_));
+    if (nameCur_ >= len) {
+        if (len >= nameMax_) return;
+        nameBuf_[len] = 'A';
+        nameBuf_[len + 1] = 0;
+        if (delta > 0) --delta;
+        else ++delta;   // the first step makes it
+    }
+    const int n = int(sizeof kNameChars) - 1;
+    const char* p = std::strchr(kNameChars, nameBuf_[nameCur_]);
+    int i = p ? int(p - kNameChars) : 0;
+    i = ((i + delta) % n + n) % n;
+    nameBuf_[nameCur_] = kNameChars[i];
+}
+
+void App::nameKey(uint8_t id) {
+    const int len = int(std::strlen(nameBuf_));
+    switch (id) {
+        case b::Left:
+            if (nameCur_ > 0) --nameCur_;
+            break;
+        case b::Right:
+            if (nameCur_ < len) ++nameCur_;
+            break;
+        case b::F1: nameType(' '); break;
+        case b::F2:
+        case b::Delete:   // the character before the cursor
+            if (nameCur_ > 0) {
+                for (int i = nameCur_ - 1; i < len; ++i) nameBuf_[i] = nameBuf_[i + 1];
+                --nameCur_;
+            }
+            break;
+        case b::F3:
+            nameBuf_[0] = 0;
+            nameCur_ = 0;
+            break;
+        case b::F7: {   // cancel: back where it came from
+            const bool proj = nameTarget_ >= kNameProject;
+            goHome();
+            if (proj) file_ = true;
+            else mixer_ = true;
+            break;
+        }
+        case b::F8: {   // done: trailing spaces go
+            int n = len;
+            while (n > 0 && nameBuf_[n - 1] == ' ') nameBuf_[--n] = 0;
+            const bool proj = nameTarget_ >= kNameProject;
+            if (proj) {
+                if (!files_.renameProject(nameTarget_ - kNameProject, nameBuf_))
+                    hint(selected_, "Could not write the name: card error", p_.clock->millis());
+            } else {
+                files_.setTrackName(nameTarget_, nameBuf_);
+            }
+            goHome();
+            if (proj) file_ = true;
+            else mixer_ = true;
+            break;
+        }
+        default: break;
+    }
+}
+
+void App::drawName() {
+    char buf[48];
+    const bool proj = nameTarget_ >= kNameProject;
+    color(kAmber);
+    if (proj) std::snprintf(buf, sizeof buf, "NAME  Project %03d", files_.projectNumber(nameTarget_ - kNameProject));
+    else std::snprintf(buf, sizeof buf, "NAME  Track %d", nameTarget_ + 1);
+    text(20, 22, kFontBig, Disp::kOptCenterY, buf);
+    // The name, one box per character, the cursor's lit.
+    const int cw = 30, x0 = 400 - nameMax_ * cw / 2, y = 96;
+    for (int i = 0; i < nameMax_; ++i) {
+        const int x = x0 + i * cw;
+        const bool cur = i == nameCur_;
+        color(cur ? kSel : kFaint);
+        fillRect(x + 3, y + 22, x + cw - 3, y + 25, 1);
+        const char c[2] = {i < int(std::strlen(nameBuf_)) ? nameBuf_[i] : '\0', '\0'};
+        if (c[0]) {
+            color(cur ? kSel : kInk);
+            text(x + cw / 2, y, kFontBig, Disp::kOptCenter, c);
+        }
+    }
+    // The pads' keyboard, as the pads lie.
+    const int kx = 40, ky = 172, kw = 60, kh = 50;
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 12; ++c) {
+            const int x = kx + c * kw, yy = ky + r * kh;
+            color(kTrackDim);
+            fillRect(x + 4, yy + 4, x + kw - 4, yy + kh - 4, 6);
+            char s[2] = {kNamePads[r][c], 0};
+            if (s[0] == ' ') {
+                color(kDim);
+                text(x + kw / 2, yy + kh / 2, kFontSmall, Disp::kOptCenter, "space");
+                continue;
+            }
+            if (shift_ && s[0] >= 'A' && s[0] <= 'Z') s[0] = char(s[0] + 32);
+            color(kInk);
+            text(x + kw / 2, yy + kh / 2, kFontBody, Disp::kOptCenter, s);
+        }
+}
+
+void App::sampleKey(uint8_t id) {
+    const int n = files_.sampleCount();
+    const uint32_t now = p_.clock->millis();
+    switch (id) {
+        case b::Up:
+            if (sampleSel_ > 0) --sampleSel_;
+            break;
+        case b::Down:
+            if (sampleSel_ < n - 1) ++sampleSel_;
+            break;
+        case b::Right:
+        case b::F1:
+            if (sampleSel_ >= n) break;
+            if (files_.sampleIsDir(sampleSel_)) {
+                char sub[Files::kSampleNameLen];
+                std::snprintf(sub, sizeof sub, "%s", files_.sampleName(sampleSel_));
+                files_.openSampleDir(sub);
+                sampleSel_ = 0;
+            } else if ((files_.lockedTracks() >> selected_) & 1) {
+                hint(selected_, files_.lockReason(), now);
+            } else {
+                files_.loadSample(selected_, sampleSel_);
+            }
+            break;
+        case b::Left:
+        case b::F2:
+            if (files_.sampleDir()[0]) {
+                files_.openSampleDir(nullptr);
+                sampleSel_ = 0;
+            }
+            break;
+        case b::F8: goHome(); break;
+        default: break;
+    }
+}
+
+void App::drawSamples() {
+    char buf[96];
+    char nm[Files::kNameLen + 8];
+    color(kAmber);
+    std::snprintf(buf, sizeof buf, "LOAD SAMPLE  into %s", trackLabel(selected_, nm, sizeof nm));
+    text(20, 22, kFontBig, Disp::kOptCenterY, buf);
+    const TrackState ts = TrackState(engine_.view(selected_).state.load());
+    color(ts == TrackState::kEmpty ? kDim : kRed);
+    text(780, 22, kFontSmall, Disp::kOptRightX | Disp::kOptCenterY,
+         ts == TrackState::kEmpty ? "empty" : "holds a loop: clear it first");
+    color(kDim);
+    std::snprintf(buf, sizeof buf, "/%s", files_.sampleDir());
+    text(28, 60, kFontSmall, Disp::kOptCenterY, buf);
+    const int n = files_.sampleCount();
+    if (!files_.cardReady()) {
+        color(kRed);
+        text(400, 200, kFontBody, Disp::kOptCenter, "No SD card");
+    } else if (!n) {
+        color(kDim);
+        text(400, 200, kFontBody, Disp::kOptCenter, "No folders or WAV files here");
+    }
+    const int rows = 8;
+    int first = sampleSel_ - rows / 2;
+    if (first > n - rows) first = n - rows;
+    if (first < 0) first = 0;
+    for (int i = first; i < n && i < first + rows; ++i) {
+        const int y = 92 + (i - first) * 36;
+        const bool sel = i == sampleSel_;
+        std::snprintf(buf, sizeof buf, "%s%s", files_.sampleName(i), files_.sampleIsDir(i) ? "/" : "");
+        color(sel ? kSel : (files_.sampleIsDir(i) ? kSoft : kDim));
+        text(40, y, kFontBody, Disp::kOptCenterY, buf);
+    }
+    if (files_.busy()) {
+        color(kFaint);
+        fillRect(40, 400, 760, 408, 4);
+        color(kAmber);
+        fillRect(40, 400, 44 + int(716.0f * files_.progress()), 408, 4);
+    }
+    color(files_.busy() ? kAmber : kInk);
+    text(40, 384, kFontSmall, Disp::kOptCenterY, files_.status());
+}
+
+void App::editClip(int op) {
+    // 0 Copy: the selection. 1 Paste (Shift + Copy): the copy at the start
+    // marker, over what is there. 2 Insert: the copy at the start marker,
+    // the rest moving up (the loop gets longer).
+    const int t = editTrack_;
+    const uint32_t now = p_.clock->millis();
+    const TrackView& v = engine_.view(t);
+    if (engine_.longTake(t)) {
+        hint(t, "Copy and paste: not on loops over half the memory (their undo is on the card)", now);
+        return;
+    }
+    if ((files_.lockedTracks() >> t) & 1) {
+        hint(t, files_.lockReason(), now);
+        return;
+    }
+    if (op == 0) {
+        if (!v.len.load() || editB_ <= editA_) return;
+        engine_.post(Engine::kClip, uint8_t(t), 0, editA_, editB_);
+        clipFrames_ = editB_ - editA_;
+        clipTrack_ = t;
+        static char buf[48];
+        char d[16];
+        fmtSeconds(d, sizeof d, clipFrames_);
+        std::snprintf(buf, sizeof buf, "Copied %s (Paste: Shift + Copy)", d);
+        hint(t, buf, now);
+        return;
+    }
+    if (!clipFrames_) {
+        hint(t, "Copy a selection first", now);
+        return;
+    }
+    engine_.post(Engine::kPaste, uint8_t(t), int16_t(op == 2 ? 1 : 0), editA_);
+    hint(t, op == 2 ? "Pasted, inserted at the start marker" : "Pasted over, from the start marker", now);
+}
+
+void App::duplicateTrack() {
+    const int t = selected_, d = t + 1;
+    const uint32_t now = p_.clock->millis();
+    const TrackView& v = engine_.view(t);
+    if (d >= kTracks) {
+        hint(t, "No track after this one", now);
+    } else if (!v.len.load()) {
+        hint(t, "Nothing to duplicate", now);
+    } else if (TrackState(engine_.view(d).state.load()) != TrackState::kEmpty) {
+        hint(t, "The next track is not empty", now);
+    } else if (engine_.onCard(t)) {
+        hint(t, "A long take does not duplicate (only loops in RAM)", now);
+    } else if ((files_.lockedTracks() >> d) & 1) {
+        hint(t, files_.lockReason(), now);
+    } else {
+        engine_.post(Engine::kDuplicate, uint8_t(t));
+        static char buf[32];
+        std::snprintf(buf, sizeof buf, "Duplicated to track %d", d + 1);
+        hint(d, buf, now);
+    }
+}
 
 void App::editReset() {
     editA_ = 0;
@@ -3045,7 +3467,8 @@ void App::drawEditPage(uint32_t now) {
     const uint32_t len = v.len.load();
     char buf[64], a[16], bpos[16];
     color(tc);
-    std::snprintf(buf, sizeof buf, "EDIT  Track %d", t + 1);
+    char nm[Files::kNameLen + 8];
+    std::snprintf(buf, sizeof buf, "EDIT  %s", trackLabel(t, nm, sizeof nm));
     text(20, 22, kFontBig, Disp::kOptCenterY, buf);
     if (!len) {
         color(kDim);
@@ -3102,10 +3525,10 @@ void App::drawEditPage(uint32_t now) {
     std::snprintf(buf, sizeof buf, "selection %s", dur);
     color(tc);
     text(400, wy1 + 44, kFontBody, Disp::kOptCenter, buf);
-    color(kHelp);
-    text(400, 300, kFontSmall, Disp::kOptCenter, "Encoder moves the marker on the snap grid (Shift: finer).");
-    text(400, 322, kFontSmall, Disp::kOptCenter, "TRIM keeps the selection (UNDO brings the rest back).");
-    text(400, 344, kFontSmall, Disp::kOptCenter, "CUT removes it, ERASE silences it: press twice.");
+    if (hintTrack_ == t && hintText_ && int32_t(hintUntilMs_ - now) > 0) {   // copy / paste
+        color(kAmber);
+        text(400, 340, kFontSmall, Disp::kOptCenter, hintText_);
+    }
     if (confirm_ >= 0 && int32_t(confirmUntilMs_ - now) > 0) {
         color(kAmber);
         text(400, 390, kFontBody, Disp::kOptCenter,
@@ -3172,12 +3595,17 @@ void App::drawKnob(int cx, int cy, int r, float frac, float shown, uint32_t col,
     words_ += 5;
     if (name) {
         color(sel ? kSel : kDim);
-        text(cx, cy - r - 20, kFontSmall, Disp::kOptCenter, name);
+        text(cx, cy - r - 30, kFontSmall, Disp::kOptCenter, name);   // clear of the selection ring
     }
     if (value) {
         color(sel ? kSel : (lit ? kInk : kSoft));
-        text(cx, cy + r + 8, kFontSmall, Disp::kOptCenter, value);
+        text(cx, cy + r + 20, kFontSmall, Disp::kOptCenter, value);
     }
+}
+
+int App::grainKnobOfKey(int key) {
+    // F1..F4 the first four, F6 / F7 speed and direction (F5 closes the menu).
+    return key < 4 ? key : (key == 5 || key == 6 ? key - 1 : -1);
 }
 
 bool App::grainPanel() const {
@@ -3189,19 +3617,29 @@ void App::grainText(int knob, char* buf, size_t n) const {
     switch (knob) {
         case 0: std::snprintf(buf, n, "%u%%", unsigned(v)); break;
         case 1: std::snprintf(buf, n, "%d ms", int(std::lround(20.0f * std::pow(25.0f, float(v) / 100.0f)))); break;
-        case 2: std::snprintf(buf, n, "%.1fx", double(1.0f + 7.0f * float(v) * float(v) / 10000.0f)); break;
+        case 2: std::snprintf(buf, n, "%.2gx", double(0.25f * std::pow(32.0f, float(v) / 100.0f))); break;
+        case kGrainSpeed: {
+            static const char* const kSpeed[6] = {"Rev 2x", "Rev 1x", "Rev 1/2", "1/2", "1x", "2x"};
+            std::snprintf(buf, n, "%s", kSpeed[v < 6 ? v : kGrainSpeedOne]);
+            break;
+        }
+        case kGrainDir: {
+            static const char* const kDir[3] = {"Forward", "Reverse", "Mixed"};
+            std::snprintf(buf, n, "%s", kDir[v < 3 ? v : 0]);
+            break;
+        }
         default: std::snprintf(buf, n, "%+d st", int(v) - kGrainPitchZero); break;
     }
 }
 
 void App::drawGrainPanel() {
-    // F5 held on a Granular track: its four grain knobs on a plate over the lanes.
+    // F5 held on a Granular track: its six grain knobs on a plate over the lanes.
     const uint32_t tc = kTrackColor[selected_];
     color(0x000000);
     alpha(110);
-    fillRect(132, 84, 668, 376, 22);
+    fillRect(32, 84, 768, 376, 22);
     alpha(255);
-    panel(140, 90, 660, 360, 16, 0x2A2A2A);
+    panel(40, 90, 760, 360, 16, 0x2A2A2A);
     char buf[32];
     std::snprintf(buf, sizeof buf, "Track %d granular", selected_ + 1);
     color(tc);
@@ -3211,10 +3649,8 @@ void App::drawGrainPanel() {
         const float fr = float(engine_.grainParam(selected_, i)) / float(gk.max);
         grainShown_[i] += (fr - grainShown_[i]) * 0.35f;
         grainText(i, buf, sizeof buf);
-        drawKnob(205 + i * 130, 236, 44, fr, grainShown_[i], tc, grainSel_ == i, 0.0f, gk.name, buf);
+        drawKnob(100 + i * 120, 240, 38, fr, grainShown_[i], tc, grainSel_ == i, 0.0f, gk.name, buf);
     }
-    color(kDim);
-    text(400, 336, kFontSmall, Disp::kOptCenter, "F1-F4: knob   Encoder: value   F5: close");
 }
 
 void App::drawPopupKnob(const char* title, const char* value, float frac, float& shown, uint32_t col, float meter) {
@@ -3370,27 +3806,18 @@ void App::drawFxPage(uint32_t now) {
         const float fr = fxKnobFrac(slot, k);
         knobShown_[slot][k] += (fr - knobShown_[slot][k]) * 0.3f;   // the knobs glide
         fxKnobText(slot, k, buf, sizeof buf);
-        drawKnob((i + 1) * kKeyW + kKeyW / 2, 326, 34, fr, knobShown_[slot][k], sc, fxSel_ == k, 0.0f,
+        drawKnob((i + 1) * kKeyW + kKeyW / 2, 318, 34, fr, knobShown_[slot][k], sc, fxSel_ == k, 0.0f,
                  ti.knob[k].name, buf);
     }
     const uint8_t ret = engine_.mix(slot ? MixParam::kReturn2 : MixParam::kReturn1);
     knobShown_[slot][kFxKnobs] += (float(ret) / 100.0f - knobShown_[slot][kFxKnobs]) * 0.3f;
     std::snprintf(buf, sizeof buf, "%u", unsigned(ret));
-    drawKnob(5 * kKeyW + kKeyW / 2, 326, 34, float(ret) / 100.0f, knobShown_[slot][kFxKnobs], sc,
+    drawKnob(5 * kKeyW + kKeyW / 2, 318, 34, float(ret) / 100.0f, knobShown_[slot][kFxKnobs], sc,
              fxSel_ == kFxKnobs, retMeter_[slot] * 1.5f, "Return", buf);
-    color(kHelp);
-    if (ti.knob[kFxBank].name) {   // two banks
+    if (ti.knob[kFxBank].name) {   // two banks: which one is up
         std::snprintf(buf, sizeof buf, "Knobs %d of 2", bank + 1);
         color(kDim);
-        text(700, 280, kFontSmall, Disp::kOptCenter, buf);
-        color(kHelp);
-        text(700, 300, kFontSmall, Disp::kOptCenter, bank ? "Tap Shift:" : "Shift + F2-F5:");
-        text(700, 320, kFontSmall, Disp::kOptCenter, bank ? "the first four" : "the other four");
-        text(700, 340, kFontSmall, Disp::kOptCenter, "Sends: mixer");
-    } else {
-        text(700, 300, kFontSmall, Disp::kOptCenter, "Encoder: knob");
-        text(700, 320, kFontSmall, Disp::kOptCenter, "Shift: fine");
-        text(700, 340, kFontSmall, Disp::kOptCenter, "Sends: mixer");
+        text(700, 318, kFontSmall, Disp::kOptCenter, buf);
     }
 }
 

@@ -9,7 +9,7 @@ enc -3
 wait 1300
 expect_file Looper/config.bin 14
 shot ../build/sim/check/files_config.png
-press NOTE
+press PATTERN
 
 # Track 1: left first second, right second (2 s); track 2 mono, a 1-bar take.
 tone_shape steady
@@ -44,7 +44,7 @@ press F1
 wait 1500
 expect_file Looper/Projects/001/project.bin 136
 expect_file Looper/Projects/001/track1.wav 352844
-press NOTE
+press PATTERN
 hold SHIFT
 press DELETE
 release SHIFT
@@ -59,7 +59,7 @@ expect_state 1 PLAY
 expect_state 2 PLAY
 expect_opt 2 input 3
 shot ../build/sim/check/files_loaded.png
-press NOTE
+press PATTERN
 # Play starts everything from bar 1: track 1 (track 2 muted) plays its left half first.
 tap 14
 press PLAY

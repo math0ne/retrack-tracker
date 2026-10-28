@@ -100,8 +100,11 @@ in dimmer greys; on the lanes only the selected track's waveform (or its line,
 when empty) turns yellow. The four tracks are told apart by slightly different greys (only
 the popups over the lanes keep a backing, to stay readable). The lanes
 are waveforms only, the full width of the screen; a tag in each lane's corner
-gives its length and, when they apply, **card** (a long take), its mode
-(other than Forward) and Muted. A lane that records has a pulsing dot before its tag (a ring
+gives its name (when it has one), its length and, when they apply, **card**
+(a long take), its mode (other than Forward) and Muted. The bar and beat lines
+sit faintly behind the waveforms; down the screen's right edge the bar's
+beats light up one by one (the last one in yellow) while the transport runs.
+Pages carry no instructions: the screen keys' labels say what they do. A lane that records has a pulsing dot before its tag (a ring
 while it is armed or counting in). The selected track's state is on the keys: REC lights up while it
 records (brightest, pulsing; a softer pulse for an overdub, dim during a count-in
 or while armed), PLAY lights while it plays (dim while it waits for its bar line), MUTE
@@ -113,9 +116,9 @@ while it is muted.
 | F2 PLAY | Stop: the track goes silent and back to its start. Play: it starts again from its start on the next bar line (press again to cancel) |
 | F3 MUTE | Mute on/off |
 | F4 TEMPO | Tap: metronome on/off (the label is bright while it is on). Hold + encoder: tempo, 1 bpm a step (a knob shows while held). Shift + hold + encoder: click level. Delete clears tracks |
-| F5 MODE | Tap: the mode bar, two pages of playback modes; the key under one picks it, F8 in the bar turns the page (it opens on the page with the track's mode). Any other key closes it. Hold on a Granular track: the grain menu, which stays open (F1–F4 pick a knob, the encoder turns it, F6–F8 are blank, F5 closes it) |
+| F5 MODE | Tap: the mode bar, two pages of playback modes; the key under one picks it, F8 in the bar turns the page (it opens on the page with the track's mode). Any other key closes it. Hold on a Granular track: the grain menu, which stays open (F1–F4 and F6–F7 pick a knob, the encoder turns it, F8 is blank, F5 closes it) |
 | F6 INPUT | Tap: the Input page (the cell shows the source and the input level). Hold + encoder: input gain (a knob with the input level shows while held) |
-| F7 VOLUME | The selected track's volume, with its output level in the cell. Hold + encoder: a volume knob (the encoder alone sets it too) |
+| F7 VOLUME | The selected track's volume, with its output level in the cell. Tap: its strip on the mixer (level, sends, filter). Hold + encoder: a volume knob (the encoder alone sets it too) |
 | F8 UNDO | Undo the last overdub or replace; after an undo it reads REDO and brings it back |
 
 **Input page** (F6): two cards. Up/Down pick a setting, Left/Right the card, the
@@ -127,15 +130,20 @@ encoder sets it (Shift: fine steps); F6 or F8 closes it.
 | Gain | Codec input gain, with the live input level under it |
 | Track N channels | Stereo / Mono L / Mono R / Mono sum for the selected track (only while it is empty) |
 | Monitor | Hear the input through the outputs |
-| Monitor FX | Off / FX 1 / FX 2 / Both: hear the input through the effects too (full send); takes stay dry |
+| Monitor FX | Off / FX 1 / FX 2 / Both (default): hear the input through the effects too, at the selected track's send levels (what a take on it will get); takes stay dry |
 | Overdub feedback | How much of the loop stays under each pass, 0–100 % |
 
-| Metronome card | |
+| Tempo card | |
 |---|---|
 | Metronome | Click on every beat (count-ins click either way) |
 | Click level | Click volume |
+| Click sound | Beep / wood block / hi-hat / cowbell |
+| Accent | Beat 1 louder |
+| Click | Always / only while recording |
+| Count-in | Off / 1 / 2 / 4 bars |
 | Tempo | As F4: the bar before there is a loop, tape speed after |
 | Beats per bar | 1–12 |
+| Stop fade | Off / 1 beat / 1 bar / 2 bars |
 
 Quick keys on the page: F1 next source, F2 monitor on/off, F3 next channel
 mode, F4 metronome on/off, F5 feedback 100 / 90 / 75 / 50 %.
@@ -159,21 +167,24 @@ are the selected track's options (see [Track options and tempo](../README.md#tra
 | Pad column 1 | Record / overdub (empty → record → play ↔ overdub); Shift + pad: replace |
 | Pad column 2 | Stop / play the track, as F2 |
 | Pad column 3 | Mute |
-| Pad column 4 | Clear |
+| Pad column 4 | Clear (performance mode: Freeze a Clouds slot) |
 | Pad columns 5–12 | Jump to that eighth of the loop, keeping the phase (stays in time) |
 | Rec | Record / overdub the selected track; Shift + Rec: replace |
-| Insert | Undo the last overdub / replace (Shift: redo) |
+| Insert | Undo the last overdub / replace (Shift: redo). In the editor: paste the copy, inserted at the start marker |
+| Copy | Duplicate the selected track into the next one (empty), in time with it. In the editor: copy the selection; Shift + Copy (Paste): paste it at the start marker, over what is there |
 | Encoder push | Tap tempo: three taps or more (before a loop: the bar; after: the tape speed) |
 | Play | Transport: everything stops, or starts from bar 1 (what was playing plays, stopped tracks stay stopped); Shift + Play: metronome on / off |
 | Delete | Clear the selected track; Shift + Delete clears all |
 | Up / Down, any pad | Select track |
 | Encoder | Selected track volume; Shift + encoder = input gain |
-| Note | Home: the loop lanes, from any page |
-| Master | Mixer page on / off |
-| Instr | Loop editor for the selected track |
+| Pattern | Home: the loop lanes, from any page |
+| Perform / Instr | Performance mode |
+| Master | Mixer page on / off (Shift + F8 there: name the strip's track) |
+| Note / S.Edit | Loop editor for the selected track |
+| S.Load | The sample loader: folders and WAVs on the card; Right / F1 opens a folder or loads the WAV into the selected track, Left / F2 up |
 | FX1 / FX2 | That effect slot's page on / off |
 | Config | Settings page (F1 firmware, F2 MIDI, F3 measure the recording latency) |
-| File | Projects (save / load) and WAV export |
+| File | Projects (save / load / name) and WAV export |
 | Shift + Config | Show / hide the CPU, frame-rate and display-list readout (Help too, if the panel has one) |
 | Shift + File | Stress preset (Shift + Help too) |
 | Song | The manual: chapters on F1–F7, Up / Down or the encoder scroll, F8 home |
@@ -393,8 +404,9 @@ failed card commands).
 
 - **Memory:** 16 MB SDRAM = about 21.5 s of stereo audio per track (after the
   1 MB of the two FX slots' delay lines and the long-take waveforms); a RAM
-  loop's undo needs it to fit in half of that, so loops between about 10.8 s
-  and 19.5 s have no overdub undo. Mono tracks double it. Longer takes go to
+  loop's undo needs it to fit in half of that, so a loop between about 10.8 s
+  and 19.5 s keeps its undo on the card instead (without a card: none). Mono
+  tracks double it. Copy / paste works on loops in RAM up to half the memory. Longer takes go to
   the SD card (5 minutes stereo), undo included (it uses the card's second
   file). Internal SRAM: about 243 of 256 KB in use.
 - **Long takes:** up to 5 minutes (the stream files' size). Granular's Spread

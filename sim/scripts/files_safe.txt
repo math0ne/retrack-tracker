@@ -47,7 +47,7 @@ expect_file Looper/Projects/001/track2.wav 176444
 # Delete) and Shift + Delete: refused.
 press F6
 wait 200
-press NOTE
+press PATTERN
 press DELETE
 hold SHIFT
 press DELETE
@@ -77,7 +77,7 @@ tap 12
 wait 30
 tap 0
 wait 5000
-press NOTE
+press PATTERN
 expect_len 1 2.0
 expect_state 1 PLAY
 expect_state 2 EMPTY
@@ -94,7 +94,7 @@ expect_file Looper/Projects/501/track1.wav 352844
 # A project whose track 1 WAV is broken: it loads without it, and F1 then
 # saves a new project (502) instead of over 501.
 sd_file Looper/Projects/501/track1.wav 100
-press NOTE
+press PATTERN
 press FILE
 press F3
 press F3

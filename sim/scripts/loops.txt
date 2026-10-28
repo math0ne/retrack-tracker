@@ -73,15 +73,20 @@ wait 100
 expect_state 2 STOP
 opt 1 stopfade 0
 
-# Monitor FX: with every loop silent and monitoring on, the input reaches the
-# delay (FX 1) only when Monitor FX sends it there. Track sends are 0.
+# Monitor FX (on by default: both): with every loop silent and monitoring
+# on, the input reaches the delay (FX 1) at the selected track's send. Its
+# sends are 0 at first: nothing.
+expect_opt 1 monitorfx 3
 press F6
 wait 30
 press F2
 wait 30
 expect_opt 1 monitor 1
 press DOWN
-enc 1
+enc -1
+wait 30
+expect_opt 1 monitorfx 2
+enc -1
 wait 30
 expect_opt 1 monitorfx 1
 shot ../build/sim/check/loops_monitor_fx.png
@@ -92,9 +97,21 @@ tone off
 wait 100
 reset_levels
 wait 200
+expect_below 0.005
+# The selected track (2, its pads were last) sends to FX 1: the monitored
+# input does too. (Track 1's send alone would not take it there.)
+mix 2 send1 100
+wait 3500
+tone 330
+wait 500
+tone off
+wait 100
+reset_levels
+wait 200
 expect_audio 0.02
 # Off: after the tone stops nothing comes back.
 opt 1 monitorfx 0
+mix 2 send1 0
 wait 3500
 tone 330
 wait 500

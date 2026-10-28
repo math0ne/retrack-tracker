@@ -17,9 +17,10 @@ wait 500
 expect_silent
 press PLAY
 
-# Mixer: track 1 strip (F1), up two rows to its delay send, all the way up.
+# Mixer: track 1 strip (F1), up three rows (past the filter and FX 2) to its delay send, all the way up.
 press MASTER
 press F1
+press UP
 press UP
 press UP
 enc 60
@@ -45,9 +46,10 @@ reset_levels
 wait 600
 expect_silent
 
-# Reverb: track 1 send to reverb up (F1, up one row from the fader), return stays at 80.
+# Reverb: track 1 send to reverb up (F1, up two rows from the fader, past the filter), return stays at 80.
 press PLAY
 press F1
+press UP
 press UP
 enc 60
 press F6
@@ -81,7 +83,7 @@ press F1
 enc -50
 wait 30
 expect_opt 1 volume 0
-press NOTE
+press PATTERN
 reset_levels
 wait 1500
 expect_audio 0.02

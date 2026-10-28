@@ -30,17 +30,18 @@
 //   Config       settings; F1 there: Firmware (flash an image from /Firmware)
 //   Shift+Config toggle the load / frame-rate readout (Help too)
 //   Shift+Help   stress preset: the heaviest audio load, for measuring on the device
-//   Note         home: the loop lanes, from any page
+//   Pattern      home: the loop lanes, from any page
 //   Song         the manual
-//   Instr        the loop editor (selected track)
-//   Master       mixer page on/off
-//   Instr        track options page on/off;  Song: the same page at the tempo column
+//   Master       mixer page on/off (Shift + F8: name the strip's track)
 //   FX1 / FX2    that effect slot's page on/off
 //   Config       settings: display and pad brightness, headphones, input, monitor
-//   File         projects (F1 save, F2 save new, F3 load) and WAV export (F5 track, F6 all)
-//   S.Edit       loop editor for the selected track: F1/F2 start/end marker,
-//                F3 snap, F4 trim, F5 cut, F6 erase (twice), F7 undo trim, F8 home
-//   Perform      (or Pattern) performance mode: tap to latch it on (tap again for off), or
+//   File         projects (F1 save, F2 save new, F3 load, F4 name) and WAV export (F5 track, F6 all)
+//   S.Load       the sample loader: a WAV from the card into the selected track
+//   Copy         the selected track into the next one (empty)
+//   Note/S.Edit  loop editor for the selected track: F1/F2 start/end marker,
+//                F3 snap, F4 trim, F5 cut, F6 erase (twice), F7 undo trim, F8 home;
+//                Copy copies, Shift + Copy pastes over, Insert pastes inserted
+//   Perform      (or Instr) performance mode: tap to latch it on (tap again for off), or
 //                hold it (off on release). The waveforms show 8 effect cells
 //                laid out like pad columns 5..12 of the track's row; a pad plays
 //                its effect on that track while held, Shift + pad latches it.
@@ -134,17 +135,19 @@ private:
     void scissorOff();
 
     void drawLane(int t, uint32_t now);
+    void drawBarClock(uint32_t now);   // the bar's beats on the right edge: the bar's end coming
     void drawFKeys();
     void drawStats();
 
     // mixer page
     static constexpr int kStrips = 7;     // 4 tracks, delay, reverb, master
-    static constexpr int kRows = 3;       // two small parameters, then the fader
+    static constexpr int kRows = 4;       // three small parameters (tracks: sends, filter), then the fader
     bool mixParam(int strip, int row, MixParam& p, int& track, int& fxKnob) const;
     void stepFxKnob(int slot, int knob, int delta);
     void fxKnobText(int slot, int knob, char* buf, size_t n) const;
     float fxKnobFrac(int slot, int knob) const;
     void mixerKey(uint8_t id);
+    static void filterText(uint8_t v, char* buf, size_t n);   // the DJ filter: "Off", "LP 1.2k", "HP 300"
     void mixerEncoder(int delta);
     void drawMixer();
     void drawStrip(int s);
@@ -234,9 +237,10 @@ private:
     uint32_t lastPos_[kTracks] = {};  // the playhead trail: last frame's read position
     int8_t pingDir_[kTracks] = {1, 1, 1, 1};   // ping-pong: the way it is going
     // F7 on the home page: hold + encoder = the selected track's volume
-    bool f7Held_ = false;
+    bool f7Held_ = false, f7Turned_ = false;
+    int focusSent_ = -1;         // the selected track as the engine last heard it (kFocus)
     float volShown_ = 0.8f;
-    uint32_t f6DownMs_ = 0, f4DownMs_ = 0;   // a hold this long or longer is not a tap
+    uint32_t f6DownMs_ = 0, f4DownMs_ = 0, f7DownMs_ = 0;   // a hold this long or longer is not a tap
     static constexpr uint32_t kTapMs = 400;
     float gainShown_ = 0.5f;
     void inputKey(uint8_t id);
@@ -262,6 +266,11 @@ private:
     bool f5Held_ = false, f5Used_ = false;
     uint32_t f5DownMs_ = 0;
     int grainSel_ = 1;
+    void editClip(int op);       // the editor: 0 copy, 1 paste over, 2 paste inserted
+    void duplicateTrack();       // Copy on the home page: the selected track into the next one
+    uint32_t clipFrames_ = 0;    // what the editor copied (0: nothing yet)
+    int clipTrack_ = -1;
+    static int grainKnobOfKey(int key);   // the grain menu: knob under F-key `key`, or -1
     float grainShown_[kGrainKnobs] = {};
     bool grainPanel() const;     // the panel is up
     // The grain knobs as a submenu: a hold of F5 on a Granular track opens it
@@ -270,7 +279,27 @@ private:
     void drawGrainPanel();
     void grainText(int knob, char* buf, size_t n) const;
     bool mixer_ = false;         // mixer page shown
-    int strip_ = 0, row_ = 2;    // mixer selection
+    // Naming (a track: mixer Shift + F8; a project: File F4): the pads type
+    // (the screen shows which pad is which), the encoder turns the character
+    // at the cursor, Left / Right move it.
+    bool nameEdit_ = false;
+    int nameTarget_ = 0;         // 0..3 a track, kNameProject + i the File page's project i
+    static constexpr int kNameProject = 100;
+    char nameBuf_[Files::kProjectNameLen] = {};
+    int nameCur_ = 0, nameMax_ = 0;
+    void openName(int target);
+    void nameKey(uint8_t id);
+    void nameType(char c);
+    void nameEncoder(int delta);
+    void drawName();
+    // The sample loader (S.Load): the card's folders and WAVs; Right / F1
+    // opens a folder or loads the WAV into the selected track, Left / F2 goes up.
+    bool samples_ = false;
+    int sampleSel_ = 0;
+    void sampleKey(uint8_t id);
+    void drawSamples();
+    const char* trackLabel(int t, char* buf, size_t n) const;   // its name, or "Track N"
+    int strip_ = 0, row_ = kRows - 1;    // mixer selection
     // performance mode
     void closePerf();
     void drawPerfCells(int t, int wx, int wy);

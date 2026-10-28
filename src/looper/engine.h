@@ -57,7 +57,14 @@ enum class OptParam : uint8_t {
     kStretch,                                             // per track: 0 tape, 1 stretch (keeps pitch)
     kStopFade,                                            // global: stop fades over 0 off, 1 beat, 1 bar, 2 bars
     kMonitorFx,                                           // global: monitored input to bit 0 FX 1, bit 1 FX 2
+    kAccent,                                              // global: the click accents the bar line (0/1)
+    kClickSound,                                          // global: 0 beep, 1 wood block, 2 hi-hat, 3 cowbell
+    kClickWhen,                                           // global: 0 always (when on), 1 only while recording
+    kCountInBars,                                         // global: count-in length 0 off, 1, 2 or 4 bars
 };
+constexpr int kClickSounds = 4;
+// Count-in lengths in bars (OptParam::kCountInBars indexes this).
+constexpr uint8_t kCountInLen[4] = {0, 1, 2, 4};
 constexpr uint8_t kMaxLenBeats = 64;
 // Sound start: threshold 0..100 maps to -60..0 dBFS; the take keeps this much
 // input from just before the trigger, so the attack is not cut.
@@ -140,18 +147,27 @@ constexpr ModeInfo kModes[kModeCount] = {
 
 // Granular mode's knobs (per track, the grain submenu: hold F5): grains scattered around the
 // playhead, so the loop keeps its time.
-constexpr int kGrainKnobs = 4;
+constexpr int kGrainKnobs = 6;
+constexpr int kGrainKnobsV2 = 4;        // the first four: what a version 2 project holds
 constexpr int kLoopGrains = 8;          // grains per track at most (each reads the SDRAM)
 constexpr int kGrainPitchZero = 24;     // pitch 0..48 = -24..+24 semitones
+constexpr int kGrainSpeed = 4, kGrainDir = 5;   // the speed and direction knobs
+// Speed: how fast (and which way) the grains' centre moves through the loop,
+// in loop speeds (16.16). The loop keeps its time: at 1/2 it takes two loop
+// lengths to get round, at 2x half of one.
+constexpr int32_t kGrainSpeed16[6] = {-131072, -65536, -32768, 32768, 65536, 131072};
+constexpr int kGrainSpeedOne = 4;       // 1x
 struct GrainKnob {
     const char* name;
     uint8_t max, def;
 };
 constexpr GrainKnob kGrainKnobInfo[kGrainKnobs] = {
-    {"Spread", 100, 0},                 // 0: at the playhead .. 100: anywhere in the loop
+    {"Spread", 100, 0},                 // 0: at the playhead .. 100: up to 1 s either way (a quarter of a short loop)
     {"Size", 100, 40},                  // 20 .. 500 ms
-    {"Density", 100, 50},               // 1 .. 8 grains overlapping
+    {"Density", 100, 70},               // 0.25 (gaps between the grains) .. 8 grains overlapping
     {"Pitch", 48, kGrainPitchZero},
+    {"Speed", 5, kGrainSpeedOne},       // kGrainSpeed16
+    {"Grains", 2, 0},                   // forward, reverse, or each at random
 };
 inline const ModeInfo& modeInfo(PlayMode m) { return kModes[int(m) < kModeCount ? int(m) : 0]; }
 
@@ -165,7 +181,9 @@ enum class MixParam : uint8_t {
     kMaster,         // master level 0..100
     kChain1,         // FX 1's output into FX 2 (before FX 1's return), 0..100
     kChain2,         // FX 2's output into FX 1; one way at a time (kChain1 wins)
+    kFilter,         // track DJ filter: 0..100, 50 off; down a low-pass closing, up a high-pass opening
 };
+constexpr uint8_t kFilterOff = 50;
 
 // Effect memory the app hands to Engine::init (SDRAM on the device): a delay
 // line per slot, read in order. Reverb lines, read at eight places per sample,
@@ -294,6 +312,11 @@ public:
         kDubUndo,      // arg 0: undo the last overdub / replace, 1: redo it (main loop job, silent)
         kExtTempo,     // a = tempo in bpm, 16.16 (MIDI clock in): the bar before a loop, the tape speed after
         kClockOut,     // arg 0/1: send MIDI clock (24 a beat), start and stop
+        kFocus,        // track: the selected one (the input monitored through the effects uses its sends)
+        kClip,         // track, a, b: copy loop frames [a, b) (the editor's Copy; the audio stays where it is)
+        kPaste,        // track, a: the copy at loop frame a; arg 0 over what is there (length kept),
+                       // 1 inserted (the loop gets longer). A main loop job, the track silent meanwhile
+        kDuplicate,    // track: its loop into the next track (empty), in time with it (a main loop job)
         kLatency,      // arg = round-trip latency in output frames (0..kMaxLatencyFrames)
         kMeasure,      // arg 1: measure the round-trip latency (a cable from out to in), 0: stop
     };
@@ -314,6 +337,12 @@ public:
     StreamView& stream(int t) { return stream_[t]; }   // the main loop's Streamer
     const StreamView& stream(int t) const { return stream_[t]; }
     bool longTake(int t) const { return stream_[t].head.load(std::memory_order_relaxed) != 0; }
+    // Part of the loop plays from the card (a long take past its RAM; a take
+    // that only keeps its undo there is all in RAM).
+    bool onCard(int t) const {
+        const uint32_t h = stream_[t].head.load(std::memory_order_relaxed);
+        return h && view_[t].start.load(std::memory_order_relaxed) + view_[t].len.load(std::memory_order_relaxed) > h;
+    }
     // Where a take on track t would go on to the card (its RAM part), mono or not.
     uint32_t headFor(int t, bool mono) const {
         const uint32_t cap = mono ? 2 * mem_[t].capacity : mem_[t].capacity, ring = mono ? 2 * kStreamRingFrames : kStreamRingFrames;
@@ -393,6 +422,10 @@ private:
         PlayMode mode = PlayMode::kForward;
         bool muted = false;
         uint8_t volume = 80;
+        uint8_t filter = kFilterOff; // the mixer's DJ filter (MixParam::kFilter)
+        bool djHigh = false;         //   which kind runs (it changes only once it is out)
+        float djWet = 0.0f, djLog = 9.9035f;   //   in / out ramp, the cutoff (ln Hz, from 20 kHz) smoothed
+        Svf dj;
         float gain = 0.0f;           // smoothed (mute / volume ramps)
         float gate = 0.0f;           // smoothed mute / stop / stop fade, no volume: the pre-fader sends
         uint32_t anchor = 0;         // global frame where phase 0 starts (multiple of L)
@@ -450,13 +483,26 @@ private:
     // chunks by service() (main loop), finished by the audio thread.
     struct EditJob {
         std::atomic<uint8_t> state{0};   // 0 idle, 1 running (main loop), 2 done (audio thread)
-        uint8_t track = 0, kind = 0;     // kind: kEditCut / kEditErase
+        uint8_t track = 0, kind = 0;     // kind: kEditCut / kEditErase / kMultiply / kDubUndo / kPaste
         bool mono = false;
         uint32_t base = 0, len = 0;      // the loop in its buffer
         uint32_t a = 0, b = 0;           // selection, loop frames
         uint32_t done = 0;               // frames moved / zeroed so far
         uint32_t peaksDone = 0;          // then the peak cells, recomputed from the audio
+        // Paste: from track src at buffer frame srcBuf, n frames, to loop
+        // frame `a`; inserted: the rest of the loop moves up first (phase 0).
+        uint8_t src = 0, phase = 0;
+        bool srcMono = false, insert = false;
+        uint32_t srcBuf = 0, n = 0;
     };
+    bool pasteChunk();                       // the paste's copy, a chunk; false once it is all in
+    bool peakChunk(uint32_t pa, uint32_t p1, uint32_t valid);   // the job's peak cells; true when done
+    struct {
+        bool has = false;
+        uint8_t track = 0;
+        uint32_t start = 0, len = 0;     // the source loop's start and length then (it must not have changed)
+        uint32_t a = 0, n = 0;           // loop frames
+    } clip_;
     void runJobChunk();
     void finishJob();
 
@@ -509,7 +555,7 @@ private:
     uint32_t posOfPhase(const Track& k, uint64_t phase16) const;   // read position, frames
     uint64_t phaseOfPos(const Track& k, uint32_t pos, bool secondHalf) const;
     // What plays now: the read position, ahead of the clock by the latency.
-    uint32_t posOf(const Track& k) const { return posOfPhase(k, readPhase16(k)); }
+    uint32_t posOf(const Track& k) const;
     // Input arrives the round-trip latency after the output it was played
     // against, so takes land that late in their buffers. Playback reads that
     // far ahead of the clock to put them back in time; an overdub writes at
@@ -579,17 +625,24 @@ private:
     bool metro_ = false;
     uint8_t click_ = 60;
     uint32_t clickAge_ = 0xFFFFFFFFu;   // frames since the last click started
-    float clickAmp_ = 0.0f;
-    Osc clickOsc_;
+    float clickAmp_ = 0.0f, clickDecay_ = 0.9977f, clickHp_ = 0.0f;
+    uint32_t clickNoise_ = 0x1234567u;  // the hi-hat's noise
+    Osc clickOsc_, clickOsc2_;          // the cowbell's two
+    uint8_t accent_ = 1, clickSound_ = 0, clickWhen_ = 0, countIn_ = 1;
     std::atomic<uint32_t> bar_{0};
     uint8_t threshold_ = 50;            // -30 dBFS
     uint8_t stopFade_ = 0;              // OptParam::kStopFade
-    uint8_t monitorFx_ = 0;             // OptParam::kMonitorFx
+    uint8_t monitorFx_ = 3;             // OptParam::kMonitorFx (both, by default)
+    uint8_t focus_ = 0;                 // the selected track (kFocus): its sends carry the monitored input
+    float monSend_[kFxSlots] = {};      // those sends, smoothed
     int16_t preRoll_[kPreRollFrames * 2] = {};   // the input before this block, oldest first
     uint8_t perfParam_[kPerfFxCount] = {};
     uint8_t grain_[kTracks][kGrainKnobs] = {};
     float grainOut_[128 * 2], grainEnv_[128];   // Granular mode, one track at a time
     void renderGrains(int t, uint64_t ph0, uint64_t step16, uint32_t n);
+    // Granular: the grains' centre f output frames into the block, 16.16 loop
+    // frames (it moves at the Speed knob through the loop).
+    uint64_t cloudCentre16(const Track& k, int t, uint64_t step16, uint32_t f) const;
 
     // mixer and send effects (kept across track clears)
     void setMix(MixParam p, int track, int value);

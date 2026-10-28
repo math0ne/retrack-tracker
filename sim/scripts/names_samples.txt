@@ -1,0 +1,92 @@
+# Naming a track (mixer Shift + F8) and a project (File F4), saved and loaded
+# back; the sample loader (S.Load) loads a WAV into the selected track.
+wait 300
+opt all start 0
+tone_shape steady
+tone 330
+tap 0
+wait 2000
+tap 0
+tone off
+expect_len 1 2.0
+
+# Track 1's name: pads B, A, S, S (row 1: A..L; row 2: M..X), Shift + pad lower case.
+press MASTER
+press F1
+hold SHIFT
+press F8
+release SHIFT
+wait 50
+tap 1
+hold SHIFT
+tap 0
+tap 18
+tap 18
+release SHIFT
+wait 30
+shot ../build/sim/check/names_typing.png
+press F8
+wait 50
+shot ../build/sim/check/names_mixer.png
+press PATTERN
+wait 50
+shot ../build/sim/check/names_lanes.png
+
+# Saved with the project, and the project named: F4, pad L, O... "LOOP".
+press FILE
+wait 50
+press F2
+wait 2000
+press FILE
+press FILE
+wait 50
+press F4
+wait 30
+tap 11
+tap 14
+tap 14
+tap 15
+press F8
+wait 50
+shot ../build/sim/check/names_file.png
+expect_file Looper/Projects/001/name.txt 4
+
+# The sample loader: track 1's export as a WAV, into track 2. (The mixer's
+# strip keys pick the tracks.)
+press MASTER
+press F1
+press FILE
+wait 50
+press F5
+wait 2000
+expect_file Looper/Export/001/track1.wav 352844
+press SAMPLELOADER
+wait 50
+shot ../build/sim/check/samples_top.png
+press MASTER
+press F2
+press SAMPLELOADER
+wait 50
+# Looper/Export/001/track1.wav: Right opens a folder (Export is the first
+# in Looper), and loads the WAV.
+press RIGHT
+wait 30
+press RIGHT
+wait 30
+press RIGHT
+wait 30
+shot ../build/sim/check/samples_folder.png
+press RIGHT
+wait 500
+expect_state 2 STOP
+expect_len 2 2.0
+shot ../build/sim/check/samples_loaded.png
+# A track that holds a loop takes no sample.
+press RIGHT
+wait 300
+expect_len 2 2.0
+press F8
+# Its Play starts it on the bar.
+tap 13
+wait 2500
+expect_state 2 PLAY

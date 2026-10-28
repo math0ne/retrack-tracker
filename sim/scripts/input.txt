@@ -64,7 +64,8 @@ press F2
 wait 30
 expect_opt 1 monitor 1
 
-# Metronome card: on, click 60 -> 40, tempo 120 -> 110, beats 4 -> 3.
+# Metronome card: on, click 60 -> 40, sound beep -> wood block, accent off,
+# click only while recording, count-in 1 -> 2 bars, tempo 120 -> 110, beats 4 -> 3.
 press RIGHT
 press UP
 press UP
@@ -76,6 +77,20 @@ press DOWN
 enc -4
 wait 30
 expect_opt 1 click 40
+press DOWN
+enc 1
+press DOWN
+enc -1
+press DOWN
+enc 1
+press DOWN
+enc 1
+wait 30
+expect_opt 1 clicksound 1
+expect_opt 1 accent 0
+expect_opt 1 clickwhen 1
+expect_opt 1 countin 2
+shot ../build/sim/check/input_metronome_opts.png
 press DOWN
 enc -10
 wait 30

@@ -30,7 +30,7 @@ void CloudsFx::reset() {
     head_ = 0;
     downPhase_ = upPos_ = 0.0f;
     lastInL_ = lastInR_ = prevOutL_ = prevOutR_ = 0.0f;
-    fbHpL_ = fbHpR_ = fbXL_ = fbXR_ = 0.0f;
+    fbHpL_ = fbHpR_ = fbXL_ = fbXR_ = fbLpL_ = fbLpR_ = 0.0f;
     std::memset(fbL_, 0, sizeof fbL_);
     std::memset(fbR_, 0, sizeof fbR_);
     fbN_ = 0;
@@ -133,9 +133,16 @@ void CloudsFx::process(const float* inL, const float* inR, float* outL, float* o
     }
     diffuser_.set_amount(texture_ > 0.75f ? (texture_ - 0.75f) * 4.0f : 0.0f);
     diffuser_.Process(outL_ + 1, outR_ + 1, size_t(m));
+    // The feedback tap goes through the same limiter as the output: a loop
+    // of grains piling onto their own output (high feedback, pitched up)
+    // stays bounded instead of running away into crackle.
+    // A gentle low-pass too (about 7 kHz): pitched up, each pass would
+    // otherwise move the sound an octave higher until it is hiss at the top.
     for (int i = 0; i < m; ++i) {
-        fbL_[i] = outL_[i + 1];
-        fbR_[i] = outR_[i + 1];
+        fbLpL_ += 0.75f * (limit(outL_[i + 1]) - fbLpL_);
+        fbLpR_ += 0.75f * (limit(outR_[i + 1]) - fbLpR_);
+        fbL_[i] = fbLpL_;
+        fbR_[i] = fbLpR_;
     }
     fbN_ = m;
 

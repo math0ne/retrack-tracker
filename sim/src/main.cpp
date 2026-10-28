@@ -580,11 +580,12 @@ struct Headless {
             } else if (cmd == "opt") {
                 // opt TRACK|all NAME VALUE: a track option, as the options page sets it
                 static const char* const kNames[] = {"stop",  "length",    "start", "input", "after",
-                                                     "tempo", "beats", "metronome", "click", "threshold", "stretch", "stopfade", "monitorfx"};
+                                                     "tempo", "beats", "metronome", "click", "threshold", "stretch", "stopfade", "monitorfx",
+                                                     "accent", "clicksound", "clickwhen", "countin"};
                 std::string name, val;
                 in >> name >> val;
                 int p = -1;
-                for (int i = 0; i < 13; ++i)
+                for (int i = 0; i < 17; ++i)
                     if (name == kNames[i]) p = i;
                 if (p < 0) {
                     std::fprintf(stderr, "%s:%d: unknown option %s\n", path.c_str(), lineNo, name.c_str());
@@ -687,11 +688,12 @@ struct Headless {
             } else if (cmd == "expect_opt") {
                 // expect_opt TRACK NAME VALUE: an option's value (names as for opt)
                 static const char* const kNames[] = {"stop",  "length",    "start", "input", "after",
-                                                     "tempo", "beats", "metronome", "click", "threshold", "stretch", "stopfade", "monitorfx"};
+                                                     "tempo", "beats", "metronome", "click", "threshold", "stretch", "stopfade", "monitorfx",
+                                                     "accent", "clicksound", "clickwhen", "countin"};
                 std::string name, val;
                 in >> name >> val;
                 int p = -1;
-                for (int i = 0; i < 13; ++i)
+                for (int i = 0; i < 17; ++i)
                     if (name == kNames[i]) p = i;
                 const int t = std::atoi(arg.c_str()) - 1;
                 int got = p >= 0 && t >= 0 && t < looper::kTracks ? m.app.engine().opt(looper::OptParam(p), t) : -1;
@@ -1070,7 +1072,7 @@ bool soak(Headless& h, uint32_t seed, uint32_t minutes, const std::string& logPa
     // Save a new project, load it back, compare the loops' lengths and channels.
     auto roundTrip = [&]() {
         act("-- save and load back");
-        press("NOTE");
+        press("PATTERN");
         waitIdle(120000);
         press("FILE");
         press("F2");
@@ -1079,7 +1081,7 @@ bool soak(Headless& h, uint32_t seed, uint32_t minutes, const std::string& logPa
         const int saved = m.app.files().current();
         if (!saved) {
             act(std::string("   (not saved: ") + m.app.files().status() + ")");
-            press("NOTE");
+            press("PATTERN");
             return;
         }
         uint32_t len[looper::kTracks];
@@ -1106,7 +1108,7 @@ bool soak(Headless& h, uint32_t seed, uint32_t minutes, const std::string& logPa
         } else {
             act(std::string("   (loaded something else: ") + m.app.files().status() + ")");
         }
-        press("NOTE");
+        press("PATTERN");
     };
 
     // Silence a listener hears: underruns on a track playing (or overdubbing),
@@ -1194,9 +1196,12 @@ bool soak(Headless& h, uint32_t seed, uint32_t minutes, const std::string& logPa
         } else if (r < 615) {
             press(chance(500) ? "LEFT" : "RIGHT");
         } else if (r < 735) {   // pages
-            static const char* const kP[] = {"NOTE", "NOTE", "NOTE", "MASTER", "INSTR", "INSTR", "FX1",
-                                             "FX2", "FILE", "SONG", "PERFORMANCE", "PATTERN", "HELP"};
-            press(kP[rnd(0, 12)]);
+            // (Pattern is home, Note and S.Edit the editor, Instr a second Perform;
+            // Copy duplicates a track or copies in the editor, S.Load the sample loader.)
+            static const char* const kP[] = {"PATTERN", "PATTERN", "PATTERN", "MASTER", "NOTE", "SAMPLEEDITOR",
+                                             "FX1", "FX2", "FILE", "SONG", "PERFORMANCE", "INSTR", "HELP",
+                                             "COPY", "COPY", "SAMPLELOADER"};
+            press(kP[rnd(0, 15)]);
         } else if (r < 745) {   // tap tempo
             for (int i = 0; i < 4; ++i) {
                 press("ENCPUSH");

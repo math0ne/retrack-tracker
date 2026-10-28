@@ -188,6 +188,8 @@ bool Files::saveConfig(const Config& c) {
 
 void Files::rescan() {
     count_ = 0;
+    std::memset(nameRead_, 0, sizeof nameRead_);
+    std::memset(projName_, 0, sizeof projName_);
     if (!cardReady()) return;
     auto add = [](const IStorage::DirEntry& e, void* ctx) {
         Files* f = static_cast<Files*>(ctx);
@@ -249,7 +251,17 @@ void Files::snapshot(ProjectFile& pf) const {
     const Engine& e = *engine_;
     std::memset(&pf, 0, sizeof pf);
     std::memcpy(pf.magic, "LPRJ", 4);
-    pf.version = 3;
+    pf.version = 4;
+    pf.accent = e.opt(OptParam::kAccent);
+    pf.clickSound = e.opt(OptParam::kClickSound);
+    pf.clickWhen = e.opt(OptParam::kClickWhen);
+    pf.countIn = e.opt(OptParam::kCountInBars);
+    for (int t = 0; t < kTracks; ++t) {
+        pf.filter[t] = e.mix(MixParam::kFilter, t);
+        for (int g = kGrainKnobsV2; g < kGrainKnobs; ++g) pf.grain2[t][g - kGrainKnobsV2] = e.grainParam(t, g);
+        std::memcpy(pf.trackName[t], trackName_[t], kNameLen);
+        pf.trackName[t][kNameLen - 1] = 0;
+    }
     pf.stopFade = e.opt(OptParam::kStopFade);
     pf.monitorFx = e.opt(OptParam::kMonitorFx);
     pf.chain[0] = e.mix(MixParam::kChain1);
@@ -295,7 +307,7 @@ void Files::snapshot(ProjectFile& pf) const {
         pt.input = e.opt(OptParam::kInput, t);
         pt.after = e.opt(OptParam::kAfter, t);
         pt.stretch = e.opt(OptParam::kStretch, t);
-        for (int g = 0; g < kGrainKnobs; ++g) pf.grain[t][g] = e.grainParam(t, g);
+        for (int g = 0; g < kGrainKnobsV2; ++g) pf.grain[t][g] = e.grainParam(t, g);
     }
 }
 
@@ -315,6 +327,10 @@ void Files::postSettings(const ProjectFile& pf, bool tracks) {
         // (An older project's missing fields hold the defaults: load.)
         opt(0, OptParam::kStopFade, pf.stopFade);
         opt(0, OptParam::kMonitorFx, pf.monitorFx);
+        opt(0, OptParam::kAccent, pf.accent);
+        opt(0, OptParam::kClickSound, pf.clickSound);
+        opt(0, OptParam::kClickWhen, pf.clickWhen);
+        opt(0, OptParam::kCountInBars, pf.countIn);
         mix(0, MixParam::kChain1, pf.chain[0]);
         mix(0, MixParam::kChain2, pf.chain[1]);
         e.post(Engine::kMonitor, 0, pf.monitor);
@@ -338,8 +354,13 @@ void Files::postSettings(const ProjectFile& pf, bool tracks) {
             opt(t, OptParam::kInput, pt.input);
             opt(t, OptParam::kAfter, pt.after);
             opt(t, OptParam::kStretch, pt.stretch);
-            for (int g = 0; g < kGrainKnobs; ++g)
+            for (int g = 0; g < kGrainKnobsV2; ++g)
                 e.post(Engine::kGrainParam, uint8_t(t), int16_t((g << 8) | pf.grain[t][g]));
+            for (int g = kGrainKnobsV2; g < kGrainKnobs; ++g)
+                e.post(Engine::kGrainParam, uint8_t(t), int16_t((g << 8) | pf.grain2[t][g - kGrainKnobsV2]));
+            mix(t, MixParam::kFilter, pf.filter[t]);
+            std::memcpy(trackName_[t], pf.trackName[t], kNameLen);
+            trackName_[t][kNameLen - 1] = 0;
         }
         return;
     }
@@ -481,7 +502,8 @@ bool Files::load(int number) {
         return !std::memcmp(pf_.magic, "LPRJ", 4) &&
                ((pf_.version == 1 && got == int32_t(kProjectV1Bytes)) ||
                 (pf_.version == 2 && got == int32_t(kProjectV2Bytes)) ||
-                (pf_.version == 3 && got == int32_t(sizeof pf_)));
+                (pf_.version == 3 && got == int32_t(kProjectV3Bytes)) ||
+                (pf_.version == 4 && got == int32_t(sizeof pf_)));
     };
     // No project.bin but a project.tmp: a save was cut off in its commit;
     // finish it first.
@@ -501,12 +523,23 @@ bool Files::load(int number) {
             for (int k = 0; k < kFxBank; ++k) pf_.fxKnob2[s][k] = ti.knob[kFxBank + k].name ? ti.knob[kFxBank + k].def : 0;
         }
         for (int t = 0; t < kTracks; ++t)
-            for (int g = 0; g < kGrainKnobs; ++g) pf_.grain[t][g] = kGrainKnobInfo[g].def;
+            for (int g = 0; g < kGrainKnobsV2; ++g) pf_.grain[t][g] = kGrainKnobInfo[g].def;
     }
     if (pf_.version < 3) {
         pf_.stopFade = 0;
-        pf_.monitorFx = 0;
+        pf_.monitorFx = 3;   // the default: both
         for (uint8_t& c : pf_.chain) c = 0;
+    }
+    if (pf_.version < 4) {
+        for (int t = 0; t < kTracks; ++t) {
+            pf_.filter[t] = kFilterOff;
+            for (int g = kGrainKnobsV2; g < kGrainKnobs; ++g) pf_.grain2[t][g - kGrainKnobsV2] = kGrainKnobInfo[g].def;
+            std::memset(pf_.trackName[t], 0, kNameLen);
+        }
+        pf_.accent = 1;
+        pf_.clickSound = 0;
+        pf_.clickWhen = 0;
+        pf_.countIn = 1;
     }
     number_ = number;
     jobFrames_ = jobDone_ = 0;
@@ -611,9 +644,211 @@ bool Files::readStep() {
     return true;
 }
 
-void Files::service() {
-    if (kind_ == kNone) return;
+void Files::setTrackName(int t, const char* s) {
+    if (t < 0 || t >= kTracks) return;
+    std::snprintf(trackName_[t], kNameLen, "%s", s ? s : "");
+}
+
+void Files::readName() {
+    for (int i = 0; i < count_; ++i) {
+        if ((nameRead_[i >> 3] >> (i & 7)) & 1) continue;
+        nameRead_[i >> 3] |= uint8_t(1u << (i & 7));
+        char path[64];
+        std::snprintf(path, sizeof path, "%s/%03d/name.txt", kProjects, numbers_[i]);
+        const IStorage::Handle h = p_->storage->open(path, IStorage::kRead);
+        if (h < 0) return;
+        const int32_t n = p_->storage->read(h, projName_[i], kProjectNameLen - 1);
+        p_->storage->close(h);
+        projName_[i][n > 0 ? n : 0] = 0;
+        for (char* c = projName_[i]; *c; ++c)   // one line, printable
+            if (*c == '\n' || *c == '\r') *c = 0;
+            else if (*c < 32 || *c > 126) *c = '?';
+        return;
+    }
+}
+
+bool Files::renameProject(int i, const char* name) {
+    if (i < 0 || i >= count_ || !cardReady()) return false;
+    char path[64];
+    std::snprintf(path, sizeof path, "%s/%03d/name.txt", kProjects, numbers_[i]);
     IStorage& fs = *p_->storage;
+    if (!name || !name[0]) {   // no name: the number alone
+        if (fs.exists(path)) fs.remove(path);
+        projName_[i][0] = 0;
+        return true;
+    }
+    const IStorage::Handle h = fs.open(path, IStorage::kWrite);
+    if (h < 0) return false;
+    const int32_t n = int32_t(std::strlen(name));
+    const bool ok = fs.write(h, name, uint32_t(n)) == n;
+    fs.close(h);
+    if (ok) std::snprintf(projName_[i], kProjectNameLen, "%s", name);
+    return ok;
+}
+
+void Files::openSampleDir(const char* sub) {
+    if (!sub) {   // up: the part before the last '/'
+        char* s = std::strrchr(sampleDir_, '/');
+        if (s) *s = 0;
+        else sampleDir_[0] = 0;
+    } else if (!sub[0]) {
+        sampleDir_[0] = 0;
+    } else if (std::strlen(sampleDir_) + std::strlen(sub) + 2 < sizeof sampleDir_) {
+        if (sampleDir_[0]) std::strcat(sampleDir_, "/");
+        std::strcat(sampleDir_, sub);
+    }
+    listSamples();
+}
+
+void Files::listSamples() {
+    sampleCount_ = 0;
+    if (!cardReady()) return;
+    auto add = [](const IStorage::DirEntry& e, void* ctx) {
+        Files* f = static_cast<Files*>(ctx);
+        if (e.name[0] == '.' || f->sampleCount_ >= kMaxSamples || std::strlen(e.name) >= kSampleNameLen) return true;
+        const size_t n = std::strlen(e.name);
+        const bool wav = n > 4 && (!std::strcmp(e.name + n - 4, ".wav") || !std::strcmp(e.name + n - 4, ".WAV") ||
+                                   !std::strcmp(e.name + n - 4, ".Wav"));
+        if (!e.isDir && !wav) return true;
+        if (e.isDir && !std::strcmp(e.name, "System Volume Information")) return true;
+        std::snprintf(f->sampleName_[f->sampleCount_], kSampleNameLen, "%s", e.name);
+        f->sampleIsDir_[f->sampleCount_] = e.isDir;
+        ++f->sampleCount_;
+        return true;
+    };
+    p_->storage->listDir(sampleDir_, add, this);
+    // Folders first, then by name (case aside): an insertion sort of a few dozen.
+    auto before = [&](int a, int b) {
+        if (sampleIsDir_[a] != sampleIsDir_[b]) return sampleIsDir_[a];
+        for (const char *x = sampleName_[a], *y = sampleName_[b];; ++x, ++y) {
+            const char p = char(*x >= 'a' && *x <= 'z' ? *x - 32 : *x), q = char(*y >= 'a' && *y <= 'z' ? *y - 32 : *y);
+            if (p != q || !p) return p < q;
+        }
+    };
+    for (int i = 1; i < sampleCount_; ++i)
+        for (int j = i; j > 0 && before(j, j - 1); --j) {
+            char tmp[kSampleNameLen];
+            std::memcpy(tmp, sampleName_[j], kSampleNameLen);
+            std::memcpy(sampleName_[j], sampleName_[j - 1], kSampleNameLen);
+            std::memcpy(sampleName_[j - 1], tmp, kSampleNameLen);
+            const bool d = sampleIsDir_[j];
+            sampleIsDir_[j] = sampleIsDir_[j - 1];
+            sampleIsDir_[j - 1] = d;
+        }
+}
+
+bool Files::loadSample(int t, int i) {
+    if (busy() || !cardReady() || t < 0 || t >= kTracks || i < 0 || i >= sampleCount_ || sampleIsDir_[i]) return false;
+    if (TrackState(engine_->view(t).state.load()) != TrackState::kEmpty) {
+        std::snprintf(status_, sizeof status_, "Track %d holds a loop: clear it first", t + 1);
+        return false;
+    }
+    std::snprintf(samplePath_, sizeof samplePath_, "%s%s%s", sampleDir_, sampleDir_[0] ? "/" : "", sampleName_[i]);
+    kind_ = kSample;
+    phase_ = 0;
+    track_ = t;
+    h_ = -1;
+    loaded_ = long_ = skipped_ = 0;
+    partial_ = false;
+    jobFrames_ = jobDone_ = 0;
+    waitMs_ = p_->clock ? p_->clock->millis() : 0;
+    std::snprintf(status_, sizeof status_, "Loading %s...", sampleName_[i]);
+    return true;
+}
+
+bool Files::sampleStep() {
+    // Open and check the WAV (16-bit PCM, 44.1 kHz, mono or stereo); read it
+    // into the track's buffer (past its RAM: on to the card, as a long take);
+    // then the engine takes it in, stopped: its Play starts it on a bar line.
+    // On an empty session it sets the bar, as a first take would.
+    IStorage& fs = *p_->storage;
+    const int t = track_;
+    const uint32_t now = p_->clock ? p_->clock->millis() : 0;
+    if (phase_ == 0) {
+        if (TrackState(engine_->view(t).state.load()) != TrackState::kEmpty) {
+            fail("The track was recorded meanwhile: not loaded");
+            return false;
+        }
+        h_ = fs.open(samplePath_, IStorage::kRead);
+        uint32_t ch = 0, rate = 0, bytes = 0;
+        if (h_ < 0 || !parseWav(fs, h_, ch, rate, bytes) || (ch != 1 && ch != 2)) {
+            fail("Not a WAV this loads (16-bit PCM, mono or stereo)");
+            return false;
+        }
+        if (rate != kSampleRate) {
+            fail("The WAV is not 44.1 kHz");
+            return false;
+        }
+        mono_ = ch == 1;
+        const uint32_t fb = mono_ ? 2 : 4;
+        const uint32_t cap = mono_ ? 2 * engine_->memory(t).capacity : engine_->memory(t).capacity;
+        head_ = engine_->headFor(t, mono_);
+        const uint32_t cardCap = stream_ ? stream_->capacity(t, mono_) : 0;
+        total_ = bytes / fb;
+        if (total_ < kSampleRate / 20) {   // 50 ms
+            fail("The WAV is too short");
+            return false;
+        }
+        if (total_ > cap) {   // longer than its RAM: the rest to the card
+            if (!head_ || !cardCap) {
+                if (now - waitMs_ < 5000) {   // the stream file may not be open yet
+                    fs.close(h_);
+                    h_ = -1;
+                    return true;
+                }
+                fail("Too long for the RAM, and the card is not ready");
+                return false;
+            }
+            if (total_ > cardCap) total_ = cardCap;   // what fits: up to 5 minutes (10 mono)
+            long_ = uint8_t(1u << t);
+        }
+        done_ = 0;
+        jobFrames_ = total_;
+        phase_ = 1;
+        return true;
+    }
+    if (phase_ == 1) {
+        if (TrackState(engine_->view(t).state.load()) != TrackState::kEmpty) {
+            fail("The track was recorded meanwhile: not loaded");
+            return false;
+        }
+        if (!readStep()) {
+            fail("Reading the WAV failed");
+            return false;
+        }
+        if (done_ < total_) return true;
+        fs.close(h_);
+        h_ = -1;
+        if (!engine_->masterLen()) engine_->post(Engine::kSetBar, 0, 0, total_);
+        engine_->post(Engine::kInstall, uint8_t(t), int16_t((mono_ ? 1 : 0) | 2 | (long_ ? 4 : 0)), total_, 0);
+        phase_ = 2;
+        waitMs_ = now;
+        return true;
+    }
+    const TrackState s = TrackState(engine_->view(t).state.load());
+    if (s == TrackState::kEmpty && now - waitMs_ < 1000) return true;
+    if (s == TrackState::kEmpty) {
+        fail("The track did not take the WAV");
+        return false;
+    }
+    const char* base = std::strrchr(samplePath_, '/');
+    char msg[sizeof status_];
+    std::snprintf(msg, sizeof msg, "Track %d: %.27s (Play starts it)", t + 1, base ? base + 1 : samplePath_);
+    finish(msg);
+    return true;
+}
+
+void Files::service() {
+    if (kind_ == kNone) {
+        if (count_ && cardReady()) readName();   // idle: a project name a call
+        return;
+    }
+    IStorage& fs = *p_->storage;
+    if (kind_ == kSample) {
+        if (!cardReady()) fail("The SD card went away");
+        else sampleStep();
+        return;
+    }
     if (!cardReady()) {
         fail("The SD card went away");
         return;
@@ -827,11 +1062,13 @@ void Files::skip(int t, const char* why) {
 
 uint8_t Files::lockedTracks() const {
     if (kind_ == kLoad) return (1u << kTracks) - 1;
+    if (kind_ == kSample) return uint8_t(1u << track_);
     return kind_ == kNone ? 0 : todo_;   // save / export: the tracks not written yet
 }
 
 const char* Files::lockReason() const {
     return kind_ == kLoad ? "Loading a project: wait until it is done"
+                          : kind_ == kSample ? "Loading a sample into this track: wait until it is done"
                           : kind_ == kSave ? "Saving this track: wait until it is done"
                                            : "Exporting this track: wait until it is done";
 }

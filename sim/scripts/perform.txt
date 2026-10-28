@@ -52,6 +52,9 @@ tap 12
 # The take started mid-bar, so "On bar" records on to the next bar line.
 wait 2100
 expect_state 2 PLAY
+# Recording left performance mode: back in.
+press PERFORMANCE
+wait 50
 tone off
 tap 2
 wait 500
@@ -72,6 +75,8 @@ wait 2000
 tap 24
 wait 2100
 expect_state 3 PLAY
+press PERFORMANCE
+wait 50
 tone off
 tap 14
 wait 500
@@ -135,14 +140,14 @@ expect_perf 1 3 off
 shot ../build/sim/check/perform_closed.png
 
 # Pattern is a second Perform key: tap to latch, tap again to leave.
-press PATTERN
+press INSTR
 wait 100
 down 6
 wait 200
 expect_perf 1 3 on
 up 6
 wait 50
-press PATTERN
+press INSTR
 wait 50
 down 6
 wait 200

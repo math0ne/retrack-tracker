@@ -398,7 +398,14 @@ void SwDisplay::drawBytes(bool l8, int16_t x, int16_t y, uint32_t addr, uint16_t
             g = g * ((rgb_ >> 8) & 255) / 255;
             b = b * (rgb_ & 255) / 255;
             uint32_t& d = px[size_t(py) * kW + qx];
-            if (a < 255) {
+            if (l8) {
+                // As the FT81x: an L8 bitmap's byte is its alpha (the colour is
+                // COLOR_RGB's), so what is under it shows where it is dark.
+                const uint32_t k = c * a / 255, ik = 255 - k;
+                r = (((rgb_ >> 16) & 255) * k + ((d >> 16) & 255) * ik) / 255;
+                g = (((rgb_ >> 8) & 255) * k + ((d >> 8) & 255) * ik) / 255;
+                b = ((rgb_ & 255) * k + (d & 255) * ik) / 255;
+            } else if (a < 255) {
                 const uint32_t ia = 255 - a;
                 r = (r * a + ((d >> 16) & 255) * ia) / 255;
                 g = (g * a + ((d >> 8) & 255) * ia) / 255;

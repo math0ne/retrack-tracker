@@ -41,25 +41,25 @@ release SHIFT
 wait 3000
 press F1
 tone off
-press INSTR
+press SAMPLEEDITOR
 press F2
 enc -12
 press F4
 wait 100
-press NOTE
+press PATTERN
 wait 4000
 expect_state 1 PLAY
 expect_len 1 24.0
 # Trim undone: the whole loop again.
-press INSTR
+press SAMPLEEDITOR
 press F7
 wait 100
-press NOTE
+press PATTERN
 wait 2000
 expect_len 1 30.0
 # 2. Cut beats 44..56 (22 s .. 28 s), then from bar 1, into the card part
 #    just before the cut.
-press INSTR
+press SAMPLEEDITOR
 press F1
 enc 44
 press F2
@@ -67,7 +67,7 @@ enc -4
 press F5
 press F5
 wait 15000
-press NOTE
+press PATTERN
 expect_len 1 24.0
 press PLAY
 wait 500

@@ -136,6 +136,12 @@ void Engine::runJobChunk() {
     const TrackMemory& m = mem_[j.track];
     const uint32_t fb = j.mono ? 2u : 4u;   // bytes per frame
     uint8_t* base = reinterpret_cast<uint8_t*>(m.frames) + size_t(j.base) * fb;
+    if (j.kind == kPaste) {
+        if (pasteChunk()) return;
+        const uint32_t valid = j.insert ? j.len + j.n : j.len;
+        if (peakChunk(j.a, j.insert ? valid : j.a + j.n, valid)) j.state.store(2, std::memory_order_release);
+        return;
+    }
     if (j.kind == kDubUndo && j.done < j.b) {
         // Undo / redo: swap the saved cells with the loop's, 32 cells a call.
         uint8_t* save = reinterpret_cast<uint8_t*>(m.frames) + size_t(capOf(j.track) - j.len) * fb;
@@ -165,6 +171,13 @@ void Engine::runJobChunk() {
     const uint32_t valid = cut ? j.len - (j.b - j.a) : (mul ? 2 * j.len : j.len);   // loop frames with audio now
     const uint32_t p1 = cut || mul || j.kind == kDubUndo ? valid : j.b;
     const uint32_t pa = j.kind == kDubUndo ? 0 : j.a;   // undo: the whole loop's peaks
+    if (peakChunk(pa, p1, valid)) j.state.store(2, std::memory_order_release);
+}
+
+bool Engine::peakChunk(uint32_t pa, uint32_t p1, uint32_t valid) {
+    // Loop frames [pa, p1) of the job's track, from its audio: 64 cells a call.
+    EditJob& j = job_;
+    const TrackMemory& m = mem_[j.track];
     const uint32_t c0 = (j.base + pa) / kPeakFrames, c1 = (j.base + p1 + kPeakFrames - 1) / kPeakFrames;
     const uint32_t lo = j.base, hi = j.base + valid;   // absolute frames with audio
     for (uint32_t step = 0; step < 64 && c0 + j.peaksDone < c1; ++step, ++j.peaksDone) {
@@ -189,7 +202,61 @@ void Engine::runJobChunk() {
             m.peaks[2 * c + 1] = pr;
         }
     }
-    if (c0 + j.peaksDone >= c1) j.state.store(2, std::memory_order_release);
+    return c0 + j.peaksDone >= c1;
+}
+
+bool Engine::pasteChunk() {
+    // Main loop, a chunk a call. Inserted: first the loop from `a` on moves up
+    // by n (from its end down, so it never runs over itself). Then the copy
+    // goes in at `a`: frame by frame (mono and stereo meet), from where the
+    // source frames are now (on the same track, the move took those past `a`
+    // along); over what is there, in the direction that never reads what it
+    // has just written.
+    EditJob& j = job_;
+    const TrackMemory& dm = mem_[j.track];
+    const TrackMemory& sm = mem_[j.src];
+    const uint32_t fb = j.mono ? 2u : 4u;
+    uint8_t* const dbase = reinterpret_cast<uint8_t*>(dm.frames);
+    if (j.phase == 0) {
+        const uint32_t tail = j.len - j.a;   // loop frames [a, len) move to [a + n, len + n)
+        if (!j.insert || j.done >= tail) {
+            j.phase = 1;
+            j.done = 0;
+            return true;
+        }
+        const uint32_t c = tail - j.done < kZeroChunkFrames ? tail - j.done : kZeroChunkFrames;
+        const uint32_t from = j.base + j.a + tail - j.done - c;   // the highest chunk not moved yet
+        std::memmove(dbase + size_t(from + j.n) * fb, dbase + size_t(from) * fb, size_t(c) * fb);
+        j.done += c;
+        return true;
+    }
+    if (j.done >= j.n) return false;
+    const uint32_t c = j.n - j.done < kZeroChunkFrames ? j.n - j.done : kZeroChunkFrames;
+    const bool same = j.src == j.track;
+    const uint32_t dst0 = j.base + j.a;
+    // Over what is there on the same track, a destination above the source
+    // copies from the top down.
+    const bool down = same && !j.insert && dst0 > j.srcBuf;
+    const uint32_t off = down ? j.n - j.done - c : j.done;
+    for (uint32_t i = 0; i < c; ++i) {
+        const uint32_t k = down ? c - 1 - i : i;
+        uint32_t s = j.srcBuf + off + k;
+        if (same && j.insert && s >= dst0) s += j.n;   // moved up with the rest
+        int16_t l, r;
+        if (j.srcMono) l = r = sm.frames[s];
+        else {
+            l = sm.frames[2 * size_t(s)];
+            r = sm.frames[2 * size_t(s) + 1];
+        }
+        const size_t d = size_t(dst0 + off + k);
+        if (j.mono) dm.frames[d] = int16_t((int32_t(l) + int32_t(r)) / 2);
+        else {
+            dm.frames[2 * d] = l;
+            dm.frames[2 * d + 1] = r;
+        }
+    }
+    j.done += c;
+    return true;
 }
 
 void Engine::finishJob() {
@@ -204,6 +271,13 @@ void Engine::finishJob() {
     } else if (j.kind == kDubUndo) {   // the other version plays now
         k.busy = false;
         k.dubUndo = k.dubUndo == 1 ? 2 : 1;
+    } else if (j.kind == kPaste) {   // in: inserted, the loop is that much longer
+        if (j.insert) {
+            setLength(k, j.len + j.n);
+            if (k.written < k.start + k.len) k.written = k.start + k.len;
+        }
+        k.busy = false;
+        restartGrains(k, uint64_t(posOf(k)) << 16);
     } else if (j.kind == kMultiply && k.len == j.len) {   // the copy is in: twice as long, same place
         setLength(k, 2 * j.len);
         if (k.written < k.start + k.len) k.written = k.start + k.len;
@@ -298,6 +372,32 @@ void Engine::restartGrains(Track& k, uint64_t pos16) {
     k.grain[1] = Grain{pos16, kGrainFrames / 2};
 }
 
+uint64_t Engine::cloudCentre16(const Track& k, int t, uint64_t step16, uint32_t f) const {
+    // The phase over two loop lengths (long enough for half speed), at the
+    // read position (the latency ahead), then times the speed.
+    const int64_t L16 = int64_t(k.len) << 16, M = 2 * L16;
+    if (!L16) return 0;
+    const int64_t d = (int64_t(t_) - int64_t(k.anchor)) * 65536 + int64_t(tAcc_ & 0xFFFFu) +
+                      int64_t(k.offset16 % uint64_t(L16)) + int64_t(latShift16(k) % uint64_t(L16)) +
+                      int64_t(uint64_t(f) * step16);
+    int64_t e = d % M;
+    if (e < 0) e += M;
+    const uint8_t sv = grain_[t][kGrainSpeed];
+    int64_t c = (e * kGrainSpeed16[sv < 6 ? sv : kGrainSpeedOne]) >> 16;
+    c %= L16;
+    if (c < 0) c += L16;
+    return uint64_t(c);
+}
+
+uint32_t Engine::posOf(const Track& k) const {
+    // Granular shows where the grains' centre is (the Speed knob moves it).
+    if (modeInfo(k.mode).reader == ModeInfo::kCloud && k.len) {
+        const int t = int(&k - trk_);
+        return uint32_t(cloudCentre16(k, t, 0, 0) >> 16);
+    }
+    return posOfPhase(k, readPhase16(k));
+}
+
 void Engine::renderGrains(int t, uint64_t ph0, uint64_t step16, uint32_t n) {
     // Granular mode: Clouds grains (looper/clouds/grain.h) read from the loop
     // around where it is playing now, so it keeps its time; size, overlap,
@@ -312,12 +412,16 @@ void Engine::renderGrains(int t, uint64_t ph0, uint64_t step16, uint32_t n) {
     float width = 882.0f * std::pow(25.0f, float(g[1]) / 100.0f);   // 20 .. 500 ms
     if (width > float(len) * 0.5f) width = float(len) * 0.5f;
     if (width < 64.0f) width = 64.0f;
-    const float d = float(g[2]) / 100.0f;
-    const float overlap = 1.0f + 7.0f * d * d;
+    // Density: from a grain every four lengths (gaps) to eight overlapping.
+    const float overlap = 0.25f * std::pow(32.0f, float(g[2]) / 100.0f);
     const float interval = width / overlap;
     float ratio = std::exp2(float(int(g[3]) - kGrainPitchZero) / 12.0f);
     if (!opts_[t].stretch) ratio *= float(speed16_) / 65536.0f;   // tape: the pitch follows the tempo too
-    const float scatter = float(g[0]) / 100.0f * 0.5f * float(len);
+    // Spread: up to a second either way (a quarter of a short loop), finer
+    // at the bottom of the knob.
+    const float sp = float(g[0]) / 100.0f;
+    const float scatter = sp * sp * std::fmin(0.25f * float(len), float(kSampleRate));
+    (void)ph0;
     for (uint32_t f = 0; f < n; ++f) {
         k.cgPhasor += 1.0f;
         if (k.cgPhasor < interval) continue;
@@ -331,7 +435,10 @@ void Engine::renderGrains(int t, uint64_t ph0, uint64_t step16, uint32_t n) {
         if (!free) continue;
         // Centred on the playhead (the grain's middle plays when the loop is
         // there), scattered by Spread, panned a little at random.
-        const int32_t here = int32_t(((ph0 + uint64_t(f) * step16) >> 16) % uint64_t(len));
+        const int32_t here = int32_t(cloudCentre16(k, t, step16, f) >> 16);
+        // Grains: forward, backwards, or each at random. A backwards one
+        // reads the same stretch from its far end down.
+        const bool back = g[kGrainDir] == 1 || (g[kGrainDir] == 2 && stmlib::Random::GetFloat() < 0.5f);
         const int32_t raw = here - int32_t(width * ratio * 0.5f) +
                             int32_t(scatter * (2.0f * stmlib::Random::GetFloat() - 1.0f));
         int32_t start = raw % len;
@@ -378,11 +485,17 @@ void Engine::renderGrains(int t, uint64_t ph0, uint64_t step16, uint32_t n) {
             k.cgRing[idx] = card;
             k.cgB0[idx] = B0;
             k.cgFirst[idx] = first;
-            free->Start(int32_t(f), int32_t(card ? ringOf(t) : k.head), int32_t(first), w, int32_t(ratio * 65536.0f),
-                        1.0f, gl, gr, clouds::GRAIN_QUALITY_HIGH);
+            // Backwards: from the stretch's last frame (its buffer stays the same).
+            if (back) first = card ? (first + uint32_t(S) - 2) % ringOf(t) : first + uint32_t(S) - 2;
+            k.cgFirst[idx] = first;
+            if (back) k.cgB0[idx] = B0 + uint32_t(S) - 2;
+            free->Start(int32_t(f), int32_t(card ? ringOf(t) : k.head), int32_t(first), w,
+                        int32_t(ratio * 65536.0f) * (back ? -1 : 1), 1.0f, gl, gr, clouds::GRAIN_QUALITY_HIGH);
             continue;
         }
-        free->Start(int32_t(f), len, start, w, int32_t(ratio * 65536.0f), 1.0f, gl, gr, clouds::GRAIN_QUALITY_HIGH);
+        if (back) start = (start + int32_t(float(w) * ratio)) % len;
+        free->Start(int32_t(f), len, start, w, int32_t(ratio * 65536.0f) * (back ? -1 : 1), 1.0f, gl, gr,
+                    clouds::GRAIN_QUALITY_HIGH);
     }
     int active = 0;
     const int16_t* const ringBuf = m.frames + (k.mono ? size_t(k.head) : 2 * size_t(k.head));
@@ -501,10 +614,11 @@ void Engine::startRecording(int t) {
     else if (!running_) startTransport();
     const uint32_t bar = barLen(), beat = beatLen();
     k.stopAt = o.lenBeats ? uint32_t(o.lenBeats) * beat : 0;
-    if (o.start == StartMode::kCountIn) {
-        // One bar of click, then record from the bar line. With loops already
-        // running, the next bar line at least half a bar away.
-        uint32_t start = first ? bar : ((t_ + bar - 1) / bar) * bar;
+    if (o.start == StartMode::kCountIn && kCountInLen[countIn_]) {
+        // The count-in's bars of click, then record from the bar line. With
+        // loops already running, from the next bar line at least half a bar away.
+        const uint32_t bars = kCountInLen[countIn_];
+        uint32_t start = first ? bar * bars : ((t_ + bar - 1) / bar) * bar + bar * (bars - 1);
         if (!first && start - t_ < bar / 2) start += bar;
         k.anchor = start;
         k.recStart = t_;
@@ -650,9 +764,14 @@ void Engine::finishRecording(int t, uint32_t len) {
     k.len = len;
     k.stopAt = 0;
     const bool mirrored = stream_[t].active.load(std::memory_order_relaxed);
-    if (mirrored && !k.head && headOf(t) && len > headOf(t)) {
+    // A take too long for the RAM undo (that needs the loop to fit twice)
+    // goes on the card's books too: all of it stays in RAM, but its overdub
+    // passes are kept apart on the card, so undo works at every length.
+    const bool cardUndoOnly = 2 * len + kXfadeFrames > capOf(t);
+    if (mirrored && !k.head && headOf(t) && (len > headOf(t) || cardUndoOnly)) {
         // Rounded up to its bar past its RAM before it reached the card: a
-        // long take, its silent rest (zeros) on the card.
+        // long take, its silent rest (zeros) on the card. (Or one that fits
+        // its RAM, for the undo: nothing then plays from the card.)
         StreamView& sv = stream_[t];
         k.head = headOf(t);
         for (clouds::Grain& c : k.cg) c.Init();
@@ -811,7 +930,8 @@ void Engine::endTake(int t) {
 
 void Engine::clearTrack(int t) {
     Track& k = trk_[t];
-    const uint8_t vol = k.volume;
+    if (clip_.track == t) clip_.has = false;   // the copy's audio goes
+    const uint8_t vol = k.volume, flt = k.filter;
     // Zeroing counts stereo frames (4 bytes); a mono track's frames are 2 bytes.
     // A long take's card part is not zeroed (the next take overwrites it); its
     // peaks past the RAM's are.
@@ -835,6 +955,7 @@ void Engine::clearTrack(int t) {
     sv.undoReq.store(0, std::memory_order_relaxed);
     k = Track{};
     k.volume = vol;
+    k.filter = flt;
     k.written = dirty;
     if (dirty) {
         k.state = TrackState::kClearing;
@@ -1054,6 +1175,96 @@ void Engine::apply(const Msg& m) {
             break;
         }
         case kClockOut: clockOut_ = m.arg != 0; break;
+        case kFocus: focus_ = t < kTracks ? uint8_t(t) : 0; break;
+        case kClip:   // what Paste puts in: a RAM loop's [a, b), as long as that loop stays as it is
+            clip_.has = k.len && !k.head && m.b > m.a && m.b <= k.len && k.state != TrackState::kRecording;
+            clip_.track = uint8_t(t);
+            clip_.start = k.start;
+            clip_.len = k.len;
+            clip_.a = m.a;
+            clip_.n = m.b - m.a;
+            break;
+        case kDuplicate: {
+            // Into the next track, empty: the same loop, in the same place on
+            // the clock (same anchor and offset: they play as one), its mode
+            // and grain knobs; the copy's audio goes in as a job, silent till then.
+            const int d = t + 1;
+            if (d >= kTracks || job_.state.load(std::memory_order_acquire)) break;
+            Track& c = trk_[d];
+            const bool loop = k.len && !k.busy && (k.state == TrackState::kPlaying || k.state == TrackState::kStopped ||
+                                                   k.state == TrackState::kOverdubbing || k.state == TrackState::kQueued);
+            const bool inRam = !k.head || k.start + k.len <= k.head;   // nothing of it on the card
+            if (!loop || !inRam || c.state != TrackState::kEmpty ||
+                (k.mono ? 2 * mem_[d].capacity : mem_[d].capacity) < k.len)   // it fits there as it is
+                break;
+            c.mono = k.mono;
+            c.input = k.input;
+            c.len = k.len;
+            c.written = k.len;
+            c.start = 0;
+            c.anchor = k.anchor;
+            c.offset16 = k.offset16;
+            c.mode = k.mode;
+            c.undo.has = false;
+            for (int g = 0; g < kGrainKnobs; ++g) grain_[d][g] = grain_[t][g];
+            c.state = k.state == TrackState::kStopped || k.state == TrackState::kQueued ? TrackState::kStopped
+                                                                                      : TrackState::kPlaying;
+            c.busy = true;
+            job_.track = uint8_t(d);
+            job_.kind = kPaste;
+            job_.mono = c.mono;
+            job_.base = 0;
+            job_.len = c.len;
+            job_.a = 0;
+            job_.b = 0;
+            job_.src = uint8_t(t);
+            job_.srcMono = k.mono;
+            job_.srcBuf = k.start;
+            job_.n = k.len;
+            job_.insert = false;
+            job_.phase = 1;
+            job_.done = job_.peaksDone = 0;
+            job_.state.store(1, std::memory_order_release);
+            break;
+        }
+        case kPaste: {
+            const Track& s = trk_[clip_.track];
+            const bool loop = k.len && !k.busy && !k.head && (k.state == TrackState::kPlaying ||
+                              k.state == TrackState::kStopped || k.state == TrackState::kOverdubbing ||
+                              k.state == TrackState::kQueued);
+            if (!clip_.has || !loop || job_.state.load(std::memory_order_acquire) || m.a >= k.len) break;
+            if (s.len != clip_.len || s.start != clip_.start || s.head || s.busy) {   // the copy's loop changed
+                clip_.has = false;
+                break;
+            }
+            const bool ins = m.arg != 0;
+            uint32_t n = clip_.n;
+            if (!ins && n > k.len - m.a) n = k.len - m.a;   // over: up to the loop's end
+            if (ins && k.start + k.len + n + kXfadeFrames > capOf(t)) break;   // no room for it
+            if (k.state == TrackState::kOverdubbing) k.state = TrackState::kPlaying;
+            k.dubX = 0.0f;
+            k.dubSession = false;
+            dropUndo(k);
+            k.undo.has = false;   // an older trim cannot come back over the new audio
+            job_.track = uint8_t(t);
+            job_.kind = kPaste;
+            job_.mono = k.mono;
+            job_.base = k.start;
+            job_.len = k.len;
+            job_.a = m.a;
+            job_.b = 0;
+            job_.src = clip_.track;
+            job_.srcMono = s.mono;
+            job_.srcBuf = s.start + clip_.a;
+            job_.n = n;
+            job_.insert = ins;
+            job_.phase = 0;
+            job_.done = job_.peaksDone = 0;
+            k.busy = true;   // silent while the audio moves
+            if (ins && clip_.track == t) clip_.has = false;   // its loop changes under it
+            job_.state.store(1, std::memory_order_release);
+            break;
+        }
         case kDubUndo: {
             const bool want = m.arg == 0 ? k.dubUndo == 1 : k.dubUndo == 2;
             if (k.head) {   // a long take: the Streamer swaps the pass's blocks on the card; silent meanwhile
@@ -1204,6 +1415,7 @@ void Engine::setMix(MixParam p, int t, int v) {
         case MixParam::kMaster: masterLevel_ = pct(v, 100); break;
         case MixParam::kChain1: chain_[0] = pct(v, 100); break;
         case MixParam::kChain2: chain_[1] = pct(v, 100); break;
+        case MixParam::kFilter: trk_[t].filter = pct(v, 100); break;
     }
 }
 
@@ -1250,6 +1462,10 @@ void Engine::setOpt(OptParam p, int t, int v) {
         case OptParam::kThreshold: threshold_ = lim(v, 0, 100); break;
         case OptParam::kStopFade: stopFade_ = lim(v, 0, 3); break;
         case OptParam::kMonitorFx: monitorFx_ = lim(v, 0, 3); break;
+        case OptParam::kAccent: accent_ = lim(v, 0, 1); break;
+        case OptParam::kClickSound: clickSound_ = lim(v, 0, kClickSounds - 1); break;
+        case OptParam::kClickWhen: clickWhen_ = lim(v, 0, 1); break;
+        case OptParam::kCountInBars: countIn_ = lim(v, 0, 3); break;
     }
 }
 
@@ -1388,6 +1604,10 @@ uint8_t Engine::opt(OptParam p, int t) const {
         case OptParam::kThreshold: return threshold_;
         case OptParam::kStopFade: return stopFade_;
         case OptParam::kMonitorFx: return monitorFx_;
+        case OptParam::kAccent: return accent_;
+        case OptParam::kClickSound: return clickSound_;
+        case OptParam::kClickWhen: return clickWhen_;
+        case OptParam::kCountInBars: return countIn_;
     }
     return 0;
 }
@@ -1402,6 +1622,7 @@ uint8_t Engine::mix(MixParam p, int t) const {
         case MixParam::kMaster: return masterLevel_;
         case MixParam::kChain1: return chain_[0];
         case MixParam::kChain2: return chain_[1];
+        case MixParam::kFilter: return trk_[t].filter;
     }
     return 0;
 }
@@ -1465,14 +1686,17 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
         if (pr > inPk[1]) inPk[1] = pr;
         mixL[f] = monitor_ ? float(l) : 0.0f;
         mixR[f] = monitor_ ? float(r) : 0.0f;
-        // Monitoring through the effects: the input on the chosen send buses, at full send.
+        // Monitoring through the effects: the input on the chosen send buses,
+        // at the selected track's send levels (what a take on it will get).
         if (monitor_ && monitorFx_)
             for (int s = 0; s < kFxSlots; ++s)
                 if ((monitorFx_ >> s) & 1) {
-                    busL_[s][f] += float(l);
-                    busR_[s][f] += float(r);
+                    const float g = monSend_[s] + (float(send_[focus_][s]) / 100.0f - monSend_[s]) * float(f + 1) / float(n);
+                    busL_[s][f] += float(l) * g;
+                    busR_[s][f] += float(r) * g;
                 }
     }
+    for (int s = 0; s < kFxSlots; ++s) monSend_[s] = float(send_[focus_][s]) / 100.0f;
 
     const float fb = float(feedback_) / 100.0f;
     // Sound start: the input level that triggers an armed track.
@@ -1690,6 +1914,32 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                 return c;
             };
             const Coef lpc = coef(lpFc), hpc = coef(hpFc);
+            // The mixer's DJ filter: below the middle a low-pass closing from
+            // 20 kHz to 150 Hz, above it a high-pass opening from 20 Hz to
+            // 6 kHz (a dead zone round the middle is off). The cutoff glides
+            // (in octaves) and the filter fades in and out, so turning it is smooth.
+            const int fv = k.filter;
+            const bool djOn = fv < kFilterOff - 2 || fv > kFilterOff + 2;
+            const bool djHigh = fv > kFilterOff;
+            if (k.djWet <= 0.0f && djOn && djHigh != k.djHigh) {   // the other kind: from where it is open
+                k.djHigh = djHigh;
+                k.dj = Svf{};
+                k.djLog = djHigh ? std::log(20.0f) : std::log(20000.0f);
+            }
+            float djTarget;   // ln Hz
+            if (k.djHigh) djTarget = std::log(20.0f) + std::log(6000.0f / 20.0f) * (djOn && djHigh ? float(fv - kFilterOff - 2) / 48.0f : 0.0f);
+            else djTarget = std::log(20000.0f) + std::log(150.0f / 20000.0f) * (djOn && !djHigh ? float(kFilterOff - 2 - fv) / 48.0f : 0.0f);
+            const float djW0 = k.djWet;
+            k.djWet = djOn && djHigh == k.djHigh ? 1.0f : 0.0f;
+            const bool djRun = djW0 > 0.0f || k.djWet > 0.0f;
+            const float djWs = (k.djWet - djW0) / float(n);
+            float djW = djW0;
+            k.djLog += (djTarget - k.djLog) * 0.35f;   // ~20 ms
+            const Coef djc = coef(std::exp(k.djLog));
+            if (!djRun) {   // out: it starts open next time
+                k.dj = Svf{};
+                k.djLog = k.djHigh ? std::log(20.0f) : std::log(20000.0f);
+            }
             // One channel of an SVF; returns low-pass or high-pass.
             auto svf = [](Svf& s, int ch, const Coef& c, float x, bool high) {
                 const float v3 = x - s.ic2[ch];
@@ -1924,6 +2174,11 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                     sl += (svf(pf.hp, 0, hpc, sl, true) - sl) * hpW;
                     sr += (svf(pf.hp, 1, hpc, sr, true) - sr) * hpW;
                 }
+                if (djRun) {
+                    djW += djWs;
+                    sl += (svf(k.dj, 0, djc, sl, k.djHigh) - sl) * djW;
+                    sr += (svf(k.dj, 1, djc, sr, k.djHigh) - sr) * djW;
+                }
                 ph += step16;
                 if (ph >= P) ph -= P;
                 g += step;
@@ -1963,11 +2218,16 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
         view_[t].level.store(level, std::memory_order_relaxed);
     }
 
-    // Metronome: always (when on) or during any track's count-in. Accent on the
-    // bar line. Dry, after the sends, so the effects never hear it.
-    bool counting = false;
-    for (const Track& k : trk_) counting = counting || k.state == TrackState::kCountIn;
-    if (running_ && (metro_ || counting) && click_) {
+    // Metronome: always (when on; or only while a track records), and during
+    // any track's count-in. Accent on the bar line. Dry, after the sends, so
+    // the effects never hear it.
+    bool counting = false, taking = false;
+    for (const Track& k : trk_) {
+        counting = counting || k.state == TrackState::kCountIn;
+        taking = taking || k.state == TrackState::kRecording || k.state == TrackState::kOverdubbing;
+    }
+    const bool metroNow = metro_ && (!clickWhen_ || taking || counting);
+    if (running_ && (metroNow || counting) && click_) {
         const uint32_t bar = barLen(), beat = beatLen();
         const float lvl = float(click_) / 100.0f * 9000.0f;
         for (uint32_t f = 0; f < n; ++f) {
@@ -1978,18 +2238,45 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                 lastBeat_ = bi;
                 clickAge_ = 0;
                 const uint32_t beats = bar / beat ? bar / beat : 1;
-                clickOsc_.start(bi % beats == 0 ? 1600.0f : 1000.0f);
-                clickAmp_ = 1.0f;
+                const bool acc = accent_ && bi % beats == 0;
+                // The sounds: pitch up on the accent (the cowbell and the hat
+                // just louder); each with its own decay.
+                switch (clickSound_) {
+                    case 1: clickOsc_.start(acc ? 2400.0f : 1800.0f); clickDecay_ = 0.9950f; break;   // wood block: short
+                    case 2: clickDecay_ = 0.9930f; break;                                            // hi-hat: noise
+                    case 3:                                                                          // cowbell: 540 + 800 Hz
+                        clickOsc_.start(540.0f);
+                        clickOsc2_.start(800.0f);
+                        clickDecay_ = 0.9988f;
+                        break;
+                    default: clickOsc_.start(acc ? 1600.0f : 1000.0f); clickDecay_ = 0.9977f; break;
+                }
+                clickAmp_ = acc ? 1.4f : (accent_ ? 0.8f : 1.0f);
             }
-            if (clickAge_ < kSampleRate / 20) {   // 50 ms, ~10 ms decay
-                const float v = clickOsc_.next() * clickAmp_ * lvl;
-                clickAmp_ *= 0.9977f;
+            if (clickAge_ < kSampleRate / 10 && clickAmp_ > 0.001f) {   // up to 100 ms (the decays are shorter)
+                float s;
+                if (clickSound_ == 2) {   // white noise through a first-difference high-pass
+                    clickNoise_ ^= clickNoise_ << 13;
+                    clickNoise_ ^= clickNoise_ >> 17;
+                    clickNoise_ ^= clickNoise_ << 5;
+                    const float w = float(int32_t(clickNoise_)) * (1.0f / 2147483648.0f);
+                    s = (w - clickHp_) * 0.7f;
+                    clickHp_ = w;
+                } else if (clickSound_ == 3) {   // two squarish tones (soft-clipped sines)
+                    const float a = clickOsc_.next(), b = clickOsc2_.next();
+                    s = 0.5f * (std::tanh(3.0f * a) + std::tanh(3.0f * b));
+                } else {
+                    s = clickOsc_.next();
+                }
+                const float v = s * clickAmp_ * lvl;
+                clickAmp_ *= clickDecay_;
                 ++clickAge_;
                 mixL[f] += v;
                 mixR[f] += v;
             }
         }
         clickOsc_.renorm();
+        clickOsc2_.renorm();
     } else {
         clickAge_ = 0xFFFFFFFFu;
         lastBeat_ = running_ && beatLen() ? tf(0) / beatLen() : 0xFFFFFFFFu;   // no click for a beat already under way
