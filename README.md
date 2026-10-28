@@ -12,9 +12,8 @@ https://github.com/user-attachments/assets/0d21f3ef-e740-4524-94a1-e38987e352ee
 > [!WARNING]
 > **Very beta.** This runs on the Tracker and is being tested on the device,
 > but expect bugs and performance issues (audio glitches, a slow screen under
-> load). Keep the stock firmware on the SD card as the way back (see
-> [Install on a Tracker](docs/REFERENCE.md#install-on-a-tracker)), and don't trust it with
-> anything you can't afford to lose.
+> load). Keep the stock firmware on the SD card as the way back, and don't
+> trust it with anything you can't afford to lose.
 
 ![Four loops playing](docs/img/home.png)
 
@@ -37,6 +36,14 @@ https://github.com/user-attachments/assets/0d21f3ef-e740-4524-94a1-e38987e352ee
 - Metronome with accent, four sounds, count-in length, click only while recording
 - Input monitoring through the effects, at the selected track's sends
 - An on-device manual, and a firmware flasher back to stock
+
+## Install
+
+1. Download `PolyendTracLooperv<XY>.ptf` from the [latest release](https://github.com/math0ne/retrack-tracker/releases/latest).
+2. Copy it into `/Firmware` on the Tracker's SD card.
+3. On the Tracker, update the firmware and pick that file.
+
+To go back, flash the stock firmware the same way (Config > F1 Firmware).
 
 ## Features
 

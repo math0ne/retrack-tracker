@@ -78,11 +78,13 @@ copying that folder onto the card and power-cycling installs the build.
 
 ## Releases
 
-GitHub Actions (`.github/workflows/build.yml`) builds the firmware and runs
-the simulator checks on every push to main and every pull request; the image
-is attached to the run as an artifact. Pushing a tag `vX.Y` (one digit each,
-since the image name must be exactly 24 characters) builds version X.Y and
-publishes a release with `PolyendTracLooperv<XY>.ptf` and an SD-card zip:
+GitHub Actions (`.github/workflows/build.yml`) builds only release tags:
+pushing a tag `vX.Y` (one digit each, since the image name must be exactly 24
+characters) builds version X.Y, runs the simulator checks and publishes a
+release with `PolyendTracLooperv<XY>.ptf` and an SD-card zip. Plain pushes
+don't build; Actions > build > Run workflow makes a test build (the image as
+the run's artifact, no release). The build is reproducible: the same commit
+gives a byte-identical image here and on CI.
 
 ```
 git tag v0.2

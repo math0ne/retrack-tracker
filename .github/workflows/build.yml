@@ -1,13 +1,12 @@
-# Build the firmware and run the simulator checks on every push and pull
-# request. A tag vX.Y (one digit each: the image name must be 24 characters)
-# also builds version X.Y and publishes a GitHub release with the image.
+# Release build: a tag vX.Y (one digit each: the image name must be 24
+# characters) builds version X.Y, runs the simulator checks and publishes a
+# GitHub release with the image. Plain pushes don't build; run it by hand
+# (Actions > build > Run workflow) for a test build without a release.
 name: build
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
-  pull_request:
   workflow_dispatch:
 
 permissions:
