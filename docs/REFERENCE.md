@@ -102,9 +102,11 @@ the popups over the lanes keep a backing, to stay readable). The lanes
 are waveforms only, the full width of the screen; a tag in each lane's corner
 gives its name (when it has one), its length and, when they apply, **card**
 (a long take), its mode (other than Forward) and Muted. The bar and beat lines
-sit faintly behind the waveforms; in every fourth bar (bars 4, 8, 12 ... from
-bar 1) a thin line along the screen's right edge brightens slowly through the
-bar, so the end of the four bars can be seen coming.
+sit faintly behind the waveforms; while a track records or overdubs, in every
+fourth bar of the take (bars 4, 8, 12 ... from its start; overdubbing, of the
+loop) a thin line at the right end of its
+lane brightens slowly through the bar, so the end of the four bars can be seen
+coming (nothing while only playing).
 Pages carry no instructions: the screen keys' labels say what they do. A lane that records has a pulsing dot before its tag (a ring
 while it is armed or counting in). The selected track's state is on the keys: REC lights up while it
 records (brightest, pulsing; a softer pulse for an overdub, dim during a count-in
@@ -178,7 +180,7 @@ are the selected track's options (see [Track options and tempo](../README.md#tra
 | Delete | Clear the selected track; Shift + Delete clears all |
 | Up / Down, any pad | Select track |
 | Encoder | Selected track volume; Shift + encoder = input gain |
-| Pattern | Home: the loop lanes, from any page |
+| Pattern | Home: the loop lanes, from any page; leaves performance mode |
 | Perform / Instr | Performance mode |
 | Master | Mixer page on / off (Shift + F8 there: name the strip's track) |
 | Note / S.Edit | Loop editor for the selected track |

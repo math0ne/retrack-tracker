@@ -257,7 +257,8 @@ void Files::snapshot(ProjectFile& pf) const {
     pf.clickWhen = e.opt(OptParam::kClickWhen);
     pf.countIn = e.opt(OptParam::kCountInBars);
     for (int t = 0; t < kTracks; ++t) {
-        pf.filter[t] = e.mix(MixParam::kFilter, t);
+        pf.filter[t] = uint8_t(e.filterFine(t) / 10);
+        pf.filterFine[t] = uint8_t(e.filterFine(t) % 10);
         for (int g = kGrainKnobsV2; g < kGrainKnobs; ++g) pf.grain2[t][g - kGrainKnobsV2] = e.grainParam(t, g);
         std::memcpy(pf.trackName[t], trackName_[t], kNameLen);
         pf.trackName[t][kNameLen - 1] = 0;
@@ -288,6 +289,7 @@ void Files::snapshot(ProjectFile& pf) const {
         pf.perf[i] = e.perfParam(0, PerfFx(i));
         for (int t = 0; t < kTracks; ++t) pf.perfTrack[t][i] = e.perfParam(t, PerfFx(i));
     }
+    pf.busMute = uint8_t((e.busMuted(0) ? 1 : 0) | (e.busMuted(1) ? 2 : 0) | (e.busMuted(2) ? 4 : 0));
     for (int t = 0; t < kTracks; ++t) {
         const TrackView& v = e.view(t);
         ProjectTrack& pt = pf.track[t];
@@ -351,6 +353,7 @@ void Files::postSettings(const ProjectFile& pf, bool tracks) {
         for (int t = 0; t < kTracks; ++t)
             for (int i = 0; i < kPerfFxCount; ++i)
                 e.post(Engine::kPerfParam, uint8_t(t), int16_t((i << 8) | pf.perfTrack[t][i]));
+        for (int b = 0; b < 3; ++b) e.post(Engine::kBusMute, uint8_t(b), int16_t((pf.busMute >> b) & 1));
         for (int t = 0; t < kTracks; ++t) {
             const ProjectTrack& pt = pf.track[t];
             opt(t, OptParam::kStop, pt.stop);
@@ -363,7 +366,8 @@ void Files::postSettings(const ProjectFile& pf, bool tracks) {
                 e.post(Engine::kGrainParam, uint8_t(t), int16_t((g << 8) | pf.grain[t][g]));
             for (int g = kGrainKnobsV2; g < kGrainKnobs; ++g)
                 e.post(Engine::kGrainParam, uint8_t(t), int16_t((g << 8) | pf.grain2[t][g - kGrainKnobsV2]));
-            mix(t, MixParam::kFilter, pf.filter[t]);
+            e.post(Engine::kFilterFine, uint8_t(t),
+                   int16_t((pf.filter[t] > 100 ? 100 : pf.filter[t]) * 10 + (pf.filterFine[t] < 10 ? pf.filterFine[t] : 0)));
             std::memcpy(trackName_[t], pf.trackName[t], kNameLen);
             trackName_[t][kNameLen - 1] = 0;
         }

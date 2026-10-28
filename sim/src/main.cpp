@@ -781,6 +781,16 @@ struct Headless {
                 std::printf("%s:%d: expect_grain %s %s %s %s (%d)\n", path.c_str(), lineNo, arg.c_str(), kn.c_str(),
                             val.c_str(), pass ? "PASS" : "FAIL", got);
                 ok = ok && pass;
+            } else if (cmd == "expect_filter") {
+                // expect_filter TRACK VALUE: the mixer's DJ filter, 0..1000 (500 the middle: off)
+                std::string val;
+                in >> val;
+                const int t = std::atoi(arg.c_str()) - 1;
+                const int got = t >= 0 && t < looper::kTracks ? int(m.app.engine().filterFine(t)) : -1;
+                const bool pass = got == std::atoi(val.c_str());
+                std::printf("%s:%d: expect_filter %s %s %s (%d)\n", path.c_str(), lineNo, arg.c_str(), val.c_str(),
+                            pass ? "PASS" : "FAIL", got);
+                ok = ok && pass;
             } else if (cmd == "expect_perfknob") {
                 // expect_perfknob FX VALUE [TRACK]: performance effect FX (1..8) knob value (track 1..4, default 1)
                 std::string val, tr;

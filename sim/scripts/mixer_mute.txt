@@ -1,5 +1,5 @@
-# The mixer: holding Shift, F1..F4 mute and unmute the tracks (the strip
-# picked stays); a muted strip says so.
+# The mixer: holding Shift, F1..F7 mute and unmute the strips (the tracks,
+# the two FX returns, master; the strip picked stays); a muted strip says so.
 wait 300
 opt all start 0
 tone_shape steady
@@ -33,3 +33,39 @@ press F2
 reset_levels
 wait 500
 expect_audio 0.1
+# Shift + F7: master muted, again: back.
+hold SHIFT
+press F7
+release SHIFT
+reset_levels
+wait 500
+expect_silent
+shot ../build/sim/check/mixer_master_muted.png
+hold SHIFT
+press F7
+release SHIFT
+reset_levels
+wait 500
+expect_audio 0.1
+# Track 1 heard only through FX 1 (its level down, its send up): Shift + F5
+# mutes FX 1's return, again: back.
+mix 1 level 0
+mix 1 send1 100
+mix 0 return1 100
+wait 1000
+reset_levels
+wait 500
+expect_audio 0.02
+hold SHIFT
+press F5
+release SHIFT
+wait 1500
+reset_levels
+wait 500
+expect_silent
+hold SHIFT
+press F5
+release SHIFT
+reset_levels
+wait 500
+expect_audio 0.02

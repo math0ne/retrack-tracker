@@ -135,7 +135,7 @@ private:
     void scissorOff();
 
     void drawLane(int t, uint32_t now);
-    void drawBarClock(uint32_t now);   // a line on the right edge in every fourth bar: the phrase's end coming
+    void drawBarClock(uint32_t now);   // a line by a recording track's lane in every fourth bar: the phrase's end coming
     void drawFKeys();
     void drawStats();
 
@@ -147,7 +147,7 @@ private:
     void fxKnobText(int slot, int knob, char* buf, size_t n) const;
     float fxKnobFrac(int slot, int knob) const;
     void mixerKey(uint8_t id);
-    static void filterText(uint8_t v, char* buf, size_t n);   // the DJ filter: "Off", "LP 1.2k", "HP 300"
+    static void filterText(uint16_t v, char* buf, size_t n);   // the DJ filter (0..kFilterFineMax): "Off", "LP 1.2k", "HP 300"
     void mixerEncoder(int delta);
     void drawMixer();
     void drawStrip(int s);
@@ -268,6 +268,7 @@ private:
     uint32_t f5DownMs_ = 0;
     int grainSel_ = 1;
     void editClip(int op);       // the editor: 0 copy, 1 paste over, 2 paste inserted
+    bool stripMuted(int s) const;   // a mixer strip: a track muted, or an FX return or master
     void duplicateTrack();       // Copy on the home page: the selected track into the next one
     uint32_t clipFrames_ = 0;    // what the editor copied (0: nothing yet)
     int clipTrack_ = -1;

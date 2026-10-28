@@ -53,9 +53,9 @@ land where they were played and do not drift.
 
 The home page is the four waveforms, left channel above the line and right
 below, with the bar and beat lines faintly behind them. The playhead leaves a
-fading trail as long as its speed, on the side it came from. In every fourth
-bar a thin line along the right edge brightens slowly: the end of the four
-bars coming. The eight screen keys act on the selected track and show its
+fading trail as long as its speed, on the side it came from. While a track
+records or overdubs, in every fourth bar of the take a thin line at the right
+end of its lane brightens slowly: the end of the four bars coming. The eight screen keys act on the selected track and show its
 state; the selected track stays selected from page to page.
 
 A take in progress, a pulsing dot by the lane's tag, the REC key showing what a press does:
@@ -133,7 +133,8 @@ Master opens seven strips: per track the two pre-fader sends, a DJ filter
 (down from the middle a low-pass closing, up a high-pass opening) and the
 level, per FX slot a knob, the chain send to the other slot and the return,
 and the master, with meters on every fader. Hold Shift for the mutes on
-F1–F4, and Shift + F8 to name the strip's track.
+F1–F7 (the tracks, both FX returns and the master), and Shift + F8 to name the
+strip's track.
 
 ![The mixer](docs/img/mixer.png)
 
@@ -216,7 +217,7 @@ included, is in [the reference](docs/REFERENCE.md#controls).
 | Encoder push | Tap tempo, three taps or more |
 | Up / Down | Select a track (on pages: a row) |
 | Left / Right | On pages: a column, strip or knob |
-| Pattern | Home: the loop lanes, from any page |
+| Pattern | Home: the loop lanes, from any page; leaves performance mode |
 | Perform (or Instr) | Performance mode: tap to latch, hold for while held |
 | Master | The mixer |
 | Note (or S.Edit) | The loop editor for the selected track |
@@ -369,7 +370,7 @@ reads.
 
 Perform opens the performance page from anywhere, the mixer included. The
 mixer opened while performance mode is on keeps its own keys: F1–F7 pick a
-strip, Shift + F1–F4 mute; the pads keep playing effects per track.
+strip, Shift + F1–F7 mute; the pads keep playing effects per track.
 
 | Pad column | Effect | Knob (default) |
 |---|---|---|
@@ -449,9 +450,12 @@ reverb. One way at a time: with both up, FX 1 → FX 2 runs and the other shows
 | Master (F7) | – | – | – | Master level |
 
 F1–F7 or Left/Right pick a strip, Up/Down a row (the row stays when you change
-strip), the encoder sets the value, Shift + encoder in single steps. Holding
-**Shift**, F1–F4 mute and unmute tracks 1–4 (the labels read MUTE, lit while
-muted); a muted strip shows "Muted" where its name is. Faders
+strip), the encoder sets the value, Shift + encoder in single steps (the DJ
+filter ten times finer than its plain steps, about 1.5 % of cutoff). Holding
+**Shift**, F1–F7 mute and unmute the strips: tracks 1–4, the FX 1 and FX 2
+returns (the effect still takes its sends and feeds the chain) and the master
+(the labels read MUTE, lit while muted); a muted strip shows "Muted" where its
+name is. Projects save the return and master mutes. Faders
 show their level meter; the master shows left and right. Sends start at 0,
 returns at 80, track levels at 80, master at 100. Mixer settings stay when a
 track is cleared.

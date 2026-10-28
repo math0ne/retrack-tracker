@@ -963,7 +963,8 @@ void Engine::endTake(int t) {
 void Engine::clearTrack(int t) {
     Track& k = trk_[t];
     if (clip_.track == t) clip_.has = false;   // the copy's audio goes
-    const uint8_t vol = k.volume, flt = k.filter;
+    const uint8_t vol = k.volume;
+    const uint16_t flt = k.filter;
     // Zeroing counts stereo frames (4 bytes); a mono track's frames are 2 bytes.
     // A long take's card part is not zeroed (the next take overwrites it); its
     // peaks past the RAM's are.
@@ -1065,6 +1066,16 @@ void Engine::apply(const Msg& m) {
             break;
         case kMute: k.muted = !k.muted; break;
         case kSetMute: k.muted = m.arg != 0; break;
+        case kFilterFine:
+            k.filter = uint16_t(m.arg < 0 ? 0 : (m.arg > int(kFilterFineMax) ? kFilterFineMax : m.arg));
+            break;
+        case kBusMute:
+            if (m.track < 3) {
+                const uint8_t bit = uint8_t(1u << m.track);
+                const bool on = m.arg == 2 ? !(busMute_ & bit) : m.arg != 0;
+                busMute_ = on ? uint8_t(busMute_ | bit) : uint8_t(busMute_ & ~bit);
+            }
+            break;
         case kSetBar:
             if (allEmpty() && m.a) L_ = m.a;
             break;
@@ -1446,7 +1457,7 @@ void Engine::setMix(MixParam p, int t, int v) {
         case MixParam::kMaster: masterLevel_ = pct(v, 100); break;
         case MixParam::kChain1: chain_[0] = pct(v, 100); break;
         case MixParam::kChain2: chain_[1] = pct(v, 100); break;
-        case MixParam::kFilter: trk_[t].filter = pct(v, 100); break;
+        case MixParam::kFilter: trk_[t].filter = uint16_t(pct(v, 100) * 10); break;
     }
 }
 
@@ -1653,7 +1664,7 @@ uint8_t Engine::mix(MixParam p, int t) const {
         case MixParam::kMaster: return masterLevel_;
         case MixParam::kChain1: return chain_[0];
         case MixParam::kChain2: return chain_[1];
-        case MixParam::kFilter: return trk_[t].filter;
+        case MixParam::kFilter: return uint8_t((trk_[t].filter + 5) / 10);
     }
     return 0;
 }
@@ -1949,17 +1960,18 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
             // 20 kHz to 150 Hz, above it a high-pass opening from 20 Hz to
             // 6 kHz (a dead zone round the middle is off). The cutoff glides
             // (in octaves) and the filter fades in and out, so turning it is smooth.
-            const int fv = k.filter;
-            const bool djOn = fv < kFilterOff - 2 || fv > kFilterOff + 2;
-            const bool djHigh = fv > kFilterOff;
+            const int fv = k.filter, off = kFilterFineOff, dead = kFilterFineDead;
+            const float side = float(off - dead);
+            const bool djOn = fv < off - dead || fv > off + dead;
+            const bool djHigh = fv > off;
             if (k.djWet <= 0.0f && djOn && djHigh != k.djHigh) {   // the other kind: from where it is open
                 k.djHigh = djHigh;
                 k.dj = Svf{};
                 k.djLog = djHigh ? std::log(20.0f) : std::log(20000.0f);
             }
             float djTarget;   // ln Hz
-            if (k.djHigh) djTarget = std::log(20.0f) + std::log(6000.0f / 20.0f) * (djOn && djHigh ? float(fv - kFilterOff - 2) / 48.0f : 0.0f);
-            else djTarget = std::log(20000.0f) + std::log(150.0f / 20000.0f) * (djOn && !djHigh ? float(kFilterOff - 2 - fv) / 48.0f : 0.0f);
+            if (k.djHigh) djTarget = std::log(20.0f) + std::log(6000.0f / 20.0f) * (djOn && djHigh ? float(fv - off - dead) / side : 0.0f);
+            else djTarget = std::log(20000.0f) + std::log(150.0f / 20000.0f) * (djOn && !djHigh ? float(off - dead - fv) / side : 0.0f);
             const float djW0 = k.djWet;
             k.djWet = djOn && djHigh == k.djHigh ? 1.0f : 0.0f;
             const bool djRun = djW0 > 0.0f || k.djWet > 0.0f;
@@ -2340,7 +2352,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
                         busR[1 - s][f] += wetR[f] * cg;
                     }
             }
-            const float rt = float(return_[s]) / 100.0f;
+            const float rt = (busMute_ >> s) & 1 ? 0.0f : float(return_[s]) / 100.0f;
             float rg = returnGain_[s];
             const float rstep = (rt - rg) / float(n);
             returnGain_[s] = rt;
@@ -2358,7 +2370,7 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
     }
 
     uint8_t outPk[2] = {0, 0};
-    const float mt = float(masterLevel_) / 100.0f;
+    const float mt = (busMute_ >> 2) & 1 ? 0.0f : float(masterLevel_) / 100.0f;
     float mg = masterGain_;
     const float mstep = (mt - mg) / float(n);
     masterGain_ = mt;

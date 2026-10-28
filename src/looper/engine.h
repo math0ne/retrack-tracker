@@ -187,6 +187,9 @@ enum class MixParam : uint8_t {
     kFilter,         // track DJ filter: 0..100, 50 off; down a low-pass closing, up a high-pass opening
 };
 constexpr uint8_t kFilterOff = 50;
+// The DJ filter's own resolution (kFilterFine): ten steps to each of kFilter's,
+// so Shift + encoder can set it finely. Off round the middle (+-20).
+constexpr uint16_t kFilterFineMax = 1000, kFilterFineOff = 500, kFilterFineDead = 20;
 
 // Effect memory the app hands to Engine::init (SDRAM on the device): a delay
 // line per slot, read in order. Reverb lines, read at eight places per sample,
@@ -324,6 +327,8 @@ public:
         kDuplicate,    // track: its loop into the next track (empty), in time with it (a main loop job)
         kLatency,      // arg = round-trip latency in output frames (0..kMaxLatencyFrames)
         kMeasure,      // arg 1: measure the round-trip latency (a cable from out to in), 0: stop
+        kBusMute,      // track = bus (0 FX 1's return, 1 FX 2's, 2 master), arg 0 / 1, 2: toggle
+        kFilterFine,   // track, arg = its DJ filter 0..kFilterFineMax (kMix's kFilter in steps of 10)
     };
 
     // fxMem: kFxMemBytes, 4-byte aligned.
@@ -373,6 +378,8 @@ public:
     uint8_t outputLevel(int ch) const { return outPeak_[ch].load(std::memory_order_relaxed); }
     // Mixer (audio-thread values; one byte each, so the main loop reads them as they are).
     uint8_t mix(MixParam p, int track = 0) const;
+    bool busMuted(int bus) const { return (busMute_ >> bus) & 1; }   // 0, 1 an FX return, 2 master
+    uint16_t filterFine(int t) const { return trk_[t].filter; }
     uint8_t returnLevel(int slot) const { return retPeak_[slot].load(std::memory_order_relaxed); }
     uint8_t opt(OptParam p, int track = 0) const;
     // Bar length in frames: the master loop's bar once there is one, else from the tempo.
@@ -427,7 +434,7 @@ private:
         PlayMode mode = PlayMode::kForward;
         bool muted = false;
         uint8_t volume = 80;
-        uint8_t filter = kFilterOff; // the mixer's DJ filter (MixParam::kFilter)
+        uint16_t filter = kFilterFineOff;   // the mixer's DJ filter, 0..kFilterFineMax (MixParam::kFilter x 10)
         bool djHigh = false;         //   which kind runs (it changes only once it is out)
         float djWet = 0.0f, djLog = 9.9035f;   //   in / out ramp, the cutoff (ln Hz, from 20 kHz) smoothed
         Svf dj;
@@ -659,6 +666,7 @@ private:
     uint8_t send_[kTracks][kFxSlots] = {};
     uint8_t return_[kFxSlots] = {80, 80};
     uint8_t masterLevel_ = 100;
+    uint8_t busMute_ = 0;   // bits: FX 1's return, FX 2's, master (the mixer's Shift + F5..F7)
     float sendGain_[kTracks][kFxSlots] = {};   // smoothed
     float returnGain_[kFxSlots] = {0.8f, 0.8f};
     uint8_t chain_[kFxSlots] = {0, 0};      // slot s's output into the other slot

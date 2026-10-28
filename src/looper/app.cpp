@@ -703,8 +703,9 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     if (!down) return;
-    if (ev.id == b::Pattern) {   // home: the lanes
+    if (ev.id == b::Pattern) {   // home: the lanes, performance mode off
         goHome();
+        if (perf_) closePerf();
         return;
     }
     if (ev.id == b::Master || ev.id == b::Song) {   // page keys toggle their page
@@ -1526,8 +1527,10 @@ void App::drawLane(int t, uint32_t now) {
         const uint32_t head = s == TrackState::kRecording ? kRed : (s == TrackState::kOverdubbing ? kAmber : kInk);
         if (s == TrackState::kPlaying || s == TrackState::kOverdubbing) {
             const ModeInfo& mi = modeInfo(mode);
-            int dir = mi.reverse ? -1 : 1;
-            if (mi.pingPong) {   // which way it went since the last frame
+            // Granular: its Direction knob says which way the playhead goes.
+            const uint8_t gd = mi.reader == ModeInfo::kCloud ? engine_.grainParam(t, kGrainDir) : 0;
+            int dir = mi.reverse || gd == kGrainReverse ? -1 : 1;
+            if (mi.pingPong || gd == kGrainPingPong) {   // which way it went since the last frame
                 const int d = int(pos) - int(lastPos_[t]);
                 if (d != 0) pingDir_[t] = int8_t(d > 0 ? 1 : -1);
                 dir = pingDir_[t];
@@ -1606,20 +1609,26 @@ void App::drawLane(int t, uint32_t now) {
 }
 
 void App::drawBarClock(uint32_t now) {
-    // Every four bars (from bar 1), during the fourth: a thin line down the
-    // screen's right edge, beside the lanes, in a dim selection colour that
-    // rises steadily through the bar, so the end of the phrase can be seen
-    // coming. Nothing the rest of the time.
+    // While a track records (or overdubs), every four bars of the take (of
+    // the loop, overdubbing), during the fourth: a thin line at the right end
+    // of that track's lane, in a dim selection colour that rises steadily
+    // through the bar, so the end of the phrase can be seen coming. Nothing
+    // while only playing.
     (void)now;
     const uint32_t bar = engine_.barFrames();
-    if (!engine_.running() || !bar) return;
-    const uint32_t t = engine_.transportFrame();
-    if ((t / bar) % 4 != 3) return;
-    const float through = float(t % bar) / float(bar);   // 0..1 through the fourth bar
-    constexpr int x0 = kWaveX + kWaveW + 7, x1 = x0 + 3, top = kLaneY0 + 6,
-                  bottom = kLaneY0 + 4 * (kLaneH + kLaneGap) - kLaneGap - 6;
-    color(scale(kSel, 0.25f + 0.45f * through));
-    fillRect(x0, top, x1, bottom, 1);
+    if (!bar) return;
+    constexpr int x0 = kWaveX + kWaveW + 7, x1 = x0 + 3;
+    for (int t = 0; t < kTracks; ++t) {
+        const TrackView& v = engine_.view(t);
+        const TrackState s = TrackState(v.state.load());
+        if (s != TrackState::kRecording && s != TrackState::kOverdubbing) continue;
+        const uint32_t f = v.pos.load();   // recording: frames taken so far
+        if ((f / bar) % 4 != 3) continue;
+        const float through = float(f % bar) / float(bar);   // 0..1 through the fourth bar
+        const int top = kLaneY0 + t * (kLaneH + kLaneGap) + 6;
+        color(scale(kSel, 0.25f + 0.45f * through));
+        fillRect(x0, top, x1, top + kLaneH - 12, 1);
+    }
 }
 
 void App::drawFKeys() {
@@ -1842,11 +1851,11 @@ void App::drawFKeys() {
                     break;
                 default: title[i] = "HOME"; std::snprintf(val[i], sizeof val[i], "Loops"); break;
             }
-        } else if (mixer_ && shift_) {   // Shift: F1..F4 mute a track, lit while muted
-            static const char* const kNames[kTracks] = {"Track 1", "Track 2", "Track 3", "Track 4"};
-            title[i] = i < kTracks ? "MUTE" : (i == 7 && strip_ < kTracks ? "NAME" : "");
-            std::snprintf(val[i], sizeof val[i], "%s", i < kTracks ? kNames[i] : (i == 7 && strip_ < kTracks ? "Track" : ""));
-            if (i < kTracks && engine_.view(i).muted.load()) {
+        } else if (mixer_ && shift_) {   // Shift: F1..F7 mute a strip, lit while muted
+            static const char* const kNames[kStrips] = {"Track 1", "Track 2", "Track 3", "Track 4", "FX 1", "FX 2", "Master"};
+            title[i] = i < kStrips ? "MUTE" : (strip_ < kTracks ? "NAME" : "");
+            std::snprintf(val[i], sizeof val[i], "%s", i < kStrips ? kNames[i] : (strip_ < kTracks ? "Track" : ""));
+            if (i < kStrips && stripMuted(i)) {
                 hot = true;
                 hotCol = kMute;
             }
@@ -2016,6 +2025,10 @@ bool App::mixParam(int strip, int row, MixParam& p, int& track, int& fxKnob) con
     return false;
 }
 
+bool App::stripMuted(int s) const {
+    return s < kTracks ? engine_.view(s).muted.load() : engine_.busMuted(s - kTracks);
+}
+
 void App::mixerKey(uint8_t id) {
     MixParam p;
     int t, k;
@@ -2023,9 +2036,10 @@ void App::mixerKey(uint8_t id) {
         goHome();
         return;
     }
-    if (shift_ && b::isFKey(id)) {   // Shift: F1..F4 mute / unmute a track (the strip stays); F8 names it
+    if (shift_ && b::isFKey(id)) {   // Shift: F1..F7 mute / unmute a strip (the strip stays); F8 names a track
         const int k = id - b::F1;
         if (k < kTracks) engine_.post(Engine::kMute, uint8_t(k));
+        else if (k < kStrips) engine_.post(Engine::kBusMute, uint8_t(k - kTracks), 2);
         else if (k == 7 && strip_ < kTracks) openName(strip_);
         return;
     }
@@ -2052,22 +2066,30 @@ void App::mixerEncoder(int delta) {
         stepFxKnob(t, k, delta);
         return;
     }
+    if (p == MixParam::kFilter) {   // its own resolution: Shift turns it ten times finer
+        int v = int(engine_.filterFine(t)) + delta * (shift_ ? 1 : 20);
+        v = v < 0 ? 0 : (v > int(kFilterFineMax) ? int(kFilterFineMax) : v);
+        engine_.post(Engine::kFilterFine, uint8_t(t), int16_t(v));
+        return;
+    }
     int v = int(engine_.mix(p, t)) + delta * (shift_ ? 1 : 2);
     v = v < 0 ? 0 : (v > 100 ? 100 : v);
     engine_.post(Engine::kMix, uint8_t(t), int16_t((int(p) << 8) | v));
 }
 
-void App::filterText(uint8_t v, char* buf, size_t n) {
-    // As the engine sets it (Engine: kFilter): Off round the middle, else the
-    // kind and its cutoff.
-    if (v >= kFilterOff - 2 && v <= kFilterOff + 2) {
+void App::filterText(uint16_t v, char* buf, size_t n) {
+    // As the engine sets it (Engine: kFilterFine): Off round the middle, else
+    // the kind and its cutoff.
+    const int off = kFilterFineOff, dead = kFilterFineDead;
+    if (v >= off - dead && v <= off + dead) {
         std::snprintf(buf, n, "Off");
         return;
     }
-    const bool hp = v > kFilterOff;
-    const float x = hp ? float(v - kFilterOff - 2) / 48.0f : float(kFilterOff - 2 - v) / 48.0f;
+    const bool hp = v > off;
+    const float x = hp ? float(v - off - dead) / float(off - dead) : float(off - dead - v) / float(off - dead);
     const float hz = hp ? 20.0f * std::pow(6000.0f / 20.0f, x) : 20000.0f * std::pow(150.0f / 20000.0f, x);
-    if (hz >= 1000.0f) std::snprintf(buf, n, "%s %.1fk", hp ? "HP" : "LP", double(hz / 1000.0f));
+    if (hz >= 10000.0f) std::snprintf(buf, n, "%s %.1fk", hp ? "HP" : "LP", double(hz / 1000.0f));
+    else if (hz >= 1000.0f) std::snprintf(buf, n, "%s %.2fk", hp ? "HP" : "LP", double(hz / 1000.0f));
     else std::snprintf(buf, n, "%s %d", hp ? "HP" : "LP", int(hz));
 }
 
@@ -2110,7 +2132,7 @@ void App::drawStrip(int s) {
     const bool emptyTrack = s < kTracks && TrackState(engine_.view(s).state.load()) == TrackState::kEmpty;
     char buf[16];
 
-    const bool muted = s < kTracks && engine_.view(s).muted.load();
+    const bool muted = stripMuted(s);
     color(sel ? kSel : (muted ? kMute : (emptyTrack ? kFaint : kDim)));
     char nm[Files::kNameLen + 8];
     text(cx, 23, kFontSmall, Disp::kOptCenter, muted ? "Muted" : (s < kTracks ? trackLabel(s, nm, sizeof nm) : kStripName[s]));
@@ -2132,8 +2154,8 @@ void App::drawStrip(int s) {
             fr = fxKnobFrac(t, k);
         } else if (p == MixParam::kFilter) {
             label = "Filter";
-            filterText(engine_.mix(p, t), buf, sizeof buf);
-            fr = float(engine_.mix(p, t)) / 100.0f;
+            filterText(engine_.filterFine(t), buf, sizeof buf);
+            fr = float(engine_.filterFine(t)) / float(kFilterFineMax);
         } else {
             // Track sends; on the FX strips the chain into the other slot:
             // named after the effect in that slot.

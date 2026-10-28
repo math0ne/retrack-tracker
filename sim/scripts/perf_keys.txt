@@ -48,6 +48,19 @@ wait 100
 up 6
 expect_perfknob 3 40 1
 expect_perfknob 3 44 2
+# Pattern (home) leaves performance mode too, its latched effects off;
+# Perform again for the rest.
+hold SHIFT
+press F8
+release SHIFT
+wait 100
+expect_perf 1 8 on
+press PATTERN
+wait 100
+expect_perf 1 8 off
+expect_perf 2 8 off
+press PERFORMANCE
+wait 100
 # Leaving performance mode gives the keys back to the track.
 press PERFORMANCE
 wait 100

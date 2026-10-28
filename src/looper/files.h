@@ -123,7 +123,9 @@ private:
         uint8_t accent, clickSound, clickWhen, countIn;   // the metronome
         uint8_t grain2[kTracks][kGrainKnobs - kGrainKnobsV2];   // Granular's speed and direction
         char trackName[kTracks][kNameLen];
-        uint8_t reserved4[16];                  // zero
+        uint8_t busMute;                        // bits: FX 1's return, FX 2's, master muted (0 in older saves)
+        uint8_t filterFine[kTracks];            // the DJ filters' tenths: filter * 10 + this (0 in older saves)
+        uint8_t reserved4[11];                  // zero
         // Version 5 (perf[] above: track 1's, for older firmware):
         uint8_t perfTrack[kTracks][kPerfFxCount];   // each track's performance effect knobs
     };

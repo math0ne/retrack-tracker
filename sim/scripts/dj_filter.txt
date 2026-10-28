@@ -1,0 +1,63 @@
+# The mixer's DJ filter: the encoder moves it in steps of 20 (of 0..1000,
+# 500 the middle: off), Shift + encoder in single steps; projects keep it
+# to the step.
+wait 300
+opt all start 0
+tone_shape steady
+tone 1000
+tap 0
+wait 2000
+tap 0
+wait 300
+tone off
+press MASTER
+wait 50
+press F1
+# Up from the fader: the filter row.
+press UP
+expect_filter 1 500
+enc -10
+wait 50
+expect_filter 1 300
+hold SHIFT
+enc 3
+release SHIFT
+wait 50
+expect_filter 1 303
+shot ../build/sim/check/dj_filter_fine.png
+hold SHIFT
+enc -7
+release SHIFT
+wait 50
+expect_filter 1 296
+# All the way down: a low-pass at 150 Hz, the 1 kHz loop well under.
+enc -20
+wait 500
+expect_filter 1 0
+reset_levels
+wait 500
+expect_below 0.05
+# Saved and loaded: to the step.
+enc 14
+wait 50
+hold SHIFT
+enc 7
+release SHIFT
+wait 50
+expect_filter 1 287
+press FILE
+press F1
+wait 1500
+press PATTERN
+wait 50
+# (The mixer keeps the row it was on: the filter.)
+press MASTER
+press F1
+enc 10
+wait 50
+expect_filter 1 487
+press FILE
+press F3
+press F3
+wait 3000
+expect_filter 1 287
