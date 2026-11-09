@@ -99,9 +99,46 @@ inline uint8_t peak8(int v) {
 
 }  // namespace
 
-bool wavInfo(IStorage& fs, IStorage::Handle h, uint32_t& channels, uint32_t& rate, uint32_t& dataBytes,
-             uint32_t& dataOff) {
-    return parseWav(fs, h, channels, rate, dataBytes, &dataOff);
+WavError wavFormat(IStorage& fs, IStorage::Handle h, WavFormat& f) {
+    uint8_t b[40];
+    f = WavFormat{};
+    if (fs.read(h, b, 12) != 12 || std::memcmp(b, "RIFF", 4) || std::memcmp(b + 8, "WAVE", 4)) return WavError::kNotWav;
+    uint32_t pos = 12, tag = 0, bits = 0;
+    for (int guard = 0; guard < 64; ++guard) {
+        if (fs.read(h, b, 8) != 8) return WavError::kNotWav;
+        pos += 8;
+        const uint32_t size = get32(b + 4);
+        if (!std::memcmp(b, "data", 4)) {
+            if (!tag) return WavError::kNotWav;   // no "fmt " before it
+            if (tag != 1 && tag != 3) return WavError::kCompressed;
+            if (tag == 3 ? bits != 32 : (bits < 8 || bits > 32 || bits % 8)) return WavError::kBits;
+            f.isFloat = tag == 3;
+            f.sampleBytes = bits / 8;
+            if (!f.channels || f.frameBytes < f.sampleBytes * (f.channels > 2 ? 2 : f.channels)) return WavError::kChannels;
+            if (f.rate < 4000 || f.rate > 192000) return WavError::kRate;
+            // A size the writer never filled in (0, or past the end): to the end.
+            const int32_t fileSize = fs.size(h);
+            uint32_t bytes = size;
+            if (fileSize > 0 && uint32_t(fileSize) > pos && (!bytes || bytes > uint32_t(fileSize) - pos))
+                bytes = uint32_t(fileSize) - pos;
+            f.dataBytes = bytes;
+            f.dataOff = pos;
+            return WavError::kNone;
+        }
+        if (!std::memcmp(b, "fmt ", 4) && size >= 16) {
+            const uint32_t take = size < sizeof b ? size : uint32_t(sizeof b);
+            if (fs.read(h, b, take) != int32_t(take)) return WavError::kNotWav;
+            tag = get16(b);
+            f.channels = get16(b + 2);
+            f.rate = get32(b + 4);
+            f.frameBytes = get16(b + 12);
+            bits = get16(b + 14);   // the container: 24-bit in 32 reads as 32
+            if (tag == 0xFFFE && take >= 26) tag = get16(b + 24);   // WAVE_FORMAT_EXTENSIBLE: its sub-format
+        }
+        pos += size + (size & 1);
+        if (!fs.seek(h, pos)) return WavError::kNotWav;
+    }
+    return WavError::kNotWav;
 }
 
 bool Files::newProject() {

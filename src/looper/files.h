@@ -22,10 +22,17 @@ namespace looper {
 
 class Streamer;
 
-// A WAV's format and where its samples start (the file left there): 16-bit
-// PCM only; rate is the file's (the caller checks it).
-bool wavInfo(ot::IStorage& fs, ot::IStorage::Handle h, uint32_t& channels, uint32_t& rate, uint32_t& dataBytes,
-             uint32_t& dataOff);
+// A WAV's format and where its samples start (the file left there), for the
+// sound board, which plays any of them: PCM 8, 16, 24 or 32-bit or 32-bit
+// float (WAVE_FORMAT_EXTENSIBLE too), any rate, the first two channels.
+struct WavFormat {
+    uint32_t channels = 0, rate = 0;
+    uint32_t sampleBytes = 0, frameBytes = 0;   // one channel's sample; one frame, every channel
+    uint32_t dataBytes = 0, dataOff = 0;
+    bool isFloat = false;
+};
+enum class WavError : uint8_t { kNone, kNotWav, kCompressed, kBits, kChannels, kRate };
+WavError wavFormat(ot::IStorage& fs, ot::IStorage::Handle h, WavFormat& f);
 
 // Settings kept across power-offs (the Config page).
 struct Config {

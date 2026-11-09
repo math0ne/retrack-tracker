@@ -1,0 +1,172 @@
+# The sound board plays any PCM WAV: 24-bit at 48 kHz, 16-bit at 96 kHz
+# (WAVE_FORMAT_EXTENSIBLE), 8-bit at 22.05 kHz, 32-bit float, each at its
+# own pitch (resampled to 44.1 kHz). A file it cannot play says why. The
+# sample loader previews a WAV (F3); the mixer has the board's strip (Right
+# from master): its level, DJ filter and sends, kept with the board. The
+# monitored input runs through the selected track's DJ filter.
+wait 300
+tone off
+sd_wav 0wavs/a24_48k.wav 1.5 48000 24 2
+sd_wav 0wavs/b16_96k.wav 1.5 96000 16 2 ext
+sd_wav 0wavs/c8_22k.wav 1.5 22050 8 1
+sd_wav 0wavs/d32f.wav 1.5 44100 32 1 float
+sd_file 0wavs/e_bad.wav 100
+
+# The loader's preview: F3 plays the selected WAV, Down moves it on, F3 stops.
+press SAMPLEPLAYBACK
+wait 50
+press F1
+wait 50
+press RIGHT
+wait 50
+press F3
+wait 100
+reset_levels
+wait 300
+expect_board preview 1
+expect_pitch 440
+expect_audio 0.1
+press DOWN
+wait 300
+expect_board preview 1
+screen ../build/sim/check/soundboard_preview.png
+press F3
+wait 50
+expect_board preview 0
+reset_levels
+wait 100
+expect_silent
+# Not a WAV: no preview, the reason shown.
+press DOWN
+press DOWN
+press DOWN
+press F3
+wait 50
+expect_board preview 0
+screen ../build/sim/check/soundboard_preview_bad.png
+press UP
+press UP
+press UP
+press UP
+
+# Pad 1: 24-bit 48 kHz stereo.
+press RIGHT
+wait 100
+expect_board pad 1 ready
+# Pad 2: 16-bit 96 kHz, an extensible header.
+press RIGHT
+press F1
+wait 50
+press DOWN
+press RIGHT
+wait 100
+expect_board pad 2 ready
+# Pad 3: 8-bit 22.05 kHz mono.
+press RIGHT
+press F1
+wait 50
+press DOWN
+press RIGHT
+wait 100
+expect_board pad 3 ready
+# Pad 4: not a WAV, then 32-bit float.
+press RIGHT
+press F1
+wait 50
+press DOWN
+press DOWN
+press RIGHT
+wait 100
+expect_board pad 4 missing
+screen ../build/sim/check/soundboard_missing.png
+press F1
+wait 50
+press UP
+press RIGHT
+wait 100
+expect_board pad 4 ready
+screen ../build/sim/check/soundboard_formats.png
+
+# Each at 440 Hz.
+tap 0
+wait 100
+reset_levels
+wait 500
+expect_pitch 440
+tap 1
+wait 100
+reset_levels
+wait 500
+expect_pitch 440
+tap 2
+wait 100
+reset_levels
+wait 500
+expect_pitch 440
+tap 3
+wait 100
+reset_levels
+wait 500
+expect_pitch 440
+expect_audio 0.1
+press F4
+wait 50
+expect_board under 0
+
+# Its mixer strip: Right from master. The fader, the filter, a send.
+press MASTER
+wait 50
+press F7
+press RIGHT
+wait 30
+enc -10
+wait 30
+expect_board level 60
+press UP
+enc 25
+wait 30
+expect_board filter 1000
+press UP
+enc 10
+wait 30
+expect_board send 2 20
+shot ../build/sim/check/mixer_board.png
+# A high-pass at 6 kHz: the 440 Hz pad well under.
+press F8
+press SAMPLEPLAYBACK
+tap 0
+wait 300
+reset_levels
+wait 500
+expect_below 0.02
+press F4
+wait 1200
+expect_file Looper/soundboard.txt 60
+
+# The monitored input through the selected track's DJ filter.
+press F8
+tone_shape steady
+tone 1000
+wait 300
+reset_levels
+wait 300
+expect_audio 0.1
+press MASTER
+wait 50
+press F1
+press DOWN
+press DOWN
+press DOWN
+press UP
+enc 25
+wait 30
+expect_filter 1 1000
+wait 500
+reset_levels
+wait 500
+expect_below 0.03
+enc -25
+wait 500
+reset_levels
+wait 300
+expect_audio 0.1

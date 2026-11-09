@@ -29,6 +29,8 @@
 //   expect_opt TRACK NAME VALUE   an option's value (names as for opt)
 //   expect_file PATH MINBYTES     a file on the SD card folder, at least MINBYTES long
 //   sd_file PATH BYTES            write a file of BYTES zero bytes on the SD card folder
+//   sd_wav PATH SECS RATE BITS CH [float|ext]   a 440 Hz sine WAV on the SD card folder
+//                                 (32-bit float, or a WAVE_FORMAT_EXTENSIBLE header)
 //   expect_flash NAME|none        the image the last firmware update asked for
 //   expect_pitch HZ [TOL]         the left output's frequency since reset_levels, within 3 % (or TOL %)
 //   expect_mode TRACK NAME        playback mode (label without spaces: Halfspeed, Granular)
@@ -50,8 +52,9 @@
 //                                 input, from its start, looping (in place of the tone)
 //   expect_below MAX              fail unless the output peak since the last reset < MAX, then reset
 //   expect_perf TRACK FX on|off   performance effect FX (1..8, pad columns 5..12) running
-//   expect_board playing N | under MAX | pad N ready|empty   the sound board: voices sounding,
-//                                 blocks it ran short of card data, a pad's WAV
+//   expect_board playing N | preview N | under MAX | filter N | send S N | level N |
+//                pad N ready|empty|missing   the sound board: voices sounding, the loader's
+//                                 preview, blocks it ran short of card data, its mixer strip, a pad's WAV
 //   shot PATH          PNG of the front panel; screen PATH = the 800x480 screen only
 #include <random>
 #include <SDL.h>
@@ -612,6 +615,68 @@ struct Headless {
                     m.storage.write(fh, z.data(), uint32_t(z.size()));
                     m.storage.close(fh);
                 }
+            } else if (cmd == "sd_wav") {
+                // sd_wav PATH SECONDS RATE BITS CHANNELS [float|ext]: a 440 Hz sine WAV on the SD card
+                std::string secs, rate, bits, chans, kind;
+                in >> secs >> rate >> bits >> chans >> kind;
+                const uint32_t sr = uint32_t(std::atol(rate.c_str())), bps = uint32_t(std::atol(bits.c_str())) / 8;
+                const uint32_t ch = uint32_t(std::atol(chans.c_str()));
+                const uint32_t frames = uint32_t(std::atof(secs.c_str()) * sr);
+                const bool fl = kind == "float", ext = kind == "ext";
+                std::vector<uint8_t> w;
+                auto u16 = [&](uint32_t v) { w.push_back(uint8_t(v)); w.push_back(uint8_t(v >> 8)); };
+                auto u32 = [&](uint32_t v) { u16(v & 0xFFFF); u16(v >> 16); };
+                auto tag = [&](const char* s) { w.insert(w.end(), s, s + 4); };
+                const uint32_t data = frames * ch * bps;
+                tag("RIFF");
+                u32(0);
+                tag("WAVE");
+                tag("LIST");   // a chunk to skip
+                u32(4);
+                tag("INFO");
+                tag("fmt ");
+                u32(ext ? 40 : 16);
+                u16(ext ? 0xFFFE : (fl ? 3 : 1));
+                u16(ch);
+                u32(sr);
+                u32(sr * ch * bps);
+                u16(ch * bps);
+                u16(bps * 8);
+                if (ext) {
+                    u16(22);
+                    u16(bps * 8);
+                    u32(ch == 1 ? 4 : 3);
+                    u16(fl ? 3 : 1);
+                    const uint8_t guid[14] = {0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71};
+                    w.insert(w.end(), guid, guid + 14);
+                }
+                tag("data");
+                u32(data);
+                for (uint32_t i = 0; i < frames; ++i) {
+                    const double x = 0.5 * std::sin(2.0 * 3.14159265358979 * 440.0 * i / sr);
+                    for (uint32_t c = 0; c < ch; ++c) {
+                        if (fl) {
+                            const float f = float(x);
+                            uint32_t u;
+                            std::memcpy(&u, &f, 4);
+                            u32(u);
+                        } else if (bps == 1) {
+                            w.push_back(uint8_t(128 + int(x * 127)));
+                        } else {
+                            const int64_t v = int64_t(x * double((1LL << (bps * 8 - 1)) - 1));
+                            for (uint32_t b = 0; b < bps; ++b) w.push_back(uint8_t(uint64_t(v) >> (8 * b)));
+                        }
+                    }
+                }
+                const uint32_t riff = uint32_t(w.size() - 8);
+                std::memcpy(w.data() + 4, &riff, 4);
+                for (size_t i = 1; i < arg.size(); ++i)
+                    if (arg[i] == '/') m.storage.mkdir(arg.substr(0, i).c_str());
+                const ot::IStorage::Handle fh = m.storage.open(arg.c_str(), ot::IStorage::kWrite);
+                if (fh >= 0) {
+                    m.storage.write(fh, w.data(), uint32_t(w.size()));
+                    m.storage.close(fh);
+                }
             } else if (cmd == "expect_pitch") {
                 // expect_pitch HZ [TOL%]: the left output's frequency since reset_levels, within 3 % (or TOL)
                 std::string tol;
@@ -761,7 +826,8 @@ struct Headless {
                             want.c_str(), pass ? "PASS" : "FAIL", got);
                 ok = ok && pass;
             } else if (cmd == "expect_board") {
-                // expect_board playing N | under MAX | pad N ready|empty: the sound board
+                // expect_board playing N | preview N | under MAX | filter N | send S N | level N |
+                //              pad N ready|empty|missing: the sound board
                 std::string want;
                 in >> want;
                 const looper::Soundboard& sb = m.app.soundboard();
@@ -770,6 +836,22 @@ struct Headless {
                 if (arg == "playing") {
                     got = sb.playing();
                     pass = got == std::atol(want.c_str());
+                } else if (arg == "preview") {
+                    got = sb.previewing() ? 1 : 0;
+                    pass = got == std::atol(want.c_str());
+                } else if (arg == "filter") {
+                    got = sb.filter();
+                    pass = got == std::atol(want.c_str());
+                } else if (arg == "level") {
+                    got = sb.level();
+                    pass = got == std::atol(want.c_str());
+                } else if (arg == "send") {
+                    std::string v;
+                    in >> v;
+                    const int s = std::atoi(want.c_str()) - 1;
+                    got = s >= 0 && s < 2 ? sb.send(s) : -1;
+                    pass = got == std::atol(v.c_str());
+                    want += " " + v;
                 } else if (arg == "under") {
                     got = long(sb.underruns());
                     pass = got <= std::atol(want.c_str());
@@ -779,7 +861,8 @@ struct Headless {
                     const int i = std::atoi(want.c_str()) - 1;
                     if (i >= 0 && i < looper::Soundboard::kSlots) got = long(sb.slot(i).state);
                     pass = (st == "ready" && got == long(looper::Soundboard::SlotState::kReady)) ||
-                           (st == "empty" && got == long(looper::Soundboard::SlotState::kEmpty));
+                           (st == "empty" && got == long(looper::Soundboard::SlotState::kEmpty)) ||
+                           (st == "missing" && got == long(looper::Soundboard::SlotState::kMissing));
                     want += " " + st;
                 }
                 std::printf("%s:%d: expect_board %s %s %s (%ld)\n", path.c_str(), lineNo, arg.c_str(), want.c_str(),

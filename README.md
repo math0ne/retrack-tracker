@@ -134,10 +134,12 @@ its knobs. One slot can feed the other, so Clouds can run into the reverb.
 
 ### Mixer
 
-Master opens seven strips: per track the two pre-fader sends, a DJ filter
+Master opens eight strips: per track the two pre-fader sends, a DJ filter
 (down from the middle a low-pass closing, up a high-pass opening) and the
 level, per FX slot a knob, the chain send to the other slot and the return,
-and the master, with meters on every fader. Hold Shift for the mutes on
+the master, and the sound board's (sends, DJ filter, level), with meters on
+every fader. The monitored input plays through the selected track's DJ
+filter, so you hear it as it will sound there. Hold Shift for the mutes on
 F1–F7 (the tracks, both FX returns and the master), and Shift + F8 to name the
 strip's track.
 
@@ -176,9 +178,10 @@ loops play; F4 names the selected project, F7 (twice) starts a new one. S.Load l
 and WAV files (16-bit, 44.1 kHz, mono or stereo) and loads one into the
 selected track (empty): it comes in stopped, its Play starts it on the bar,
 and on an empty session it sets the bar. Longer than the track's RAM, it goes
-on to the card like a long take. S.Play is a sound board: a WAV on each of
-the top row's first four pads, played from the card over the loops (one at a
-time; one-shot, toggle or gate), into the input so a take records it if you like. Config holds
+on to the card like a long take. F3 there previews a WAV. S.Play is a sound
+board: a WAV on each of the top row's first four pads (any PCM or float WAV,
+any rate), played from the card over the loops (one at a time; one-shot,
+toggle or gate), into the input so a take records it if you like. Config holds
 the settings, the recording latency, a firmware flasher (the way back to the
 stock firmware) and MIDI: clock out or follow, and eight learnable footswitch actions. Song opens
 a seven-chapter manual on the device.
@@ -444,8 +447,9 @@ become the six effects; the key under one picks it). **F2–F5** pick a knob
 knobs and the encoder turns the selected one. Changing the type silences the
 slot for about 0.2 s while its delay line is cleared.
 
-The **Master** key opens the mixer page: seven strips, each over its screen
-key, plus F8 home. The sends are named after the effect in their slot (**To
+The **Master** key opens the mixer page: eight strips, the first seven over
+their screen keys, the sound board's over F8 (which stays home: Right from
+Master reaches it). The sends are named after the effect in their slot (**To
 Delay**, **To Reverb**, ...). On the two FX strips the second row is the slot's
 output into the other one (taken before its return), so Clouds can run into a
 reverb. One way at a time: with both up, FX 1 → FX 2 runs and the other shows
@@ -456,6 +460,7 @@ reverb. One way at a time: with both up, FX 1 → FX 2 runs and the other shows
 | Track 1–4 (F1–F4) | Send to FX 1 | Send to FX 2 | DJ filter | Track level |
 | FX 1 (F5), FX 2 (F6) | The slot's first knob | Into the other slot | – | Return level |
 | Master (F7) | – | – | – | Master level |
+| Board (Right from Master) | Send to FX 1 | Send to FX 2 | DJ filter | Sound board level |
 
 F1–F7 or Left/Right pick a strip, Up/Down a row (the row stays when you change
 strip), the encoder sets the value, Shift + encoder in single steps (the DJ
@@ -466,7 +471,8 @@ returns (the effect still takes its sends and feeds the chain) and the master
 name is. Projects save the return and master mutes. Faders
 show their level meter; the master shows left and right. Sends start at 0,
 returns at 80, track levels at 80, master at 100. Mixer settings stay when a
-track is cleared.
+track is cleared. The board's strip is kept with the board
+(`Looper/soundboard.txt`), not in projects; it has no mute.
 
 Tracks are stereo. Each lane draws the left channel above its centre line and
 the right channel below it.

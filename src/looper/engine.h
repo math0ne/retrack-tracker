@@ -342,20 +342,33 @@ public:
     uint16_t measured() const { return measFrames_.load(std::memory_order_relaxed); }
     void render(int16_t* out, const int16_t* in, uint32_t frames);   // audio thread
     // A sound source played over the loops (the sound board): render() calls it
-    // each block to add into l / r (int16 scale); false when it is silent. Into
-    // the input too (setSourceToInput), it is monitored and takes record it.
-    using SourceFn = bool (*)(float* l, float* r, uint32_t n, void* ctx);
+    // each block to add into l / r and ol / orr (int16 scale); false when it
+    // is silent. l / r run through its strip (setSourceMix: the DJ filter, the
+    // sends) and, into the input too (setSourceToInput), takes record them;
+    // ol / orr (the loader's preview) go to the output alone.
+    using SourceFn = bool (*)(float* l, float* r, float* ol, float* orr, uint32_t n, void* ctx);
     // Before the audio starts. scratch: kSourceScratchBytes for the source's
-    // blocks (off the internal RAM, which is tight).
-    static constexpr uint32_t kSourceScratchBytes = 128 * 4 * 2 + 256 * 2;
+    // blocks and the monitored input's (off the internal RAM, which is tight).
+    static constexpr uint32_t kSourceScratchBytes = 128 * 4 * 6 + 256 * 2;
     void setSource(SourceFn fn, void* ctx, void* scratch) {
         srcL_ = static_cast<float*>(scratch);
         srcR_ = srcL_ + 128;
-        inMix_ = reinterpret_cast<int16_t*>(srcR_ + 128);
+        prvL_ = srcR_ + 128;
+        prvR_ = prvL_ + 128;
+        monL_ = prvR_ + 128;
+        monR_ = monL_ + 128;
+        inMix_ = reinterpret_cast<int16_t*>(monR_ + 128);
         srcCtx_ = ctx;
         srcFn_ = fn;
     }
     void setSourceToInput(bool on) { srcToIn_.store(on, std::memory_order_relaxed); }
+    // The source's mixer strip: sends to FX 1 / 2 (0..100), DJ filter (0..kFilterFineMax).
+    void setSourceMix(uint8_t send1, uint8_t send2, uint16_t filter) {
+        srcSend_[0].store(send1, std::memory_order_relaxed);
+        srcSend_[1].store(send2, std::memory_order_relaxed);
+        srcFilter_.store(filter, std::memory_order_relaxed);
+    }
+    uint8_t sourceLevel() const { return srcLevel_.load(std::memory_order_relaxed); }   // its peak, as TrackView::level
 
     const TrackView& view(int t) const { return view_[t]; }
     const TrackMemory& memory(int t) const { return mem_[t]; }
@@ -423,8 +436,15 @@ private:
     SourceFn srcFn_ = nullptr;
     void* srcCtx_ = nullptr;
     std::atomic<bool> srcToIn_{true};
+    std::atomic<uint8_t> srcSend_[2] = {};
+    std::atomic<uint16_t> srcFilter_{kFilterFineOff};
+    std::atomic<uint8_t> srcLevel_{0};
     float* srcL_ = nullptr;     // the source's block (setSource's scratch)
     float* srcR_ = nullptr;
+    float* prvL_ = nullptr;     //   its preview's
+    float* prvR_ = nullptr;
+    float* monL_ = nullptr;     // the monitored input, through the selected track's DJ filter
+    float* monR_ = nullptr;
     int16_t* inMix_ = nullptr;  // the input with the source in it
     struct Grain {
         uint64_t pos16 = 0;          // read position, 16.16 frames
@@ -435,6 +455,14 @@ private:
     struct Svf {
         float ic1[2] = {0, 0}, ic2[2] = {0, 0};
     };
+    // A DJ filter outside the tracks (the monitored input, the source): its state.
+    struct Dj {
+        Svf f;
+        bool high = false;
+        float wet = 0.0f, log = 9.9035f;
+    };
+    Dj monDj_, srcDj_;
+    void djBlock(Dj& d, int fv, float* l, float* r, uint32_t n);   // as a track's (render)
     struct Perf {
         uint8_t mask = 0;            // PerfFx bits
         uint32_t repStart = 0;       // repeat: slice start (buffer frames)

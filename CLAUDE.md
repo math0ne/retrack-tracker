@@ -88,10 +88,13 @@ home F-key labels and actions (`shiftLayer()`).
   flanger, Clouds); `clouds/` is the Mutable Instruments Clouds port.
 - `stream.*` — takes longer than RAM go to the SD card; the audio-thread half
   lives in Engine. Design: `docs/SD_STREAMING.md`.
-- `soundboard.*` — the S.Play page's 48 WAV slots: each slot's start in
-  SDRAM, the rest streamed per voice from the card; mixed in by the engine
-  through `Engine::setSource` (into the input when "to loops" is on). Its
-  SDRAM comes off the top of the loop memory in `App::init`.
+- `soundboard.*` — the S.Play page's 4 WAV slots (any PCM / float WAV, any
+  rate: raw file bytes in SDRAM and the rings, converted and resampled in
+  `render`): each slot's start in SDRAM, the rest streamed per voice from the
+  card; also the sample loader's preview. Mixed in by the engine through
+  `Engine::setSource` (pads through the board's mixer strip, into the input
+  when "to loops" is on; the preview to the output only). Its SDRAM comes off
+  the top of the loop memory in `App::init`.
 - `files.*` — settings, projects, WAV export/load as incremental jobs stepped
   from `service()` so audio and UI never wait; saves write `.tmp` then swap.
 - `midi.*` — clock in/out and learned footswitch actions.

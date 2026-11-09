@@ -135,7 +135,7 @@ encoder sets it (Shift: fine steps); F6 or F8 closes it.
 | Source | Line in / mic low / mic high |
 | Gain | Codec input gain, with the live input level under it |
 | Track N channels | Stereo / Mono L / Mono R / Mono sum for the selected track (only while it is empty) |
-| Monitor | Hear the input through the outputs |
+| Monitor | Hear the input through the outputs, through the selected track's DJ filter (what it will sound like there; takes stay dry) |
 | Monitor FX | Off / FX 1 / FX 2 / Both (default): hear the input through the effects too, at the selected track's send levels (what a take on it will get); takes stay dry |
 | Overdub feedback | How much of the loop stays under each pass, 0–100 % |
 
@@ -188,7 +188,7 @@ are the selected track's options (see [Track options and tempo](../README.md#tra
 | Perform / Instr | Performance mode |
 | Master | Mixer page on / off (Shift + F8 there: name the strip's track) |
 | Note / S.Edit | Loop editor for the selected track |
-| S.Load | The sample loader: folders and WAVs on the card; Right / F1 opens a folder or loads the WAV into the selected track, Left / F2 up |
+| S.Load | The sample loader: folders and WAVs on the card; Right / F1 opens a folder or loads the WAV into the selected track, Left / F2 up, F3 previews the WAV (to the output only; again: stop; Up / Down while it plays preview the next) |
 | S.Play | The sound board: four WAVs on pads 1-4, played from the card (see below) |
 | FX1 / FX2 | That effect slot's page on / off |
 | Config | Settings page (F1 firmware, F2 MIDI, F3 measure the recording latency) |
@@ -258,11 +258,15 @@ instead of overwriting the original.
 ## Sound board (S.Play)
 
 **S.Play** opens four cells, one for each of the top row's first four pads:
-each can hold a WAV from the card (16-bit PCM, 44.1 kHz, mono or stereo, any
-length). On this page those pads play their WAVs over the loops, one at a
-time: a press stops what plays (a 3 ms fade) and starts its own. Shift + pad
-or Left / Right select a pad without playing it. The other pads do nothing
-here.
+each can hold a WAV from the card, any length: PCM at 8, 16, 24 or 32 bits or
+32-bit float (WAVE_FORMAT_EXTENSIBLE headers too), mono or stereo (of more
+channels, the first two), at any sample rate from 4 to 192 kHz (played at its
+own pitch, resampled to 44.1 kHz). On this page those pads play their WAVs
+over the loops, one at a time: a press stops what plays (a 3 ms fade) and
+starts its own. Shift + pad or Left / Right select a pad without playing it.
+The other pads do nothing here. A WAV the board cannot play shows why in its
+cell: not on the card, not a WAV, compressed (not PCM), an odd bit depth,
+odd channels, an odd sample rate, empty, or a card error.
 
 | Key | Action |
 |---|---|
@@ -274,10 +278,13 @@ here.
 | Encoder | The board's level |
 | F8 HOME | Back to the lanes (what plays goes on) |
 
-Each pad keeps the first second of its WAV in SDRAM (two seconds mono), so
-it sounds the moment it is pressed; the rest is read from the card while it
-plays, 16 KB at a time into a 64 KB ring. The board (the
-WAV on each pad, the play mode, the level, To loops) is saved to
+Each pad keeps the start of its WAV in SDRAM (172 KB: a second of 16-bit
+stereo at 44.1 kHz, less at higher rates or bit depths), so it sounds the
+moment it is pressed; the rest is read from the card while it plays, 16 KB at
+a time into a 64 KB ring. The board has its own strip on the mixer (Right
+from Master): its two sends, a DJ filter and its level, with a meter; the
+filter is in what To loops records. The board (the WAV on each pad, the play
+mode, the level, To loops, the sends and the filter) is saved to
 `Looper/soundboard.txt` a second after a change and loaded at start-up; the
 WAV starts load in the background (a loading pad blinks). The board's 0.84 MB
 of SDRAM comes out of the loop memory, which is why a track holds about 20.4 s

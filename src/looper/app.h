@@ -58,10 +58,11 @@
 // mono, what follows a take) and the tempo column over F5 (BPM, beats per bar,
 // metronome, click level, sound threshold). Same navigation as the mixer; F8 home.
 //
-// Mixer page: seven strips, each over its screen key: tracks 1-4 (send 1,
-// send 2, level), FX 1 and FX 2 (their first two knobs and return) and master
-// (level). F1..F7 or Left/Right pick a strip, Up/Down a row, the encoder sets
-// it (Shift: fine). F8 home.
+// Mixer page: eight strips, each over its screen key: tracks 1-4 (send 1,
+// send 2, DJ filter, level), FX 1 and FX 2 (their first two knobs and return),
+// master (level) and the sound board (send 1, send 2, DJ filter, level).
+// F1..F7 or Left/Right pick a strip (the sound board's: Right from master),
+// Up/Down a row, the encoder sets it (Shift: fine). F8 home.
 //
 // Sound board (S.Play): four cells, one per pad of the top row's first four,
 // each holding a WAV from the card. A pad plays its WAV over the loops (into
@@ -155,8 +156,10 @@ private:
     void drawStats();
 
     // mixer page
-    static constexpr int kStrips = 7;     // 4 tracks, delay, reverb, master
-    static constexpr int kRows = 4;       // three small parameters (tracks: sends, filter), then the fader
+    static constexpr int kStrips = 7;     // 4 tracks, delay, reverb, master (Shift mutes them)
+    static constexpr int kBoardStrip = 7; // then the sound board's (over F8, which stays home: Right from master)
+    static constexpr int kMixStrips = 8;
+    static constexpr int kRows = 4;      // three small parameters (tracks: sends, filter), then the fader
     bool mixParam(int strip, int row, MixParam& p, int& track, int& fxKnob) const;
     void stepFxKnob(int slot, int knob, int delta);
     void fxKnobText(int slot, int knob, char* buf, size_t n) const;
@@ -321,6 +324,8 @@ private:
     bool samples_ = false;
     int sampleSel_ = 0;
     void sampleKey(uint8_t id);
+    void previewSample();         // F3: the selected WAV through the sound board's preview
+    bool sbPreviewMsg_ = false;   // the loader shows the preview's message (not the loads')
     void drawSamples();
     // The sound board (S.Play): four WAVs on pads 1-4, played from the card over
     // the loops. Those pads play them; Left / Right move the selection; F1 picks the
@@ -329,7 +334,7 @@ private:
     bool sbPage_ = false;
     int sbSel_ = 0;
     int sbAssign_ = -1;
-    static bool sbFill(float* l, float* r, uint32_t n, void* ctx);
+    static bool sbFill(float* l, float* r, float* ol, float* orr, uint32_t n, void* ctx);
     void sbKey(uint8_t id);
     void drawSoundboard(uint32_t now);
     const char* trackLabel(int t, char* buf, size_t n) const;   // its name, or "Track N"
@@ -400,7 +405,7 @@ private:
     int waveNext_ = 0;           // lane that gets the next upload turn
     uint32_t waveUploads_ = 0, lastWaveUploads_ = 0;   // per second, for the telemetry
 
-    float inMeter_[2] = {}, trackMeter_[kTracks] = {}, retMeter_[kFxSlots] = {}, outMeter_[2] = {};
+    float inMeter_[2] = {}, trackMeter_[kTracks] = {}, retMeter_[kFxSlots] = {}, outMeter_[2] = {}, boardMeter_ = 0.0f;
 
     // frame pacing and stats
     uint32_t lastFrameMs_ = 0, lastLedMs_ = 0, fpsWindowMs_ = 0;

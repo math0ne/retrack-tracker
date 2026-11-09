@@ -123,6 +123,16 @@ commands. All three should stay 0 in plain playback.
   No it does not. Power off and on: the four pads come back.
 - **Sound board with long takes:** a long take playing from the card and a
   long WAV on the board at once; no gaps in either.
+- **Sound board formats:** pads with a 24-bit 48 kHz WAV, a 96 kHz WAV and a
+  32-bit float WAV play at the right pitch with no gaps (96 kHz and float read
+  the card two or more times as fast). A compressed WAV says "compressed" in
+  its cell.
+- **Preview (S.Load F3):** plays the selected WAV at once; Up / Down while it
+  plays moves it on; leaving the page stops it; a take never records it.
+- **Board strip (Master, Right from Master):** its level, sends and filter
+  change the board; power off and on, they come back.
+- **Monitor through the DJ filter:** play into the input with the selected
+  track's filter turned down: you hear it filtered, the take is dry.
 - **New project (File F7, twice):** every loop clears, the names too; F1 then
   saves a new numbered project, not over the last one.
 - **Length lock (Left / Right on home):** two taps of Right, one Rec press:

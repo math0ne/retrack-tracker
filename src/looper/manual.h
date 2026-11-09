@@ -156,6 +156,8 @@ constexpr const char* kFx[] = {
     "Level.",
     "FX strips: a knob, the send into the other slot's effect (e.g. Clouds",
     "into the reverb), Return. Master: the output level.",
+    "Board (Right from Master): the sound board's sends, Filter and Level.",
+    "The monitored input plays through the selected track's Filter.",
 };
 
 constexpr const char* kPages[] = {
@@ -181,9 +183,10 @@ constexpr const char* kPages[] = {
     "# Samples (S.Load)",
     "Folders and WAVs (16-bit, 44.1 kHz). Right / F1 open or load into the",
     "selected track (empty); Left / F2 up. It comes in stopped: Play starts it.",
+    "F3 previews the WAV (again: stop; Up / Down while it plays: the next).",
     "",
     "# Sound board (S.Play)",
-    "A WAV on each of pads 1-4 of the top row (16-bit, 44.1 kHz, any length),",
+    "A WAV on each of pads 1-4 of the top row (any PCM or float WAV, any rate),",
     "played from the card over the loops, one at a time (a press stops what plays).",
     "Left / Right or Shift + pad select a pad.",
     "F1 load its WAV   F2 clear it (twice)   F3 play: one-shot, toggle or gate",

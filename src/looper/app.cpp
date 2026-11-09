@@ -81,13 +81,13 @@ void fmtSeconds(char* buf, size_t n, uint32_t frames) {
     std::snprintf(buf, n, "%lu.%02lu s", static_cast<unsigned long>(cs / 100), static_cast<unsigned long>(cs % 100));
 }
 
-// Mixer strip colours: the four tracks, delay, reverb, master, back.
+// Mixer strip colours: the four tracks, delay, reverb, master, the sound board.
 constexpr uint32_t kDelayColor = 0xA2A2A2, kReverbColor = 0xB6B6B6;
 uint32_t stripColor(int s) {
     if (s < kTracks) return kTrackColor[s];
     if (s == 4) return kDelayColor;
     if (s == 5) return kReverbColor;
-    return s == 6 ? kInk : kDim;
+    return s == 6 ? kInk : (s == 7 ? kAmber : kDim);
 }
 
 const char* sourceName(uint8_t s) {
@@ -148,7 +148,9 @@ bool App::init(const Platform& p) {
     return p_.audio->start();
 }
 
-bool App::sbFill(float* l, float* r, uint32_t n, void* ctx) { return static_cast<App*>(ctx)->sb_.render(l, r, n); }
+bool App::sbFill(float* l, float* r, float* ol, float* orr, uint32_t n, void* ctx) {
+    return static_cast<App*>(ctx)->sb_.render(l, r, ol, orr, n);
+}
 
 void App::audioFill(int16_t* out, uint32_t frames, void* ctx) {
     App* a = static_cast<App*>(ctx);
@@ -189,6 +191,8 @@ void App::loop() {
     files_.service();   // one step of a save / load / export
     sb_.service();      // the sound board: its voices read ahead, slot starts loaded
     engine_.setSourceToInput(sb_.toLoops());
+    engine_.setSourceMix(uint8_t(sb_.send(0)), uint8_t(sb_.send(1)), uint16_t(sb_.filter()));
+    if (!samples_ && sb_.previewing()) sb_.stopPreview();   // the preview lasts while the loader is open
 
     const uint32_t now = p_.clock->millis();
     if (powerHeld_ && now - powerDownMs_ >= kPowerHoldMs && p_.powerOff) {
@@ -968,7 +972,7 @@ void App::closePerf() {
 
 void App::goHome() {
     mixer_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = manual_ = grainMenu_ = false;
-    nameEdit_ = samples_ = sbPage_ = false;
+    nameEdit_ = samples_ = sbPage_ = sbPreviewMsg_ = false;
     sbAssign_ = -1;
     midi_.learn(-1);
     fxPage_ = -1;
@@ -1482,6 +1486,8 @@ void App::render(uint32_t now) {
         const float l = engine_.view(t).level.load() / 255.0f;
         trackMeter_[t] = l > trackMeter_[t] ? l : trackMeter_[t] * 0.9f;
     }
+    const float bl = engine_.sourceLevel() / 255.0f;
+    boardMeter_ = bl > boardMeter_ ? bl : boardMeter_ * 0.9f;
 }
 
 void App::drawLane(int t, uint32_t now) {
@@ -1853,13 +1859,17 @@ void App::drawFKeys() {
                 case 7: title[i] = "HOME"; std::snprintf(val[i], sizeof val[i], "Loops"); break;
                 default: break;
             }
-        } else if (samples_) {   // F1 open / load, F2 up a folder, F8 home
+        } else if (samples_) {   // F1 open / load, F2 up a folder, F3 preview, F8 home
             const bool dir = files_.sampleIsDir(sampleSel_);
-            static const char* const kT[8] = {"", "FOLDER", "", "", "", "", "", "HOME"};
+            const bool wav = files_.sampleCount() && !dir;
+            static const char* const kT[8] = {"", "FOLDER", "PREVIEW", "", "", "", "", "HOME"};
             title[i] = i == 0 ? (dir ? "OPEN" : "LOAD") : kT[i];
             const char* v = i == 0 ? (dir ? "Folder" : (files_.sampleCount() ? (sbAssign_ >= 0 ? "Onto pad" : "Into track") : "-"))
-                            : i == 1 ? (files_.sampleDir()[0] ? "Up" : "-") : i == 7 ? "Loops" : "";
+                            : i == 1 ? (files_.sampleDir()[0] ? "Up" : "-")
+                            : i == 2 ? (sb_.previewing() ? "Stop" : (wav ? "Play" : "-"))
+                            : i == 7 ? "Loops" : "";
             std::snprintf(val[i], sizeof val[i], "%s", v);
+            hot = i == 2 && sb_.previewing();
         } else if (config_ && fwPage_) {   // F1 flash (twice), F2 rescan, F7 back, F8 home
             const bool armed = confirm_ == 0 && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0;
             static const char* const kT[8] = {"FLASH", "RESCAN", "", "", "", "", "BACK", "HOME"};
@@ -1967,13 +1977,13 @@ void App::drawFKeys() {
                 hot = true;
                 hotCol = kMute;
             }
-        } else if (mixer_) {   // F1..F7 pick a strip, F8 home
+        } else if (mixer_) {   // F1..F7 pick a strip (the sound board's: Right from master), F8 home
             static const char* const kTitles[8] = {"TRACK", "TRACK", "TRACK", "TRACK", "FX 1", "FX 2", "MASTER", "HOME"};
             static const char* const kNames[8] = {"Track 1", "Track 2", "Track 3", "Track 4", "", "", "Level", "Loops"};
             title[i] = kTitles[i];
             std::snprintf(val[i], sizeof val[i], "%s",
                           i == 4 || i == 5 ? fxTypeInfo(engine_.fxType(i - 4)).name : kNames[i]);
-            hot = strip_ == i;
+            hot = strip_ == i && i < kStrips;
         } else {
             switch (i) {
                 case 0:   // lit while it records: red, overdub amber, waiting (count-in, sound) dim amber
@@ -2106,7 +2116,7 @@ bool App::mixParam(int strip, int row, MixParam& p, int& track, int& fxKnob) con
     track = strip < kTracks ? strip : 0;
     fxKnob = -1;
     p = MixParam::kLevel;
-    if (strip < kTracks) {
+    if (strip < kTracks || strip == kBoardStrip) {   // the sound board's like a track's (the App keeps its values)
         static const MixParam kTrackRow[kRows] = {MixParam::kSend1, MixParam::kSend2, MixParam::kFilter, MixParam::kLevel};
         p = kTrackRow[row];
         return true;
@@ -2135,13 +2145,14 @@ bool App::mixParam(int strip, int row, MixParam& p, int& track, int& fxKnob) con
 }
 
 bool App::stripMuted(int s) const {
+    if (s >= kStrips) return false;   // the sound board's has no mute
     return s < kTracks ? engine_.view(s).muted.load() : engine_.busMuted(s - kTracks);
 }
 
 void App::mixerKey(uint8_t id) {
     MixParam p;
     int t, k;
-    if (id == b::F8 && !shift_) {
+    if (id == b::F8 && !shift_) {   // the sound board's strip has no key of its own: Right from master
         goHome();
         return;
     }
@@ -2154,7 +2165,7 @@ void App::mixerKey(uint8_t id) {
     }
     if (b::isFKey(id)) strip_ = id - b::F1;
     else if (id == b::Left && strip_ > 0) --strip_;
-    else if (id == b::Right && strip_ < kStrips - 1) ++strip_;
+    else if (id == b::Right && strip_ < kMixStrips - 1) ++strip_;
     else if (id == b::Up || id == b::Down) {   // the next row this strip has
         const int d = id == b::Up ? -1 : 1;
         for (int r = row_ + d; r >= 0 && r < kRows; r += d)
@@ -2173,6 +2184,12 @@ void App::mixerEncoder(int delta) {
     if (!mixParam(strip_, row_, p, t, k)) return;
     if (k >= 0) {
         stepFxKnob(t, k, delta);
+        return;
+    }
+    if (strip_ == kBoardStrip) {   // the sound board's: kept with the board
+        if (p == MixParam::kFilter) sb_.setFilter(sb_.filter() + delta * (shift_ ? 1 : 20));
+        else if (p == MixParam::kLevel) sb_.setLevel(sb_.level() + delta * (shift_ ? 1 : 2));
+        else sb_.setSend(p == MixParam::kSend1 ? 0 : 1, sb_.send(p == MixParam::kSend1 ? 0 : 1) + delta * (shift_ ? 1 : 2));
         return;
     }
     if (p == MixParam::kFilter) {   // its own resolution: Shift turns it ten times finer
@@ -2229,12 +2246,13 @@ float App::fxKnobFrac(int slot, int knob) const {
 }
 
 void App::drawMixer() {
-    for (int s = 0; s < kStrips; ++s) drawStrip(s);
+    for (int s = 0; s < kMixStrips; ++s) drawStrip(s);
 }
 
 void App::drawStrip(int s) {
-    static const char* const kStripName[kStrips] = {"Track 1", "Track 2", "Track 3", "Track 4", "FX 1", "FX 2",
-                                                     "Master"};
+    static const char* const kStripName[kMixStrips] = {"Track 1", "Track 2", "Track 3", "Track 4", "FX 1", "FX 2",
+                                                        "Master", "Board"};
+    const bool board = s == kBoardStrip;
     const int x0 = s * kKeyW + 4, x1 = (s + 1) * kKeyW - 4, cx = s * kKeyW + kKeyW / 2;
     const uint32_t sc = stripColor(s);
     const bool sel = strip_ == s;
@@ -2262,16 +2280,17 @@ void App::drawStrip(int s) {
             fxKnobText(t, k, buf, sizeof buf);
             fr = fxKnobFrac(t, k);
         } else if (p == MixParam::kFilter) {
+            const uint16_t fv = board ? uint16_t(sb_.filter()) : engine_.filterFine(t);
             label = "Filter";
-            filterText(engine_.filterFine(t), buf, sizeof buf);
-            fr = float(engine_.filterFine(t)) / float(kFilterFineMax);
+            filterText(fv, buf, sizeof buf);
+            fr = float(fv) / float(kFilterFineMax);
         } else {
             // Track sends; on the FX strips the chain into the other slot:
             // named after the effect in that slot.
             const int to = p == MixParam::kChain1 ? 1 : (p == MixParam::kChain2 ? 0 : row);
             std::snprintf(sendLabel, sizeof sendLabel, "To %s", fxTypeInfo(engine_.fxType(to)).name);
             label = sendLabel;
-            const uint8_t v = engine_.mix(p, t);
+            const uint8_t v = board ? uint8_t(sb_.send(row)) : engine_.mix(p, t);
             std::snprintf(buf, sizeof buf, "%u", unsigned(v));
             fr = float(v) / 100.0f;
         }
@@ -2282,7 +2301,7 @@ void App::drawStrip(int s) {
         text(cx, by0 + 15, kFontSmall, Disp::kOptCenter, label);
         color(on ? kSel : kSoft);
         text(cx, by0 + 33, kFontSmall, Disp::kOptCenter, buf);
-        const uint32_t bc = s < kTracks ? (row == 0 ? kDelayColor : kReverbColor) : sc;
+        const uint32_t bc = s < kTracks || board ? (row == 0 ? kDelayColor : kReverbColor) : sc;
         color(kFaint);
         fillRect(x0 + 12, by0 + 46, x1 - 12, by0 + 50, 2);
         color(on ? kSel : scale(bc, (emptyTrack ? 0.4f : 1.0f) * kUnsel));
@@ -2303,8 +2322,8 @@ void App::drawStrip(int s) {
     const int fy0 = 220, fy1 = 424;
     const bool on = sel && row_ == kRows - 1;
     color(on ? kSel : kDim);
-    text(cx, fy0 + 15, kFontSmall, Disp::kOptCenter, s < kTracks || s == 6 ? "Level" : "Return");
-    const uint8_t v = engine_.mix(p, t);
+    text(cx, fy0 + 15, kFontSmall, Disp::kOptCenter, s < kTracks || s >= 6 ? "Level" : "Return");
+    const uint8_t v = board ? uint8_t(sb_.level()) : engine_.mix(p, t);
     const int sy0 = fy0 + 32, sy1 = fy1 - 32;           // slot, centred between the label and the value
     const int ky = sy1 - int((sy1 - sy0) * frac(v));     // knob
     color(kFaint);
@@ -2313,7 +2332,7 @@ void App::drawStrip(int s) {
     fillRect(cx - 4, ky, cx + 4, sy1, 4);
     color(on ? kSel : kSoft);
     fillRect(cx - 14, ky - 4, cx + 14, ky + 4, 3);
-    // Meters: one for a track or a return, left and right for the master.
+    // Meters: one for a track, a return or the sound board, left and right for the master.
     auto meter = [&](int mx, float m) {
         color(kMeterBack);
         fillRect(mx - 2, sy0, mx + 2, sy1, 2);
@@ -2324,6 +2343,7 @@ void App::drawStrip(int s) {
     };
     if (s < kTracks) meter(x1 - 16, trackMeter_[s]);
     else if (s < 6) meter(x1 - 16, retMeter_[s - 4]);
+    else if (board) meter(x1 - 16, boardMeter_);
     else {
         meter(x0 + 16, outMeter_[0]);
         meter(x1 - 16, outMeter_[1]);
@@ -3370,14 +3390,22 @@ void App::sampleKey(uint8_t id) {
     const uint32_t now = p_.clock->millis();
     switch (id) {
         case b::Up:
-            if (sampleSel_ > 0) --sampleSel_;
+        case b::Down: {
+            const int was = sampleSel_;
+            if (id == b::Up && sampleSel_ > 0) --sampleSel_;
+            if (id == b::Down && sampleSel_ < n - 1) ++sampleSel_;
+            if (sampleSel_ != was && sb_.previewing()) previewSample();   // a preview follows the selection
             break;
-        case b::Down:
-            if (sampleSel_ < n - 1) ++sampleSel_;
+        }
+        case b::F3:   // preview: plays the selected WAV from the card (again: stops it)
+            if (sb_.previewing()) sb_.stopPreview();
+            else previewSample();
             break;
         case b::Right:
         case b::F1:
             if (sampleSel_ >= n) break;
+            sb_.stopPreview();
+            sbPreviewMsg_ = false;
             if (files_.sampleIsDir(sampleSel_)) {
                 char sub[Files::kSampleNameLen];
                 std::snprintf(sub, sizeof sub, "%s", files_.sampleName(sampleSel_));
@@ -3401,6 +3429,7 @@ void App::sampleKey(uint8_t id) {
         case b::Left:
         case b::F2:
             if (files_.sampleDir()[0]) {
+                sb_.stopPreview();
                 files_.openSampleDir(nullptr);
                 sampleSel_ = 0;
             }
@@ -3408,6 +3437,19 @@ void App::sampleKey(uint8_t id) {
         case b::F8: goHome(); break;
         default: break;
     }
+}
+
+void App::previewSample() {
+    sbPreviewMsg_ = true;
+    if (sampleSel_ >= files_.sampleCount() || files_.sampleIsDir(sampleSel_)) {
+        sb_.stopPreview();
+        sbPreviewMsg_ = false;
+        return;
+    }
+    char path[Soundboard::kPathLen + 32];
+    std::snprintf(path, sizeof path, "%s%s%s", files_.sampleDir(), files_.sampleDir()[0] ? "/" : "",
+                  files_.sampleName(sampleSel_));
+    sb_.preview(path);
 }
 
 void App::drawSamples() {
@@ -3456,7 +3498,7 @@ void App::drawSamples() {
         fillRect(40, 400, 44 + int(716.0f * files_.progress()), 408, 4);
     }
     color(files_.busy() ? kAmber : kInk);
-    text(40, 384, kFontSmall, Disp::kOptCenterY, files_.status());
+    text(40, 384, kFontSmall, Disp::kOptCenterY, sbPreviewMsg_ && !files_.busy() ? sb_.status() : files_.status());
 }
 
 // ---------------------------------------------------------------------------
@@ -3545,12 +3587,12 @@ void App::drawSoundboard(uint32_t now) {
         text(cx, (y0 + y1) / 2 - 12, kFontBody, Disp::kOptCenter, buf);
         if (sl.state == Soundboard::SlotState::kReady) {
             char s[16];
-            fmtSeconds(s, sizeof s, sl.frames);
+            fmtSeconds(s, sizeof s, sb_.length(i));
             std::snprintf(buf, sizeof buf, "%s  %s", s, sl.mono ? "mono" : "stereo");
             color(kDim);
             text(cx, (y0 + y1) / 2 + 18, kFontSmall, Disp::kOptCenter, buf);
-        } else if (missing) {
-            text(cx, (y0 + y1) / 2 + 18, kFontSmall, Disp::kOptCenter, "not playable");
+        } else if (missing) {   // why it does not play
+            text(cx, (y0 + y1) / 2 + 18, kFontSmall, Disp::kOptCenter, Soundboard::whyText(sl.why));
         }
         if (prog >= 0.0f) {
             color(kInk);
@@ -3564,11 +3606,14 @@ void App::drawSoundboard(uint32_t now) {
         std::snprintf(buf, sizeof buf, "Pad %d: empty (F1 loads a WAV)", sbSel_ + 1);
     } else if (sl.state == Soundboard::SlotState::kReady) {
         char s[16];
-        fmtSeconds(s, sizeof s, sl.frames);
-        std::snprintf(buf, sizeof buf, "Pad %d: %s   %s   %s", sbSel_ + 1, sl.name, s, sl.mono ? "mono" : "stereo");
+        fmtSeconds(s, sizeof s, sb_.length(sbSel_));
+        std::snprintf(buf, sizeof buf, "Pad %d: %s   %s   %s   %s%d-bit %.1f kHz", sbSel_ + 1, sl.name, s,
+                      sl.mono ? "mono" : "stereo", sl.isFloat ? "float " : "", sl.sampleBytes * 8,
+                      double(sl.rate) / 1000.0);
+    } else if (sl.state == Soundboard::SlotState::kPending) {
+        std::snprintf(buf, sizeof buf, "Pad %d: %.60s (loading)", sbSel_ + 1, sl.path);
     } else {
-        std::snprintf(buf, sizeof buf, "Pad %d: %.60s%s", sbSel_ + 1, sl.path,
-                      sl.state == Soundboard::SlotState::kPending ? " (loading)" : " (not playable)");
+        std::snprintf(buf, sizeof buf, "Pad %d: %.50s is %s", sbSel_ + 1, sl.path, Soundboard::whyText(sl.why));
     }
     color(kInk);
     text(20, 404, kFontSmall, Disp::kOptCenterY, buf);

@@ -1669,6 +1669,49 @@ uint8_t Engine::mix(MixParam p, int t) const {
     return 0;
 }
 
+// The mixer's DJ filter on a block outside the tracks (the monitored input,
+// the sound board): as the tracks' in render(), the cutoff gliding and the
+// filter fading in and out.
+void Engine::djBlock(Dj& d, int fv, float* l, float* r, uint32_t n) {
+    const int off = kFilterFineOff, dead = kFilterFineDead;
+    const float side = float(off - dead);
+    const bool on = fv < off - dead || fv > off + dead;
+    const bool high = fv > off;
+    if (d.wet <= 0.0f && on && high != d.high) {   // the other kind: from where it is open
+        d.high = high;
+        d.f = Svf{};
+        d.log = high ? std::log(20.0f) : std::log(20000.0f);
+    }
+    float target;   // ln Hz
+    if (d.high) target = std::log(20.0f) + std::log(6000.0f / 20.0f) * (on && high ? float(fv - off - dead) / side : 0.0f);
+    else target = std::log(20000.0f) + std::log(150.0f / 20000.0f) * (on && !high ? float(off - dead - fv) / side : 0.0f);
+    const float w0 = d.wet;
+    d.wet = on && high == d.high ? 1.0f : 0.0f;
+    if (w0 <= 0.0f && d.wet <= 0.0f) {   // out: it starts open next time
+        d.f = Svf{};
+        d.log = d.high ? std::log(20.0f) : std::log(20000.0f);
+        return;
+    }
+    const float ws = (d.wet - w0) / float(n);
+    d.log += (target - d.log) * 0.35f;   // ~20 ms
+    const float gg = std::tan(3.14159265f * std::fmin(std::exp(d.log), 20000.0f) / float(kSampleRate));
+    const float kk = 0.8f, a1 = 1.0f / (1.0f + gg * (gg + kk)), a2 = gg * a1, a3 = gg * a2;
+    float w = w0;
+    for (uint32_t f = 0; f < n; ++f) {
+        w += ws;
+        for (int ch = 0; ch < 2; ++ch) {
+            float& x = ch ? r[f] : l[f];
+            const float v3 = x - d.f.ic2[ch];
+            const float v1 = a1 * d.f.ic1[ch] + a2 * v3;
+            const float v2 = d.f.ic2[ch] + a2 * d.f.ic1[ch] + a3 * v3;
+            d.f.ic1[ch] = 2.0f * v1 - d.f.ic1[ch];
+            d.f.ic2[ch] = 2.0f * v2 - d.f.ic2[ch];
+            const float y = d.high ? x - kk * v1 - v2 : v2;
+            x += (y - x) * w;
+        }
+    }
+}
+
 void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
     // Commands first, so a press acts on this block.
     uint32_t tail = qTail_.load(std::memory_order_relaxed);
@@ -1720,42 +1763,70 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
     float (&busR)[kFxSlots][128] = busR_;
     std::memset(busL_, 0, sizeof busL_);
     std::memset(busR_, 0, sizeof busR_);
-    // The sound board: into the input (so a take records it, and the monitor
-    // plays it), or straight to the mix; to the mix too when the monitor is off.
-    bool srcOut = false;
+    // The sound board: its pads through its mixer strip (the DJ filter, the
+    // sends), to the mix, and into the input too when takes record it; its
+    // preview to the mix alone.
+    const int16_t* const raw = in;
+    bool src = false, srcIn = false, prv = false;
     if (srcFn_) {
         std::memset(srcL_, 0, n * sizeof(float));
         std::memset(srcR_, 0, n * sizeof(float));
-        if (srcFn_(srcL_, srcR_, n, srcCtx_)) {
-            const bool toIn = srcToIn_.load(std::memory_order_relaxed);
-            if (toIn) {
+        std::memset(prvL_, 0, n * sizeof(float));
+        std::memset(prvR_, 0, n * sizeof(float));
+        if (srcFn_(srcL_, srcR_, prvL_, prvR_, n, srcCtx_)) {
+            src = prv = true;
+            djBlock(srcDj_, srcFilter_.load(std::memory_order_relaxed), srcL_, srcR_, n);
+            if (srcToIn_.load(std::memory_order_relaxed)) {
                 for (uint32_t f = 0; f < n; ++f) {
-                    inMix_[2 * f] = sat16(float(in ? in[2 * f] : 0) + srcL_[f]);
-                    inMix_[2 * f + 1] = sat16(float(in ? in[2 * f + 1] : 0) + srcR_[f]);
+                    inMix_[2 * f] = sat16(float(raw ? raw[2 * f] : 0) + srcL_[f]);
+                    inMix_[2 * f + 1] = sat16(float(raw ? raw[2 * f + 1] : 0) + srcR_[f]);
                 }
                 in = inMix_;
+                srcIn = true;
             }
-            srcOut = !toIn || !monitor_;
         }
     }
-    uint8_t inPk[2] = {0, 0};
+    // The monitored input through the selected track's DJ filter: what it
+    // will sound like there (the take itself is recorded dry).
+    if (monL_) {
+        for (uint32_t f = 0; f < n; ++f) {
+            monL_[f] = monitor_ && raw ? float(raw[2 * f]) : 0.0f;
+            monR_[f] = monitor_ && raw ? float(raw[2 * f + 1]) : 0.0f;
+        }
+        if (monitor_) djBlock(monDj_, trk_[focus_].filter, monL_, monR_, n);
+    }
+    const float srcSend[kFxSlots] = {float(srcSend_[0].load(std::memory_order_relaxed)) / 100.0f,
+                                     float(srcSend_[1].load(std::memory_order_relaxed)) / 100.0f};
+    uint8_t inPk[2] = {0, 0}, srcPk = 0;
     for (uint32_t f = 0; f < n; ++f) {
         const int16_t l = in ? in[2 * f] : 0, r = in ? in[2 * f + 1] : 0;
         const uint8_t pl = peak8(l, 0), pr = peak8(r, 0);
         if (pl > inPk[0]) inPk[0] = pl;
         if (pr > inPk[1]) inPk[1] = pr;
-        mixL[f] = (monitor_ ? float(l) : 0.0f) + (srcOut ? srcL_[f] : 0.0f);
-        mixR[f] = (monitor_ ? float(r) : 0.0f) + (srcOut ? srcR_[f] : 0.0f);
+        const float ml = monL_ ? monL_[f] : (monitor_ && raw ? float(raw[2 * f]) : 0.0f);
+        const float mr = monR_ ? monR_[f] : (monitor_ && raw ? float(raw[2 * f + 1]) : 0.0f);
+        const float bl = src ? srcL_[f] : 0.0f, br = src ? srcR_[f] : 0.0f;
+        mixL[f] = ml + bl + (prv ? prvL_[f] : 0.0f);
+        mixR[f] = mr + br + (prv ? prvR_[f] : 0.0f);
+        if (src) {
+            const uint8_t p = peak8(sat16(bl), sat16(br));
+            if (p > srcPk) srcPk = p;
+            for (int s = 0; s < kFxSlots; ++s) {
+                busL_[s][f] += bl * srcSend[s];
+                busR_[s][f] += br * srcSend[s];
+            }
+        }
         // Monitoring through the effects: the input on the chosen send buses,
         // at the selected track's send levels (what a take on it will get).
         if (monitor_ && monitorFx_)
             for (int s = 0; s < kFxSlots; ++s)
                 if ((monitorFx_ >> s) & 1) {
                     const float g = monSend_[s] + (float(send_[focus_][s]) / 100.0f - monSend_[s]) * float(f + 1) / float(n);
-                    busL_[s][f] += float(l) * g;
-                    busR_[s][f] += float(r) * g;
+                    busL_[s][f] += (ml + (srcIn ? bl : 0.0f)) * g;
+                    busR_[s][f] += (mr + (srcIn ? br : 0.0f)) * g;
                 }
     }
+    srcLevel_.store(srcPk, std::memory_order_relaxed);
     for (int s = 0; s < kFxSlots; ++s) monSend_[s] = float(send_[focus_][s]) / 100.0f;
 
     const float fb = float(feedback_) / 100.0f;
