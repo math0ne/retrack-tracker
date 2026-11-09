@@ -1,5 +1,6 @@
 #include "looper/app.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -20,6 +21,11 @@ static_assert(App::kWaveRamG + kTracks * App::kWaveBytes <= Disp::kRamGSize, "wa
 static_assert(App::kWaveBytes % 4 == 0, "RAM_G writes stay 4-byte aligned");
 static_assert(App::kEditRamG >= App::kWaveRamG + kTracks * App::kWaveBytes, "editor bitmap overlaps the lanes");
 static_assert(App::kEditRamG + uint32_t(App::kEditW) * App::kEditH <= Disp::kRamGSize, "editor bitmap leaves RAM_G");
+
+namespace {
+// Waveform column heights on their way to RAM_G (lanes, the editor, a pad).
+uint8_t gColL[1024], gColR[1024];
+}  // namespace
 
 constexpr uint32_t kFrameMs = 16;           // ~60 fps cap
 constexpr uint32_t kLedMs = 33;
@@ -120,6 +126,7 @@ bool App::init(const Platform& p) {
     if (p_.loopMemBytes < Soundboard::kMemBytes * 4) return false;
     p_.loopMemBytes = (p_.loopMemBytes - Soundboard::kMemBytes) & ~15u;
     sb_.init(&p_, p_.loopMem + p_.loopMemBytes);
+    sb_.setScanBuffer(p_.scratch, p_.scratchBytes);   // the pad editor reads WAVs through it (main loop only)
     TrackMemory mem[kTracks];
     const uint32_t perTrack = (p_.loopMemBytes / kTracks) & ~15u;
     const uint32_t streamPeaks = (kStreamFrames / kPeakFrames + 1) * 2;
@@ -248,6 +255,8 @@ void App::loop() {
                 waveDrawnMs_[editTrack_] = now;
                 waveValid_[editTrack_] = false;   // the lane redraws when it is back on screen
             }
+        } else if (sbEdit_) {
+            updatePadWave(now);   // the pad editor's waveform, as the card brings it
         } else if (!mixer_ && fxPage_ < 0 && !config_ && !file_ && !inPage_ && !manual_ && !nameEdit_ && !samples_) {
             updateWaves(now);   // lanes only when they are on screen
         }
@@ -588,8 +597,9 @@ void App::onInput(const ot::InputEvent& ev) {
             mixerEncoder(ev.delta);
             return;
         }
-        if (sbPage_) {   // the sound board's level
-            sb_.setLevel(sb_.level() + ev.delta * 2);
+        if (sbPage_) {   // the sound board's level; in the pad editor, a marker or the gain
+            if (sbEdit_) editEncoder(ev.delta);
+            else sb_.setLevel(sb_.level() + ev.delta * 2);
             return;
         }
         if (shift_) {
@@ -790,6 +800,11 @@ void App::onInput(const ot::InputEvent& ev) {
         }
         return;
     }
+    if ((ev.id == b::Note || ev.id == b::SampleEditor) && sbPage_) {   // on the board: the pad editor (again: back)
+        if (sbEdit_) sbEdit_ = false;
+        else openPadEdit();
+        return;
+    }
     if (ev.id == b::Note || ev.id == b::SampleEditor) {   // the loop editor for the selected track
         const bool was = edit_;
         goHome();
@@ -810,7 +825,11 @@ void App::onInput(const ot::InputEvent& ev) {
         }
         return;
     }
-    if (ev.id == b::SamplePlayback) {   // the sound board (from its WAV picker: back to it)
+    if (ev.id == b::SamplePlayback) {   // the sound board (from its WAV picker or the pad editor: back to it)
+        if (sbEdit_) {
+            sbEdit_ = false;
+            return;
+        }
         const bool open = sbPage_ && sbAssign_ < 0;
         goHome();
         sbPage_ = !open;
@@ -832,7 +851,8 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     if (sbPage_ && nav) {
-        sbKey(ev.id);
+        if (sbEdit_) editKey(ev.id);
+        else sbKey(ev.id);
         return;
     }
     if (samples_ && nav) {
@@ -972,7 +992,7 @@ void App::closePerf() {
 
 void App::goHome() {
     mixer_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = manual_ = grainMenu_ = false;
-    nameEdit_ = samples_ = sbPage_ = sbPreviewMsg_ = false;
+    nameEdit_ = samples_ = sbPage_ = sbEdit_ = sbPreviewMsg_ = false;
     sbAssign_ = -1;
     midi_.learn(-1);
     fxPage_ = -1;
@@ -1002,6 +1022,10 @@ void App::onPad(int pad, bool down) {
     if (!down) sb_.release(pad);   // the sound board's gate mode (also after leaving its page)
     if (sbPage_) {   // the sound board: pads 1..4 play their WAVs (Shift: select, silent); the rest nothing
         if (down && pad < Soundboard::kSlots) {
+            if (sbEdit_ && pad != sbSel_) {   // the editor follows the pad
+                sbSel_ = pad;
+                openPadEdit();
+            }
             sbSel_ = pad;
             if (!shift_) sb_.press(pad);
         }
@@ -1168,10 +1192,16 @@ void App::renderBitmap(int t, uint32_t span, int w, int h, uint32_t ramg, uint8_
     // kept up to date) and not `whole`, only the runs of columns that changed
     // are drawn and sent: an overdub or a growing take changes a few columns,
     // not the 68 KB of the whole lane.
-    const int mid = h / 2;
-    static uint8_t hl[1024], hr[1024];
+    uint8_t* hl = gColL;
+    uint8_t* hr = gColR;
     if (w > 1024) return;
-    renderColumns(t, span, w, mid, hl, hr);
+    renderColumns(t, span, w, h / 2, hl, hr);
+    uploadColumns(hl, hr, w, h, ramg, prevL, prevR, whole);
+}
+
+void App::uploadColumns(const uint8_t* hl, const uint8_t* hr, int w, int h, uint32_t ramg, uint8_t* prevL,
+                        uint8_t* prevR, bool whole) {
+    const int mid = h / 2;
     // Runs of changed columns [x0, x1), 4-byte aligned (RAM_G writes), gaps
     // under 16 columns merged; too many runs: the whole width.
     constexpr int kMaxRuns = 4;
@@ -1399,6 +1429,7 @@ void App::render(uint32_t now) {
     else if (manual_) drawManual();
     else if (nameEdit_) drawName();
     else if (samples_) drawSamples();
+    else if (sbEdit_) drawEditPage(now);
     else if (sbPage_) drawSoundboard(now);
     else if (mixer_) drawMixer();
     else {
@@ -1839,7 +1870,7 @@ void App::drawFKeys() {
             static const char* const kV[8] = {"Insert", "Back", "All", "", "", "", "Keep old", "Save name"};
             title[i] = kT[i];
             std::snprintf(val[i], sizeof val[i], "%s", kV[i]);
-        } else if (sbPage_) {   // the sound board
+        } else if (sbPage_ && !sbEdit_) {   // the sound board
             static const char* const kPlay[3] = {"One-shot", "Toggle", "Gate"};
             const Soundboard::Slot& sl = sb_.slot(sbSel_);
             const bool armed = confirm_ == i && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0;
@@ -1856,6 +1887,7 @@ void App::drawFKeys() {
                 case 2: title[i] = "PLAY"; std::snprintf(val[i], sizeof val[i], "%s", kPlay[int(sb_.mode()) % 3]); break;
                 case 3: title[i] = "STOP"; std::snprintf(val[i], sizeof val[i], "All"); hot = sb_.playing() > 0; break;
                 case 4: title[i] = "TO LOOPS"; std::snprintf(val[i], sizeof val[i], "%s", sb_.toLoops() ? "Yes" : "No"); break;
+                case 5: title[i] = "EDIT"; std::snprintf(val[i], sizeof val[i], "Pad"); break;
                 case 7: title[i] = "HOME"; std::snprintf(val[i], sizeof val[i], "Loops"); break;
                 default: break;
             }
@@ -1952,7 +1984,7 @@ void App::drawFKeys() {
                 case 7: title[i] = "HOME"; std::snprintf(val[i], sizeof val[i], "Loops"); break;
                 default: title[i] = ""; val[i][0] = 0; break;
             }
-        } else if (edit_) {   // the loop editor
+        } else if (edit_ || sbEdit_) {   // the loop editor (on a pad too)
             static const char* const kSnap[4] = {"Bar", "Beat", "1/16", "Free"};
             const TrackView& ev = engine_.view(editTrack_);
             const bool armed = confirm_ == i && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0;
@@ -1961,13 +1993,27 @@ void App::drawFKeys() {
                 case 1: title[i] = "END"; std::snprintf(val[i], sizeof val[i], "Marker"); hot = editMarker_ == 1; break;
                 case 2: title[i] = "SNAP"; std::snprintf(val[i], sizeof val[i], "%s", kSnap[editSnap_ & 3]); break;
                 case 3: title[i] = "TRIM"; std::snprintf(val[i], sizeof val[i], "Keep sel"); break;
-                case 4: title[i] = "CUT"; std::snprintf(val[i], sizeof val[i], "%s", armed ? "Sure?" : "Remove"); hot = armed; break;
-                case 5: title[i] = "ERASE"; std::snprintf(val[i], sizeof val[i], "%s", armed ? "Sure?" : "Silence"); hot = armed; break;
-                case 6:
-                    title[i] = "UNDO";
-                    std::snprintf(val[i], sizeof val[i], "%s", ev.canUndo.load() ? "Trim" : "-");
+                case 4:
+                    title[i] = sbEdit_ ? "" : "CUT";
+                    std::snprintf(val[i], sizeof val[i], "%s", sbEdit_ ? "" : armed ? "Sure?" : "Remove");
+                    hot = armed;
                     break;
-                default: title[i] = "HOME"; std::snprintf(val[i], sizeof val[i], "Loops"); break;
+                case 5:
+                    title[i] = sbEdit_ ? "" : "ERASE";
+                    std::snprintf(val[i], sizeof val[i], "%s", sbEdit_ ? "" : armed ? "Sure?" : "Silence");
+                    hot = armed;
+                    break;
+                case 6: {
+                    const Soundboard::Slot& sl = sb_.slot(sbSel_);
+                    const bool part = sl.state == Soundboard::SlotState::kReady && (sl.from || sl.to < sl.frames);
+                    title[i] = "UNDO";
+                    std::snprintf(val[i], sizeof val[i], "%s", sbEdit_ ? (part ? "Whole" : "-") : ev.canUndo.load() ? "Trim" : "-");
+                    break;
+                }
+                default:
+                    title[i] = sbEdit_ ? "BACK" : "HOME";
+                    std::snprintf(val[i], sizeof val[i], "%s", sbEdit_ ? "Board" : "Loops");
+                    break;
             }
         } else if (mixer_ && shift_) {   // Shift: F1..F7 mute a strip, lit while muted
             static const char* const kNames[kStrips] = {"Track 1", "Track 2", "Track 3", "Track 4", "FX 1", "FX 2", "Master"};
@@ -2066,7 +2112,7 @@ void App::drawFKeys() {
             uint32_t tcol = kDim;
             if (hot) tcol = pick ? kSel : kInk;
             else if (file_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
-            else if (sbPage_) tcol = i < 5 ? scale(hc, 0.9f) : kDim;
+            else if (sbPage_) tcol = (sbEdit_ ? i < 4 || i == 6 : i < 6) ? scale(hc, 0.9f) : kDim;
             else if (inPage_) tcol = i < 5 ? scale(hc, 0.9f) : kDim;
             else if (edit_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
             else if (fxPage_ >= 0) tcol = i < 6 ? scale(hc, 0.9f) : kDim;
@@ -3536,6 +3582,7 @@ void App::sbKey(uint8_t id) {
         case b::F3: sb_.setMode(Soundboard::Play((int(sb_.mode()) + 1) % 3)); break;
         case b::F4: sb_.stopAll(); break;
         case b::F5: sb_.setToLoops(!sb_.toLoops()); break;
+        case b::F6: openPadEdit(); break;   // the loop editor on the pad (as S.Edit)
         case b::F8: goHome(); break;
         default: break;
     }
@@ -3696,7 +3743,86 @@ uint32_t App::editUnit(bool fine) const {
     return u ? u : 1;
 }
 
+uint32_t App::editLen() const {
+    if (!sbEdit_) return engine_.view(editTrack_).len.load();
+    const Soundboard::Slot& sl = sb_.slot(sbSel_);
+    return sl.state == Soundboard::SlotState::kReady ? sb_.outFrames(sbSel_, sl.frames) : 0;
+}
+
+uint32_t App::padFileFrame(uint32_t f) const {
+    const Soundboard::Slot& sl = sb_.slot(sbSel_);
+    const uint64_t q = uint64_t(f) * sl.rate / kSampleRate;
+    return q > sl.frames ? sl.frames : uint32_t(q);
+}
+
+void App::openPadEdit() {
+    // The selected pad in the loop editor: its whole WAV, the markers on the part it plays.
+    sbEdit_ = true;
+    sbWavePad_ = -1;   // RAM_G holds something else (the loop editor shares it)
+    sb_.scan(sbSel_);
+    const Soundboard::Slot& sl = sb_.slot(sbSel_);
+    const bool ready = sl.state == Soundboard::SlotState::kReady;
+    editA_ = ready ? sb_.outFrames(sbSel_, sl.from) : 0;
+    editB_ = ready ? sb_.outFrames(sbSel_, sl.to) : 0;
+    editMarker_ = 0;
+    confirm_ = -1;
+}
+
+void App::updatePadWave(uint32_t now) {
+    // The pad's waveform into the editor's bitmap as the card brings it (at
+    // most ten uploads a second: each is the whole 121 KB).
+    if (sb_.scanned() != sbSel_) {
+        sb_.scan(sbSel_);   // the pad changed under the editor (a load, a clear)
+        return;
+    }
+    if (sbWavePad_ == sbSel_ && sb_.scanVersion() == sbWaveVer_) return;
+    if (sbWavePad_ == sbSel_ && now - sbWaveMs_ < 100) return;
+    uint8_t* hl = gColL;
+    uint8_t* hr = gColR;
+    const int mid = kEditH / 2;
+    const uint8_t* pl = sb_.peaks(0);
+    const uint8_t* pr = sb_.peaks(1);
+    static_assert(int(kEditW) == Soundboard::kPeakCols, "a peak per editor column");
+    for (int x = 0; x < kEditW; ++x) {
+        hl[x] = uint8_t(int(pl[x]) * (mid - 1) / 255);
+        hr[x] = uint8_t(int(pr[x]) * (mid - 1) / 255);
+    }
+    uploadColumns(hl, hr, kEditW, kEditH, kEditRamG, nullptr, nullptr, true);
+    sbWavePad_ = sbSel_;
+    sbWaveVer_ = sb_.scanVersion();
+    sbWaveMs_ = now;
+    editValid_ = false;   // the loop editor draws its own again
+}
+
 void App::editKey(uint8_t id) {
+    if (sbEdit_) {   // on a pad: Trim sets the part it plays, Undo gives it all of the WAV again
+        const uint32_t len = editLen();
+        switch (id) {
+            case b::F1:
+            case b::Left: editMarker_ = 0; break;
+            case b::F2:
+            case b::Right: editMarker_ = 1; break;
+            case b::F3: editSnap_ = uint8_t((editSnap_ + 1) % 4); break;
+            case b::F4:
+                if (len && editB_ > editA_) sb_.setPart(sbSel_, padFileFrame(editA_), padFileFrame(editB_));
+                break;
+            case b::F7:
+                if (!len) break;
+                sb_.setPart(sbSel_, 0, sb_.slot(sbSel_).frames);
+                editA_ = 0;
+                editB_ = len;
+                break;
+            case b::F8: sbEdit_ = false; break;   // back to the board
+            case b::Up:
+            case b::Down:   // another pad
+                sbSel_ = (sbSel_ + (id == b::Up ? Soundboard::kSlots - 1 : 1)) % Soundboard::kSlots;
+                openPadEdit();
+                break;
+            default: break;
+        }
+        confirm_ = -1;
+        return;
+    }
     const int t = editTrack_;
     const uint32_t len = engine_.view(t).len.load();
     const uint32_t now = p_.clock->millis();
@@ -3748,7 +3874,7 @@ void App::editKey(uint8_t id) {
 
 void App::editEncoder(int delta) {
     // Move the selected marker by the snap unit, onto the snap grid.
-    const uint32_t len = engine_.view(editTrack_).len.load();
+    const uint32_t len = editLen();
     if (!len) return;
     const uint32_t u = editUnit(shift_);
     const uint32_t minSel = 64;
@@ -3777,34 +3903,50 @@ void App::fmtPos(char* buf, size_t n, uint32_t f) const {
 }
 
 void App::drawEditPage(uint32_t now) {
+    // A loop, or (sbEdit_) a pad's whole WAV with the part it plays a shade brighter.
+    const bool pad = sbEdit_;
     const int t = editTrack_;
     const TrackView& v = engine_.view(t);
-    const uint32_t tc = kTrackColor[t];
-    const uint32_t len = v.len.load();
+    const Soundboard::Slot& sl = sb_.slot(sbSel_);
+    const uint32_t tc = pad ? kAmber : kTrackColor[t];
+    const uint32_t len = editLen();
     char buf[64], a[16], bpos[16];
     color(tc);
     char nm[Files::kNameLen + 8];
-    std::snprintf(buf, sizeof buf, "EDIT  %s", trackLabel(t, nm, sizeof nm));
+    if (pad) std::snprintf(buf, sizeof buf, "EDIT  PAD %d  %.20s", sbSel_ + 1, sl.state == Soundboard::SlotState::kEmpty ? "" : sl.name);
+    else std::snprintf(buf, sizeof buf, "EDIT  %s", trackLabel(t, nm, sizeof nm));
     text(20, 22, kFontBig, Disp::kOptCenterY, buf);
     if (!len) {
         color(kDim);
-        text(400, 200, kFontBig, Disp::kOptCenter, "This track has no loop yet");
-        text(400, 236, kFontSmall, Disp::kOptCenter, "Up / Down: another track");
+        text(400, 200, kFontBig, Disp::kOptCenter,
+             !pad ? "This track has no loop yet"
+                  : sl.state == Soundboard::SlotState::kEmpty ? "This pad has no WAV (F1 on the board loads one)"
+                                                               : "This pad's WAV does not play");
+        text(400, 236, kFontSmall, Disp::kOptCenter, pad ? "Up / Down: another pad" : "Up / Down: another track");
         return;
     }
     color(kDim);
     fmtSeconds(a, sizeof a, len);
-    std::snprintf(buf, sizeof buf, "loop %s", a);
+    if (pad) {
+        fmtSeconds(bpos, sizeof bpos, sb_.length(sbSel_));
+        std::snprintf(buf, sizeof buf, "plays %s of %s", bpos, a);
+    } else {
+        std::snprintf(buf, sizeof buf, "loop %s", a);
+    }
     text(780, 22, kFontSmall, Disp::kOptRightX | Disp::kOptCenterY, buf);
-    if (v.busy.load() || engine_.editBusy()) {
-        color(kAmber);
-        text(560, 22, kFontSmall, Disp::kOptCenter, "working...");
+    const float scan = pad ? sb_.scanProgress() : 1.0f;
+    if (pad ? scan < 1.0f : (v.busy.load() || engine_.editBusy())) {
+        color(pad && scan < 0.0f ? kRed : kAmber);
+        if (!pad) std::snprintf(buf, sizeof buf, "working...");
+        else if (scan < 0.0f) std::snprintf(buf, sizeof buf, "the card did not read it");
+        else std::snprintf(buf, sizeof buf, "reading %d %%", int(scan * 100.0f));
+        text(560, 22, kFontSmall, Disp::kOptCenter, buf);
     }
 
     // The waveform: the selection bright, the rest dim; grid, markers, playhead.
     const int wx = 20, wy = 48, wx1 = wx + kEditW, wy1 = wy + kEditH;
     const int xa = wx + int(uint64_t(kEditW) * editA_ / len), xb = wx + int(uint64_t(kEditW) * editB_ / len);
-    if (editValid_) {
+    if (pad ? sbWavePad_ == sbSel_ : editValid_) {
         auto part = [&](int x0, int x1, float k) {
             if (x1 <= x0) return;
             scissor(x0, wy, x1 - x0, kEditH);
@@ -3812,12 +3954,18 @@ void App::drawEditPage(uint32_t now) {
             d_->drawL8(int16_t(wx), int16_t(wy), kEditRamG, kEditW, kEditH, 1);
             words_ += 13;
         };
-        part(wx, xa, 0.3f);
-        part(xa, xb, 1.0f);   // the selection: amber
-        part(xb, wx1, 0.3f);
+        // A pad: what it plays brighter than the rest of the file.
+        const int xp0 = pad ? wx + int(uint64_t(kEditW) * sb_.outFrames(sbSel_, sl.from) / len) : wx;
+        const int xp1 = pad ? wx + int(uint64_t(kEditW) * sb_.outFrames(sbSel_, sl.to) / len) : wx1;
+        int cut[6] = {wx, xa, xb, xp0, xp1, wx1};
+        std::sort(cut, cut + 6);
+        for (int k = 0; k < 5; ++k) {   // the selection amber, the part mid, the rest dim
+            const int m = (cut[k] + cut[k + 1]) / 2;
+            part(cut[k], cut[k + 1], m >= xa && m < xb ? 1.0f : (m >= xp0 && m < xp1 ? 0.55f : (pad ? 0.2f : 0.3f)));
+        }
         scissorOff();
     }
-    drawGrid(t, wx, wy, len, kEditW, kEditH);   // the selection shows as the bright part
+    if (!pad) drawGrid(t, wx, wy, len, kEditW, kEditH);   // the selection shows as the bright part
     for (int mk = 0; mk < 2; ++mk) {
         const int x = mk ? xb : xa;
         const bool sel = editMarker_ == mk;
@@ -3825,13 +3973,28 @@ void App::drawEditPage(uint32_t now) {
         vline(x, wy - 4, wy1 + 4, sel ? 40 : 24);
         fillRect(x - 7, wy1 + 4, x + 7, wy1 + 14, 3);   // the handle
     }
-    const uint32_t pos = v.pos.load();
-    color(kAmber);
-    vline(wx + int(uint64_t(kEditW) * (pos % len) / len), wy, wy1, 16);
+    uint32_t pos = 0;
+    bool head = true;
+    if (pad) {
+        uint32_t f = 0;
+        head = sb_.position(sbSel_, f);
+        pos = sb_.outFrames(sbSel_, f);
+    } else {
+        pos = v.pos.load();
+    }
+    if (head) {
+        color(kAmber);
+        vline(wx + int(uint64_t(kEditW) * (pos % len) / len), wy, wy1, 16);
+    }
 
-    // Selection readout
-    fmtPos(a, sizeof a, editA_);
-    fmtPos(bpos, sizeof bpos, editB_);
+    // Selection readout (a pad: in seconds from the start of the WAV)
+    if (pad) {
+        fmtSeconds(a, sizeof a, editA_);
+        fmtSeconds(bpos, sizeof bpos, editB_);
+    } else {
+        fmtPos(a, sizeof a, editA_);
+        fmtPos(bpos, sizeof bpos, editB_);
+    }
     char dur[16];
     fmtSeconds(dur, sizeof dur, editB_ - editA_);
     color(editMarker_ == 0 ? kSel : kDim);

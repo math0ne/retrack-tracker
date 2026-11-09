@@ -1,0 +1,81 @@
+# The loop editor on a sound board pad (S.Edit from S.Play): the pad's whole
+# WAV, the same markers and snap; Trim sets the part the pad plays (the WAV is
+# not changed), Undo gives it all of the file again. A press right after a
+# trim streams the new part from the card; a moment later its start is back
+# in SDRAM. The part is kept in the board file.
+wait 300
+tone off
+sd_wav 0wavs/a.wav 3.0 48000 24 2
+press SAMPLEPLAYBACK
+wait 50
+press F1
+wait 50
+press RIGHT
+wait 50
+press RIGHT
+wait 100
+expect_board pad 1 ready
+expect_board part 1 3000
+
+# The editor on pad 1: the waveform reads in from the card.
+press SAMPLEEDITOR
+wait 600
+screen ../build/sim/check/soundboard_edit.png
+# Snap: Beat -> 1/16 -> Free (10 ms a step). Start at 0.5 s, end at 2.0 s.
+press F3
+press F3
+press F1
+enc 50
+press F2
+enc -100
+press F4
+wait 50
+expect_board from 1 500
+expect_board part 1 1500
+screen ../build/sim/check/soundboard_edit_trim.png
+
+# A press at once: the part from the card, at pitch, 1.5 s long.
+reset_levels
+tap 0
+wait 300
+expect_board playing 1
+expect_pitch 440
+expect_audio 0.1
+wait 1300
+expect_board playing 0
+expect_board under 0
+# A moment later its start is in SDRAM again: the press sounds at once.
+wait 500
+card_speed 2 2 20
+tap 0
+wait 100
+expect_board playing 1
+wait 1500
+expect_board playing 0
+expect_board under 0
+card_speed 0
+
+# Kept with the board (the part line), then Undo: the whole WAV again.
+wait 1200
+expect_file Looper/soundboard.txt 40
+press F7
+wait 50
+expect_board from 1 0
+expect_board part 1 3000
+# Another pad (empty), back to pad 1, F8 back to the board; the pads still play there.
+press DOWN
+wait 50
+screen ../build/sim/check/soundboard_edit_empty.png
+press UP
+wait 50
+press F8
+wait 50
+tap 0
+wait 100
+expect_board playing 1
+# F6 opens it too; F8 back.
+press F6
+wait 50
+screen ../build/sim/check/soundboard_edit_f6.png
+press F8
+wait 50

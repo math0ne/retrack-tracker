@@ -73,6 +73,11 @@ void Soundboard::service() {
                 if (v.h >= 0 || v.left) v.stopGen.store(v.gen.load(std::memory_order_relaxed), std::memory_order_release);
                 closeVoice(v);
             }
+            if (scanH_ >= 0) {
+                p_->storage->close(scanH_);
+                scanH_ = -1;
+                scanFailed_ = true;
+            }
         }
         wasReady_ = false;
         return;
@@ -94,10 +99,9 @@ void Soundboard::service() {
         uint32_t bestAhead = 0xFFFFFFFFu;
         for (Voice& v : voices_) {
             if (v.h < 0 || !v.left) continue;
-            const Slot& s = slots_[v.slot];
             const uint32_t pos = v.ackGen.load(std::memory_order_acquire) == v.gen.load(std::memory_order_relaxed)
                                      ? v.pos.load(std::memory_order_relaxed) : 0;
-            const uint32_t used = pos > s.headFrames ? pos - s.headFrames : 0;
+            const uint32_t used = pos > v.next.headFrames ? pos - v.next.headFrames : 0;
             const uint32_t ahead = v.written > used ? v.written - used : 0;
             if (ahead < bestAhead) {
                 bestAhead = ahead;
@@ -106,12 +110,25 @@ void Soundboard::service() {
         }
         if (!best || !feed(*best)) break;
     }
-    // One slot start a call.
-    for (int i = 0; i < kSlots; ++i)
-        if (slots_[i].state == SlotState::kPending) {
+    // One slot start a call; a moved start once it has stayed put and the pad is quiet.
+    const uint32_t now = p_->clock ? p_->clock->millis() : 0;
+    for (int i = 0; i < kSlots; ++i) {
+        Slot& s = slots_[i];
+        if (s.state == SlotState::kPending) {
             openSlot(i, true);
             break;
         }
+        if (s.state == SlotState::kReady && s.headStale && int32_t(now - partMs_) >= 300 && !slotSounding(i)) {
+            const IStorage::Handle h = p_->storage->open(s.path, IStorage::kRead);
+            if (h < 0 || !readHead(i, h)) {   // a press streams it all from the card meanwhile
+                s.headStale = 1;
+                partMs_ = now;
+            }
+            if (h >= 0) p_->storage->close(h);
+            break;
+        }
+    }
+    if (scanH_ >= 0) scanStep();   // the pad editor's waveform: a read a call
     if (dirty_ && p_->clock && int32_t(p_->clock->millis() - dirtyMs_) >= 1000) {
         dirty_ = false;
         saveBoard();
@@ -124,7 +141,7 @@ bool Soundboard::feed(Voice& v) {
     const uint32_t ringF = ringFrames(fb), chunk = chunkFrames(fb);
     const uint32_t pos = v.ackGen.load(std::memory_order_acquire) == v.gen.load(std::memory_order_relaxed)
                              ? v.pos.load(std::memory_order_relaxed) : 0;
-    const uint32_t used = pos > s.headFrames ? pos - s.headFrames : 0;
+    const uint32_t used = pos > v.next.headFrames ? pos - v.next.headFrames : 0;
     if (v.written + chunk - used > ringF) return false;   // the ring is full
     const uint32_t n = v.left < chunk ? v.left : chunk;
     uint8_t* dst = ringOf(int(&v - voices_)) + size_t(v.written % ringF) * fb;
@@ -193,11 +210,11 @@ bool Soundboard::openSlot(int i, bool head) {
         s.frames = f.dataBytes / f.frameBytes;
         if (!s.frames) why = kNoSound;
     }
-    if (!why && head) {
-        const uint32_t fb = s.frameBytes;
-        s.headFrames = s.frames < kHeadBytes / fb ? s.frames : kHeadBytes / fb;
-        if (fs.read(h, headOf(i), s.headFrames * fb) != int32_t(s.headFrames * fb)) why = kCardError;
+    if (!why) {   // the part: the whole file unless the board says less
+        if (!s.to || s.to > s.frames) s.to = s.frames;
+        if (s.from >= s.to) s.from = 0;
     }
+    if (!why && head && !readHead(i, h)) why = kCardError;
     if (h >= 0) fs.close(h);
     if (why) {
         s.state = SlotState::kMissing;
@@ -211,9 +228,107 @@ bool Soundboard::openSlot(int i, bool head) {
     return true;
 }
 
-uint32_t Soundboard::length(int i) const {
+bool Soundboard::readHead(int i, IStorage::Handle h) {
+    Slot& s = slots_[i];
+    const uint32_t fb = s.frameBytes, part = s.to - s.from;
+    s.headFrames = 0;
+    s.headStale = 0;
+    if (!p_->storage->seek(h, s.dataOff + s.from * fb)) return false;
+    const uint32_t n = part < kHeadBytes / fb ? part : kHeadBytes / fb;
+    if (p_->storage->read(h, headOf(i), n * fb) != int32_t(n * fb)) return false;
+    s.headFrames = n;
+    return true;
+}
+
+uint32_t Soundboard::outFrames(int i, uint32_t f) const {
     const Slot& s = slots_[i];
-    return s.rate ? uint32_t(uint64_t(s.frames) * kSampleRate / s.rate) : 0;
+    return s.rate ? uint32_t(uint64_t(f) * kSampleRate / s.rate) : 0;
+}
+
+uint32_t Soundboard::length(int i) const { return outFrames(i, slots_[i].to - slots_[i].from); }
+
+bool Soundboard::slotSounding(int i) const {
+    for (const Voice& v : voices_)
+        if (v.slot == i && sounding(v)) return true;
+    return false;
+}
+
+void Soundboard::setPart(int i, uint32_t from, uint32_t to) {
+    if (i < 0 || i >= kSlots) return;
+    Slot& s = slots_[i];
+    if (s.state != SlotState::kReady) return;
+    const uint32_t minF = s.rate / 1000 ? s.rate / 1000 : 1;
+    if (s.frames <= minF) return;
+    if (to > s.frames) to = s.frames;
+    if (to < minF) to = minF;
+    if (from + minF > to) from = to - minF;
+    if (from != s.from) {   // the SDRAM part starts elsewhere: reloaded once the start stays put
+        s.headStale = 1;
+        partMs_ = p_->clock ? p_->clock->millis() : 0;
+    }
+    if (from == s.from && to == s.to) return;
+    s.from = from;
+    s.to = to;
+    markDirty();
+}
+
+void Soundboard::scan(int i) {
+    if (i == scanSlot_ && !scanFailed_) return;   // read already, or being read
+    if (scanH_ >= 0) p_->storage->close(scanH_);
+    scanH_ = -1;
+    scanSlot_ = -1;
+    if (i < 0 || i >= kSlots || slots_[i].state != SlotState::kReady || !cardOk()) return;
+    std::memset(mem_ + kPeakOff, 0, kPeakBytes);
+    scanSlot_ = i;
+    scanDone_ = 0;
+    scanFailed_ = !scanBuf_;
+    ++scanVer_;
+    if (scanFailed_) return;
+    const Slot& s = slots_[i];
+    scanH_ = p_->storage->open(s.path, IStorage::kRead);
+    if (scanH_ < 0 || !p_->storage->seek(scanH_, s.dataOff)) {
+        if (scanH_ >= 0) p_->storage->close(scanH_);
+        scanH_ = -1;
+        scanFailed_ = true;
+    }
+}
+
+void Soundboard::scanStep() {
+    // One read of the file: the loudest sample of each column it touches.
+    const Slot& s = slots_[scanSlot_];
+    const uint32_t fb = s.frameBytes;
+    const uint32_t cap = (scanBufBytes_ < kChunkBytes ? scanBufBytes_ : kChunkBytes) / fb;
+    const uint32_t n = s.frames - scanDone_ < cap ? s.frames - scanDone_ : cap;
+    if (!n || p_->storage->read(scanH_, scanBuf_, n * fb) != int32_t(n * fb)) {
+        p_->storage->close(scanH_);
+        scanH_ = -1;
+        scanFailed_ = n != 0;
+        ++scanVer_;
+        return;
+    }
+    uint8_t* pk[2] = {mem_ + kPeakOff, mem_ + kPeakOff + kPeakCols};
+    for (uint32_t k = 0; k < n; ++k) {
+        const uint32_t col = uint32_t(uint64_t(scanDone_ + k) * kPeakCols / s.frames);
+        const uint8_t* q = scanBuf_ + size_t(k) * fb;
+        for (int ch = 0; ch < 2; ++ch) {
+            float x = sampleOf(q + (s.mono ? 0 : ch * s.sampleBytes), s.sampleBytes, s.isFloat);
+            if (x < 0.0f) x = -x;
+            const int a = x >= 32767.0f ? 255 : int(x * (255.0f / 32767.0f));
+            if (a > pk[ch][col]) pk[ch][col] = uint8_t(a);
+        }
+    }
+    scanDone_ += n;
+    ++scanVer_;
+    if (scanDone_ >= s.frames) {
+        p_->storage->close(scanH_);
+        scanH_ = -1;
+    }
+}
+
+float Soundboard::scanProgress() const {
+    if (scanSlot_ < 0 || scanFailed_) return -1.0f;
+    const uint32_t f = slots_[scanSlot_].frames;
+    return f ? float(scanDone_) / float(f) : 1.0f;
 }
 
 bool Soundboard::assign(int i, const char* path) {
@@ -229,9 +344,11 @@ bool Soundboard::assign(int i, const char* path) {
     stop(i);
     for (Voice& v : voices_)
         if (v.slot == i) closeVoice(v);
+    if (scanSlot_ == i) scan(-1);
     Slot& s = slots_[i];
     std::snprintf(s.path, sizeof s.path, "%s", path);
     baseName(path, s.name, sizeof s.name);
+    s.from = s.to = 0;   // a new WAV: all of it
     s.state = SlotState::kPending;
     markDirty();
     if (!openSlot(i, true)) return false;
@@ -244,6 +361,7 @@ void Soundboard::clear(int i) {
     stop(i);
     for (Voice& v : voices_)
         if (v.slot == i) closeVoice(v);
+    if (scanSlot_ == i) scan(-1);
     std::memset(&slots_[i], 0, sizeof(Slot));
     std::snprintf(status_, sizeof status_, "Pad %d cleared", i + 1);
     markDirty();
@@ -268,16 +386,18 @@ void Soundboard::start(int i) {
     closeVoice(*v);
     const uint32_t fb = s.frameBytes;
     uint8_t* ring = ringOf(int(v - voices_));
-    uint32_t frames = s.frames;
+    // The part: its start from SDRAM (none while that is being moved), the rest from the card.
+    uint32_t frames = s.to - s.from;
+    const uint32_t head = s.headStale ? 0 : (s.headFrames < frames ? s.headFrames : frames);
     v->written = 0;
-    v->left = s.frames - s.headFrames;
+    v->left = frames - head;
     if (v->left) {   // the rest from the card, after the part in SDRAM
         v->h = p_->storage->open(s.path, IStorage::kRead);
-        if (v->h < 0 || !p_->storage->seek(v->h, s.dataOff + s.headFrames * fb)) {
+        if (v->h < 0 || !p_->storage->seek(v->h, s.dataOff + (s.from + head) * fb)) {
             closeVoice(*v);
-            frames = s.headFrames;   // the start alone
+            frames = head;   // the start alone
             std::snprintf(status_, sizeof status_, "%.30s: the card did not open it", s.name);
-        } else if (!s.headFrames) {   // nothing in SDRAM (the preview): its first chunk now
+        } else if (!head) {   // nothing in SDRAM (the preview, a moved start): its first chunk now
             const uint32_t n = v->left < chunkFrames(fb) ? v->left : chunkFrames(fb);
             if (p_->storage->read(v->h, ring, n * fb) == int32_t(n * fb)) {
                 v->written = n;
@@ -285,7 +405,7 @@ void Soundboard::start(int i) {
             }
         }
     }
-    v->next = Play_{s.headFrames ? headOf(i) : nullptr, ring, s.headFrames, frames, ringFrames(fb),
+    v->next = Play_{head ? headOf(i) : nullptr, ring, head, frames, ringFrames(fb),
                     uint32_t((uint64_t(s.rate) << 16) / kSampleRate), s.mono, uint8_t(i), s.sampleBytes, s.frameBytes,
                     s.isFloat};
     v->slot = i;
@@ -361,10 +481,18 @@ float Soundboard::progress(int i) const {
         if (v.stopGen.load(std::memory_order_relaxed) == g || v.order < order) continue;   // stopping
         order = v.order;
         const uint32_t pos = v.ackGen.load(std::memory_order_acquire) == g ? v.pos.load(std::memory_order_relaxed) : 0;
-        const uint32_t frames = slots_[i].frames ? slots_[i].frames : 1;
+        const uint32_t frames = v.next.frames ? v.next.frames : 1;
         best = float(pos) / float(frames);
     }
     return best > 1.0f ? 1.0f : best;
+}
+
+bool Soundboard::position(int i, uint32_t& frame) const {
+    const float p = progress(i);
+    if (p < 0.0f) return false;
+    const Slot& s = slots_[i];
+    frame = s.from + uint32_t(p * float(s.to - s.from));
+    return true;
 }
 
 int Soundboard::playing() const {
@@ -479,7 +607,8 @@ bool Soundboard::render(float* l, float* r, float* ol, float* orr, uint32_t n) {
 
 // ---------------------------------------------------------------------------
 // The board file: "mode N", "level N", "loops N", "send1 N", "send2 N",
-// "filter N", then "pad N path" lines.
+// "filter N", then "pad N path" lines, each with a "part N from to" line
+// after it (file frames) when the pad plays less than all of it.
 
 void Soundboard::loadBoard() {
     IStorage& fs = *p_->storage;
@@ -504,6 +633,12 @@ void Soundboard::loadBoard() {
             std::snprintf(s.path, sizeof s.path, "%s", sp + 1);
             baseName(s.path, s.name, sizeof s.name);
             s.state = SlotState::kPending;
+        } else if (!std::strncmp(ln, "part ", 5)) {   // clamped to the file when it opens
+            unsigned long from = 0, to = 0;
+            if (std::sscanf(ln + 5, "%d %lu %lu", &n, &from, &to) != 3 || n < 1 || n > kSlots) return;
+            Slot& s = slots_[n - 1];
+            s.from = uint32_t(from);
+            s.to = uint32_t(to);
         }
     };
     for (;;) {
@@ -540,8 +675,14 @@ void Soundboard::saveBoard() {
     auto put = [&](int n) { ok = ok && n > 0 && fs.write(h, line, uint32_t(n)) == n; };
     put(std::snprintf(line, sizeof line, "mode %d\nlevel %d\nloops %d\n", int(mode_), level(), toLoops_ ? 1 : 0));
     put(std::snprintf(line, sizeof line, "send1 %d\nsend2 %d\nfilter %d\n", send_[0], send_[1], filter_));
-    for (int i = 0; i < kSlots; ++i)
-        if (slots_[i].state != SlotState::kEmpty) put(std::snprintf(line, sizeof line, "pad %d %s\n", i + 1, slots_[i].path));
+    for (int i = 0; i < kSlots; ++i) {
+        const Slot& s = slots_[i];
+        if (s.state == SlotState::kEmpty) continue;
+        put(std::snprintf(line, sizeof line, "pad %d %s\n", i + 1, s.path));
+        if (s.from || (s.to && (!s.frames || s.to < s.frames)))   // (not opened yet: kept as read)
+            put(std::snprintf(line, sizeof line, "part %d %lu %lu\n", i + 1, static_cast<unsigned long>(s.from),
+                              static_cast<unsigned long>(s.to)));
+    }
     fs.close(h);
     if (!ok) {
         fs.remove(kBoardTmp);

@@ -41,6 +41,7 @@
 //                export (F5 track, F6 all)
 //   S.Load       the sample loader: a WAV from the card into the selected track
 //   S.Play       the sound board: four WAVs on pads 1-4, played from the card
+//                (S.Edit there: the loop editor on a pad; Trim sets the part it plays)
 //   Copy         the selected track into the next one (empty)
 //   Note/S.Edit  loop editor for the selected track: F1/F2 start/end marker,
 //                F3 snap, F4 trim, F5 cut, F6 erase (twice), F7 undo trim, F8 home;
@@ -133,6 +134,9 @@ private:
     // `whole`, only the columns that differ are drawn and sent.
     void renderBitmap(int t, uint32_t span, int w, int h, uint32_t ramg, uint8_t* prevL = nullptr,
                       uint8_t* prevR = nullptr, bool whole = true);
+    // Column heights (hl up from the centre line, hr down) as that bitmap.
+    void uploadColumns(const uint8_t* hl, const uint8_t* hr, int w, int h, uint32_t ramg, uint8_t* prevL,
+                       uint8_t* prevR, bool whole);
     void render(uint32_t now);
 
     // drawing helpers (count display-list words for the readout)
@@ -337,6 +341,18 @@ private:
     static bool sbFill(float* l, float* r, float* ol, float* orr, uint32_t n, void* ctx);
     void sbKey(uint8_t id);
     void drawSoundboard(uint32_t now);
+    // The loop editor on a pad (S.Edit on the board): the selected pad's whole
+    // WAV, the same markers and snap; Trim sets the part the pad plays, Undo
+    // gives it all of the file again (the WAV is not changed). Pads 1-4 still
+    // play; Up / Down another pad; F8 or S.Play back to the board.
+    bool sbEdit_ = false;
+    uint32_t sbWaveVer_ = 0;       // the peaks RAM_G holds (Soundboard::scanVersion)
+    uint32_t sbWaveMs_ = 0;
+    int sbWavePad_ = -1;
+    void openPadEdit();
+    void updatePadWave(uint32_t now);
+    uint32_t editLen() const;                       // loop frames, or the pad's whole WAV in output frames
+    uint32_t padFileFrame(uint32_t outFrame) const;  // the selected pad's file frame at that output frame
     const char* trackLabel(int t, char* buf, size_t n) const;   // its name, or "Track N"
     int strip_ = 0, row_ = kRows - 1;    // mixer selection
     // performance mode

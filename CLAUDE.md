@@ -91,7 +91,9 @@ home F-key labels and actions (`shiftLayer()`).
 - `soundboard.*` — the S.Play page's 4 WAV slots (any PCM / float WAV, any
   rate: raw file bytes in SDRAM and the rings, converted and resampled in
   `render`): each slot's start in SDRAM, the rest streamed per voice from the
-  card; also the sample loader's preview. Mixed in by the engine through
+  card; also the sample loader's preview. A pad plays a part of its WAV
+  (from / to, set by the loop editor on a pad: `sbEdit_` in App, a sub-page of
+  `sbPage_`); `scan()` reads the WAV's waveform for it. Mixed in by the engine through
   `Engine::setSource` (pads through the board's mixer strip, into the input
   when "to loops" is on; the preview to the output only). Its SDRAM comes off
   the top of the loop memory in `App::init`.

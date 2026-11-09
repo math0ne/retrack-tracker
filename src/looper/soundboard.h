@@ -12,7 +12,14 @@
 // The sample loader previews a WAV through it too (preview()): straight from
 // the card, to the output only (never into a take).
 //
-// The board (which WAV is on which pad, the play mode, the level, whether
+// Each pad plays a part of its WAV (start / end, in the file's frames): the
+// loop editor sets it on a pad (S.Edit from the board), over a waveform of
+// the whole file read from the card in the background (scan()).
+// They change nothing in the file. A new start reloads the part in SDRAM a
+// moment after the last change; until then a press streams it all from the
+// card.
+//
+// The board (which WAV is on which pad and its part, the play mode, the level, whether
 // takes record it, and its mixer strip: the sends and the DJ filter) is kept
 // in Looper/soundboard.txt; the slot starts load from the card in the
 // background at start-up.
@@ -51,17 +58,22 @@ public:
         char name[kNameLen];   // the file name without .wav
         uint32_t dataOff;      // where the samples start in the file
         uint32_t frames;       // at the file's rate
-        uint32_t headFrames;   // how many of them are in SDRAM
+        uint32_t from, to;     // the part a press plays, in file frames
+        uint32_t headFrames;   // how many of them (the first of the part) are in SDRAM
         uint32_t rate;
         uint8_t mono, sampleBytes, frameBytes, isFloat;
         SlotState state;
         uint8_t why;           // Why, when kMissing
-        uint8_t pad[2];
+        uint8_t spare;
+        uint8_t headStale;     // the start moved: the SDRAM part is reloaded (service())
     };
     static constexpr uint32_t kSlotBytes = (uint32_t((kSlots + 1) * sizeof(Slot)) + 15u) & ~15u;   // + the preview
     static constexpr uint32_t kScratchBytes = 4096;   // the engine's source blocks (Engine::setSource)
-    // SDRAM: the slot starts, the voice rings, the slot table, the scratch.
-    static constexpr uint32_t kMemBytes = kSlots * kHeadBytes + kVoices * kRingBytes + kSlotBytes + kScratchBytes;
+    static constexpr int kPeakCols = 760;              // the pad editor's waveform (App::kEditW)
+    static constexpr uint32_t kPeakBytes = (2u * kPeakCols + 15u) & ~15u;
+    // SDRAM: the slot starts, the voice rings, the slot table, the waveform, the scratch.
+    static constexpr uint32_t kMemBytes =
+        kSlots * kHeadBytes + kVoices * kRingBytes + kSlotBytes + kPeakBytes + kScratchBytes;
     uint8_t* scratch() const { return mem_ + (kMemBytes - kScratchBytes); }
 
     void init(const Platform* p, uint8_t* mem);   // mem: kMemBytes, 16-byte aligned
@@ -75,7 +87,21 @@ public:
     void stop(int slot);
     void stopAll();
     const Slot& slot(int i) const { return slots_[i]; }
-    uint32_t length(int slot) const;           // in output frames (44.1 kHz)
+    uint32_t length(int slot) const;           // the part it plays, in output frames (44.1 kHz)
+    uint32_t outFrames(int slot, uint32_t fileFrames) const;   // file frames in output frames
+
+    // The part a press plays (kept with the board).
+    void setPart(int slot, uint32_t from, uint32_t to);   // file frames, clamped (at least 1 ms)
+    // The waveform of a pad's whole file: the loudest sample of each of
+    // kPeakCols columns, per channel (0..255), read from the card a chunk per
+    // service(). buf: main-loop memory for the reads (kChunkBytes at least).
+    void scan(int slot);
+    void setScanBuffer(uint8_t* buf, uint32_t bytes) { scanBuf_ = buf; scanBufBytes_ = bytes; }
+    int scanned() const { return scanSlot_; }            // the pad the peaks are of (-1: none)
+    float scanProgress() const;                          // 0..1 while reading, 1 done, < 0 failed
+    uint32_t scanVersion() const { return scanVer_; }    // changes as the peaks grow
+    const uint8_t* peaks(int ch) const { return mem_ + kPeakOff + size_t(ch) * kPeakCols; }
+    bool position(int slot, uint32_t& frame) const;      // the file frame it plays; false when it does not
     static const char* whyText(uint8_t why);
     float progress(int slot) const;            // 0..1 while it plays, < 0 when it does not
     int playing() const;                       // voices sounding
@@ -105,6 +131,7 @@ public:
 
 private:
     static constexpr int kPreview = kSlots;   // the preview's slot (not kept in the board file)
+    static constexpr size_t kPeakOff = size_t(kSlots) * kHeadBytes + size_t(kVoices) * kRingBytes + kSlotBytes;
     struct Play_ {   // one play, as the audio thread needs it
         const uint8_t* head;
         const uint8_t* ring;
@@ -138,6 +165,9 @@ private:
     void closeVoice(Voice& v);
     bool feed(Voice& v);                       // one card read into its ring; false: nothing to do
     bool openSlot(int slot, bool head);        // the WAV's format (and its start into SDRAM)
+    bool readHead(int slot, ot::IStorage::Handle h);   // the part's start into SDRAM
+    bool slotSounding(int slot) const;
+    void scanStep();
     void loadBoard();
     void saveBoard();
     uint8_t* headOf(int slot) const { return mem_ + size_t(slot) * kHeadBytes; }
@@ -158,6 +188,14 @@ private:
     uint32_t dirtyMs_ = 0;
     void markDirty();
     std::atomic<uint32_t> underruns_{0};
+    uint32_t partMs_ = 0;          // the last start change (its SDRAM part reloads after a moment)
+    // The waveform scan (main loop)
+    uint8_t* scanBuf_ = nullptr;
+    uint32_t scanBufBytes_ = 0;
+    int scanSlot_ = -1;
+    ot::IStorage::Handle scanH_ = -1;
+    uint32_t scanDone_ = 0, scanVer_ = 0;
+    bool scanFailed_ = false;
     char status_[64] = {};
 };
 

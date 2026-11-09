@@ -187,7 +187,7 @@ are the selected track's options (see [Track options and tempo](../README.md#tra
 | Pattern | Home: the loop lanes, from any page; leaves performance mode |
 | Perform / Instr | Performance mode |
 | Master | Mixer page on / off (Shift + F8 there: name the strip's track) |
-| Note / S.Edit | Loop editor for the selected track |
+| Note / S.Edit | Loop editor for the selected track (on the sound board: the selected pad) |
 | S.Load | The sample loader: folders and WAVs on the card; Right / F1 opens a folder or loads the WAV into the selected track, Left / F2 up, F3 previews the WAV (to the output only; again: stop; Up / Down while it plays preview the next) |
 | S.Play | The sound board: four WAVs on pads 1-4, played from the card (see below) |
 | FX1 / FX2 | That effect slot's page on / off |
@@ -275,6 +275,7 @@ odd channels, an odd sample rate, empty, or a card error.
 | F3 PLAY | One-shot (every press plays it from the top), Toggle (a press starts it, the next stops it) or Gate (plays while held) |
 | F4 STOP | Stop everything the board plays |
 | F5 TO LOOPS | Yes: the board goes into the input, so the monitor plays it and a take records it. No: straight to the output only |
+| F6 EDIT (or S.Edit) | The loop editor on the selected pad (below) |
 | Encoder | The board's level |
 | F8 HOME | Back to the lanes (what plays goes on) |
 
@@ -283,13 +284,27 @@ stereo at 44.1 kHz, less at higher rates or bit depths), so it sounds the
 moment it is pressed; the rest is read from the card while it plays, 16 KB at
 a time into a 64 KB ring. The board has its own strip on the mixer (Right
 from Master): its two sends, a DJ filter and its level, with a meter; the
-filter is in what To loops records. The board (the WAV on each pad, the play
-mode, the level, To loops, the sends and the filter) is saved to
+filter is in what To loops records. The board (the WAV on each pad and the
+part it plays, the play mode, the level, To loops, the sends and the filter) is saved to
 `Looper/soundboard.txt` a second after a change and loaded at start-up; the
 WAV starts load in the background (a loading pad blinks). The board's 0.84 MB
 of SDRAM comes out of the loop memory, which is why a track holds about 20.4 s
 in RAM. To loops adds the board to the input as it is, so the Rec latency
 setting moves it that much early in a take.
+
+**Editing a pad.** S.Edit on the board opens the loop editor on the selected
+pad: the whole WAV (read from the card in the background; "reading N %" until
+it is all there), the part the pad plays a shade brighter, the selection
+amber, the playhead while it plays. The keys are the editor's: F1 / F2 (Left /
+Right) pick the start / end marker, the encoder moves it by the snap (F3: bar,
+beat, sixteenth or free, 10 ms; Shift a quarter of it), positions in seconds
+from the start of the WAV. F4 Trim makes the selection the part the pad plays;
+F7 Undo gives it the whole WAV again. Cut, Erase and copy / paste are for
+loops only. The WAV on the card is not changed: the part is kept with the
+board. Pads 1-4 still play (a pad pressed is the one the editor shows); Up /
+Down another pad; F8 or S.Play back to the board, S.Edit again too. A press
+right after a new start streams the part from the card; a moment later its
+start is in SDRAM again.
 
 ## Stop, mute and starting things
 

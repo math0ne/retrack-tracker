@@ -129,6 +129,10 @@ commands. All three should stay 0 in plain playback.
   its cell.
 - **Preview (S.Load F3):** plays the selected WAV at once; Up / Down while it
   plays moves it on; leaving the page stops it; a take never records it.
+- **Editing a pad (S.Play, S.Edit):** a long WAV on pad 1; the waveform
+  fills in within a few seconds. Snap Free, trim to a few seconds in the
+  middle: pad 1 plays just that, at once and with no gap, again a second
+  later. F7: all of it. Power off and on: the trim comes back.
 - **Board strip (Master, Right from Master):** its level, sends and filter
   change the board; power off and on, they come back.
 - **Monitor through the DJ filter:** play into the input with the selected

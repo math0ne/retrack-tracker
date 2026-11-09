@@ -181,7 +181,8 @@ and on an empty session it sets the bar. Longer than the track's RAM, it goes
 on to the card like a long take. F3 there previews a WAV. S.Play is a sound
 board: a WAV on each of the top row's first four pads (any PCM or float WAV,
 any rate), played from the card over the loops (one at a time; one-shot,
-toggle or gate), into the input so a take records it if you like. Config holds
+toggle or gate), into the input so a take records it if you like; S.Edit
+there opens the loop editor on a pad, where Trim sets the part it plays. Config holds
 the settings, the recording latency, a firmware flasher (the way back to the
 stock firmware) and MIDI: clock out or follow, and eight learnable footswitch actions. Song opens
 a seven-chapter manual on the device.
@@ -230,7 +231,7 @@ included, is in [the reference](docs/REFERENCE.md#controls).
 | Pattern | Home: the loop lanes, from any page; leaves performance mode |
 | Perform (or Instr) | Performance mode: tap to latch, hold for while held |
 | Master | The mixer |
-| Note (or S.Edit) | The loop editor for the selected track |
+| Note (or S.Edit) | The loop editor for the selected track (on the sound board: the selected pad) |
 | S.Load | Load a WAV from the card into the selected track |
 | S.Play | The sound board: four WAVs on pads 1-4, played from the card |
 | FX1 / FX2 | That send effect's page |

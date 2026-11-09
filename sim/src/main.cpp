@@ -53,8 +53,10 @@
 //   expect_below MAX              fail unless the output peak since the last reset < MAX, then reset
 //   expect_perf TRACK FX on|off   performance effect FX (1..8, pad columns 5..12) running
 //   expect_board playing N | preview N | under MAX | filter N | send S N | level N |
-//                pad N ready|empty|missing   the sound board: voices sounding, the loader's
-//                                 preview, blocks it ran short of card data, its mixer strip, a pad's WAV
+//                pad N ready|empty|missing | part N MS | from N MS   the sound board: voices
+//                                 sounding, the loader's preview, blocks it ran short of card data,
+//                                 its mixer strip, a pad's WAV, the part a pad plays (length, start;
+//                                 within 15 ms)
 //   shot PATH          PNG of the front panel; screen PATH = the 800x480 screen only
 #include <random>
 #include <SDL.h>
@@ -855,6 +857,16 @@ struct Headless {
                 } else if (arg == "under") {
                     got = long(sb.underruns());
                     pass = got <= std::atol(want.c_str());
+                } else if (arg == "part" || arg == "from") {
+                    std::string ms;
+                    in >> ms;
+                    const int i = std::atoi(want.c_str()) - 1;
+                    if (i >= 0 && i < looper::Soundboard::kSlots) {
+                        const uint32_t f = arg == "part" ? sb.length(i) : sb.outFrames(i, sb.slot(i).from);
+                        got = long(uint64_t(f) * 1000 / looper::kSampleRate);
+                    }
+                    pass = got >= 0 && std::labs(got - std::atol(ms.c_str())) <= 15;
+                    want += " " + ms;
                 } else if (arg == "pad") {
                     std::string st;
                     in >> st;
