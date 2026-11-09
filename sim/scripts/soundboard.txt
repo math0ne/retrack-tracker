@@ -1,0 +1,134 @@
+# The sound board (S.Play): a WAV on a pad, played from the card (its start
+# from SDRAM, the rest streamed), into the input so a take records it; the
+# play modes; the board kept on the card. Then File F7: a new project.
+wait 300
+opt all start 0
+tone_shape steady
+tone 330
+tap 0
+wait 2000
+tap 0
+tone off
+expect_len 1 2.0
+# Track 1's export: a 2 s WAV for the board.
+press FILE
+wait 50
+press F5
+wait 2000
+expect_file Looper/Export/001/track1.wav 352844
+press F8
+# Track 1 muted: only the board sounds. Track 2 selected for the take below.
+tap 2
+press DOWN
+press SAMPLEPLAYBACK
+wait 50
+screen ../build/sim/check/soundboard_empty.png
+# F1: the WAV for pad 1 (selected), from the sample loader:
+# Looper / Export / 001 / track1.wav.
+press F1
+wait 50
+press RIGHT
+wait 30
+press RIGHT
+wait 30
+press RIGHT
+wait 30
+screen ../build/sim/check/soundboard_pick.png
+press RIGHT
+wait 100
+expect_board pad 1 ready
+wait 1200
+expect_file Looper/soundboard.txt 30
+
+# One-shot: a slow card (the rest streams behind the start in SDRAM).
+card_speed 2 2 20
+reset_levels
+tap 0
+wait 100
+expect_board playing 1
+wait 900
+expect_audio 0.05
+screen ../build/sim/check/soundboard_playing.png
+wait 1300
+expect_board playing 0
+expect_board under 0
+reset_levels
+wait 200
+expect_silent
+card_speed 0
+
+# Toggle: a press starts it, the next stops it.
+press F3
+tap 0
+wait 300
+expect_board playing 1
+tap 0
+wait 50
+expect_board playing 0
+reset_levels
+wait 100
+expect_silent
+
+# Gate: plays while held.
+press F3
+down 0
+wait 500
+expect_board playing 1
+up 0
+wait 50
+expect_board playing 0
+
+# One-shot again: each press starts it from the top (the last one fades out).
+press F3
+expect_board pad 2 empty
+tap 0
+wait 20
+tap 0
+wait 20
+tap 0
+wait 20
+expect_board playing 1
+press F4
+wait 50
+expect_board playing 0
+
+# Into the loops: a take on track 2 while the pad plays records it.
+press REC
+tap 0
+wait 1000
+press REC
+wait 2500
+press F8
+expect_state 2 PLAY
+reset_levels
+wait 1000
+expect_audio 0.02
+
+# Not into the loops (F5): a take on track 3 records silence. Track 2 muted.
+press SAMPLEPLAYBACK
+press F5
+press F8
+tap 14
+press DOWN
+press SAMPLEPLAYBACK
+press REC
+tap 0
+wait 1000
+press REC
+wait 2500
+expect_state 3 PLAY
+reset_levels
+wait 1000
+expect_silent
+
+# File F7 twice: a new project, every loop cleared.
+press FILE
+wait 50
+press F7
+wait 50
+screen ../build/sim/check/files_new.png
+press F7
+wait 500
+expect_state 1 EMPTY
+expect_state 2 EMPTY
+expect_state 3 EMPTY

@@ -22,6 +22,11 @@ namespace looper {
 
 class Streamer;
 
+// A WAV's format and where its samples start (the file left there): 16-bit
+// PCM only; rate is the file's (the caller checks it).
+bool wavInfo(ot::IStorage& fs, ot::IStorage::Handle h, uint32_t& channels, uint32_t& rate, uint32_t& dataBytes,
+             uint32_t& dataOff);
+
 // Settings kept across power-offs (the Config page).
 struct Config {
     uint8_t brightness = 2;   // 0 low, 1 medium, 2 high
@@ -61,6 +66,9 @@ public:
     bool save(bool asNew);          // asNew or no current project: the number after the highest
     bool load(int number);
     bool exportTracks(uint8_t mask);   // bit t = track t; each export is a new numbered folder
+    // A new project: no project number (F1 saves the next one), no track
+    // names. The caller clears the loops. False while a job runs.
+    bool newProject();
 
     void service();                 // main loop: one step of the running job
     bool busy() const { return kind_ != kNone; }

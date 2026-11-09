@@ -50,6 +50,8 @@
 //                                 input, from its start, looping (in place of the tone)
 //   expect_below MAX              fail unless the output peak since the last reset < MAX, then reset
 //   expect_perf TRACK FX on|off   performance effect FX (1..8, pad columns 5..12) running
+//   expect_board playing N | under MAX | pad N ready|empty   the sound board: voices sounding,
+//                                 blocks it ran short of card data, a pad's WAV
 //   shot PATH          PNG of the front panel; screen PATH = the 800x480 screen only
 #include <random>
 #include <SDL.h>
@@ -757,6 +759,31 @@ struct Headless {
                 const bool pass = got >= 0 && (field == "long" ? got == w : got <= w);
                 std::printf("%s:%d: expect_stream %s %s %s %s (%ld)\n", path.c_str(), lineNo, arg.c_str(), field.c_str(),
                             want.c_str(), pass ? "PASS" : "FAIL", got);
+                ok = ok && pass;
+            } else if (cmd == "expect_board") {
+                // expect_board playing N | under MAX | pad N ready|empty: the sound board
+                std::string want;
+                in >> want;
+                const looper::Soundboard& sb = m.app.soundboard();
+                long got = -1;
+                bool pass = false;
+                if (arg == "playing") {
+                    got = sb.playing();
+                    pass = got == std::atol(want.c_str());
+                } else if (arg == "under") {
+                    got = long(sb.underruns());
+                    pass = got <= std::atol(want.c_str());
+                } else if (arg == "pad") {
+                    std::string st;
+                    in >> st;
+                    const int i = std::atoi(want.c_str()) - 1;
+                    if (i >= 0 && i < looper::Soundboard::kSlots) got = long(sb.slot(i).state);
+                    pass = (st == "ready" && got == long(looper::Soundboard::SlotState::kReady)) ||
+                           (st == "empty" && got == long(looper::Soundboard::SlotState::kEmpty));
+                    want += " " + st;
+                }
+                std::printf("%s:%d: expect_board %s %s %s (%ld)\n", path.c_str(), lineNo, arg.c_str(), want.c_str(),
+                            pass ? "PASS" : "FAIL", got);
                 ok = ok && pass;
             } else if (cmd == "expect_mode") {
                 // expect_mode TRACK NAME: the track's playback mode, its label without spaces

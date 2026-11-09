@@ -1,6 +1,6 @@
-# Long takes: past ~19.5 s (its RAM less the 2 s ring) a take goes on to the
+# Long takes: past ~18.2 s (its RAM less the 2 s ring) a take goes on to the
 # track's stream file on the card, up to 5 minutes. A 30 s take: 330 Hz bursts
-# for 15 s, then 660 Hz; the 660 Hz part from 19.5 s on plays from the card.
+# for 15 s, then 660 Hz; the 660 Hz part from 18.2 s on plays from the card.
 wait 300
 opt all start 0
 # On bar (the default): 15 bars of 2 s, so the bar (120 bpm) is the tempo's.
@@ -60,6 +60,7 @@ press F5
 press F2
 wait 50
 expect_mode 1 Reverse
+press PATTERN
 tap 11
 wait 300
 reset_levels
@@ -81,6 +82,7 @@ press F5
 press F3
 wait 50
 expect_mode 1 Ping-pong
+press PATTERN
 wait 500
 reset_stream 1
 wait 61000
@@ -90,15 +92,18 @@ press F5
 press F1
 wait 50
 expect_mode 1 Forward
+press PATTERN
 shot ../build/sim/check/stream_hint.png
 press F5
 press F4
 wait 50
 expect_mode 1 Halfspeed
+press PATTERN
 press F5
 press F1
 wait 50
 expect_mode 1 Forward
+press PATTERN
 
 # A jump into the card part: a moment of silence while the ring refills, then sound.
 tap 10
@@ -223,7 +228,7 @@ wait 2000
 expect_pitch 330
 
 # A mono take (Mono L on track 2): twice the frames per byte, so it goes to the
-# card past ~39 s. 50 s: 440 Hz, then 880 Hz from 30 s on.
+# card past ~36 s. 50 s: 440 Hz, then 880 Hz from 30 s on.
 tap 2
 tone 440
 tone_ch left
@@ -260,6 +265,7 @@ press F5
 press F2
 wait 50
 expect_mode 2 Reverse
+press PATTERN
 tone 550
 tone_ch left
 hold SHIFT
@@ -328,6 +334,7 @@ press F5
 press F1
 wait 50
 expect_mode 2 Forward
+press PATTERN
 press SAMPLEEDITOR
 wait 100
 shot ../build/sim/check/stream_editor.png
@@ -428,6 +435,7 @@ press F8
 press F4
 wait 50
 expect_mode 3 Granular
+press PATTERN
 # The RAM part (second eighth), then the card part (from 22.5 s).
 tap 29
 wait 500

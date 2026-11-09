@@ -5,7 +5,7 @@
 card_speed 8 16 1 150 64
 wait 300
 tone_shape steady
-# Track 1: a long take, 330 Hz to 14 s, then 660 Hz (from the card after 19.5 s).
+# Track 1: a long take, 330 Hz to 14 s, then 660 Hz (from the card after 18.2 s).
 tone 330
 tap 0
 wait 16000
@@ -81,6 +81,7 @@ press F5
 press F2
 wait 50
 expect_mode 1 Reverse
+press PATTERN
 tap 4
 wait 300
 reset_stream 1

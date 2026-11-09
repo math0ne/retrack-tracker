@@ -25,6 +25,8 @@
 //                       col 4 CLEAR, cols 5..12 jump to that eighth of the loop
 //   Rec / Play   record-overdub the selected track / transport start-stop
 //   Delete       clear the selected track (Shift: all)   Up/Down  select track
+//   Left/Right   (home) lock the selected track's loop length: hold + encoder in
+//                bars, a tap a bar less / more (the same as Shift + F5's length)
 //   Encoder      selected track volume (Shift: input gain)
 //   Shift+Play   metronome on/off
 //   Config       settings; F1 there: Firmware (flash an image from /Firmware)
@@ -35,8 +37,10 @@
 //   Master       mixer page on/off (Shift + F8: name the strip's track)
 //   FX1 / FX2    that effect slot's page on/off
 //   Config       settings: display and pad brightness, headphones, input, monitor
-//   File         projects (F1 save, F2 save new, F3 load, F4 name) and WAV export (F5 track, F6 all)
+//   File         projects (F1 save, F2 save new, F3 load, F4 name, F7 new: twice) and WAV
+//                export (F5 track, F6 all)
 //   S.Load       the sample loader: a WAV from the card into the selected track
+//   S.Play       the sound board: four WAVs on pads 1-4, played from the card
 //   Copy         the selected track into the next one (empty)
 //   Note/S.Edit  loop editor for the selected track: F1/F2 start/end marker,
 //                F3 snap, F4 trim, F5 cut, F6 erase (twice), F7 undo trim, F8 home;
@@ -59,6 +63,15 @@
 // (level). F1..F7 or Left/Right pick a strip, Up/Down a row, the encoder sets
 // it (Shift: fine). F8 home.
 //
+// Sound board (S.Play): four cells, one per pad of the top row's first four,
+// each holding a WAV from the card. A pad plays its WAV over the loops (into
+// the input too, so a take records it), one at a time: a press stops what
+// plays. Left / Right (or Shift + pad) select a pad without playing it. F1 picks the selected pad's WAV (the sample loader),
+// F2 clears the pad (press twice), F3 the play mode (one-shot: from the top
+// at every press; toggle: a press starts, the next stops; gate: plays while
+// held), F4 stops everything, F5 whether takes record it, F8 home. The
+// encoder sets the board's level.
+//
 // FX page (FX1 / FX2): the effect's picture on top, its knobs below. F1 TYPE
 // opens the type bar (the labels become the five effect types; the key under
 // one picks it), F2..F5 pick a knob, F6 the return, F7 the other slot, F8 home.
@@ -73,6 +86,7 @@
 
 #include "looper/engine.h"
 #include "looper/files.h"
+#include "looper/soundboard.h"
 #include "looper/stream.h"
 #include "looper/platform.h"
 
@@ -85,6 +99,7 @@ public:
     const Engine& engine() const { return engine_; }   // read-only, for the simulator's checks
     const Files& files() const { return files_; }
     const Streamer& streamer() const { return streamer_; }
+    const Soundboard& soundboard() const { return sb_; }
     uint8_t inputGain() const { return cfg_.gain; }
     uint32_t lastWords() const { return lastWords_; }   // the last frame's display list
     void postMix(MixParam p, int track, int v) {        // the simulator's mix command
@@ -185,7 +200,8 @@ private:
     // Performance mode on the mixer: F1..F8 play the eight effects on every track at once.
     void perfAll(int fx, bool down);   // an effect's F-key: on / off (latched: Shift) on every track
     bool perfKeys() const {       // performance mode on the home page: F1..F8 play the effects on every track
-        return perf_ && !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_;
+        return perf_ && !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !sbPage_ &&
+               !samples_ && !nameEdit_;
     }
     uint8_t heldPads_[kTracks] = {};   // held effect pads per track
     float perfShown_ = 0.0f;
@@ -235,6 +251,12 @@ private:
     float lenShown_ = 0.0f, thrShown_ = 0.5f;
     void shiftKeyUp(uint32_t ms);
     bool shiftLayer() const;          // the Shift layer is on the F-keys
+    // Left / Right on the home page: lock the selected track's loop length
+    // before a take (hold + encoder: whole bars; tap: a bar less / more).
+    bool lenHeld_ = false, lenTurned_ = false;
+    uint32_t lenDownMs_ = 0;
+    void stepLength(int bars);        // the selected track's fixed length, whole bars (0: off)
+    void lengthText(int beats, char* buf, size_t n) const;   // "Off", "2 bars", "6 beats"
     uint32_t lastPos_[kTracks] = {};  // the playhead trail: last frame's read position
     int8_t pingDir_[kTracks] = {1, 1, 1, 1};   // ping-pong: the way it is going
     // F7 on the home page: hold + encoder = the selected track's volume
@@ -300,6 +322,16 @@ private:
     int sampleSel_ = 0;
     void sampleKey(uint8_t id);
     void drawSamples();
+    // The sound board (S.Play): four WAVs on pads 1-4, played from the card over
+    // the loops. Those pads play them; Left / Right move the selection; F1 picks the
+    // selected pad's WAV in the sample loader (sbAssign_: that pad).
+    Soundboard sb_;
+    bool sbPage_ = false;
+    int sbSel_ = 0;
+    int sbAssign_ = -1;
+    static bool sbFill(float* l, float* r, uint32_t n, void* ctx);
+    void sbKey(uint8_t id);
+    void drawSoundboard(uint32_t now);
     const char* trackLabel(int t, char* buf, size_t n) const;   // its name, or "Track N"
     int strip_ = 0, row_ = kRows - 1;    // mixer selection
     // performance mode

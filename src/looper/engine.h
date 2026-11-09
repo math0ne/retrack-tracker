@@ -341,6 +341,21 @@ public:
     uint8_t measureState() const { return measState_.load(std::memory_order_acquire); }
     uint16_t measured() const { return measFrames_.load(std::memory_order_relaxed); }
     void render(int16_t* out, const int16_t* in, uint32_t frames);   // audio thread
+    // A sound source played over the loops (the sound board): render() calls it
+    // each block to add into l / r (int16 scale); false when it is silent. Into
+    // the input too (setSourceToInput), it is monitored and takes record it.
+    using SourceFn = bool (*)(float* l, float* r, uint32_t n, void* ctx);
+    // Before the audio starts. scratch: kSourceScratchBytes for the source's
+    // blocks (off the internal RAM, which is tight).
+    static constexpr uint32_t kSourceScratchBytes = 128 * 4 * 2 + 256 * 2;
+    void setSource(SourceFn fn, void* ctx, void* scratch) {
+        srcL_ = static_cast<float*>(scratch);
+        srcR_ = srcL_ + 128;
+        inMix_ = reinterpret_cast<int16_t*>(srcR_ + 128);
+        srcCtx_ = ctx;
+        srcFn_ = fn;
+    }
+    void setSourceToInput(bool on) { srcToIn_.store(on, std::memory_order_relaxed); }
 
     const TrackView& view(int t) const { return view_[t]; }
     const TrackMemory& memory(int t) const { return mem_[t]; }
@@ -405,6 +420,12 @@ public:
     float baseTempo() const;   // the recorded tempo (from the bar); the tempo now = baseTempo() * speed()
 
 private:
+    SourceFn srcFn_ = nullptr;
+    void* srcCtx_ = nullptr;
+    std::atomic<bool> srcToIn_{true};
+    float* srcL_ = nullptr;     // the source's block (setSource's scratch)
+    float* srcR_ = nullptr;
+    int16_t* inMix_ = nullptr;  // the input with the source in it
     struct Grain {
         uint64_t pos16 = 0;          // read position, 16.16 frames
         uint32_t age = 0;            // output frames since the grain started

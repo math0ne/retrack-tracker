@@ -59,6 +59,7 @@ shot ../build/sim/check/stretch_lanes.png
 press DOWN
 press F5
 press F2
+press F2
 wait 200
 reset_levels
 wait 1000

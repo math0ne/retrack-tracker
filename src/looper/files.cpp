@@ -49,7 +49,8 @@ void wavHeader(uint8_t* h, uint32_t channels, uint32_t frames) {
 
 // Walks the chunks to "data"; leaves the file there. 16-bit PCM only; rate is
 // the file's sample rate (the caller checks it).
-bool parseWav(IStorage& fs, IStorage::Handle h, uint32_t& channels, uint32_t& rate, uint32_t& dataBytes) {
+bool parseWav(IStorage& fs, IStorage::Handle h, uint32_t& channels, uint32_t& rate, uint32_t& dataBytes,
+              uint32_t* dataOff = nullptr) {
     uint8_t b[16];
     if (fs.read(h, b, 12) != 12 || std::memcmp(b, "RIFF", 4) || std::memcmp(b + 8, "WAVE", 4)) return false;
     uint32_t pos = 12, bits = 0;
@@ -60,6 +61,7 @@ bool parseWav(IStorage& fs, IStorage::Handle h, uint32_t& channels, uint32_t& ra
         const uint32_t size = get32(b + 4);
         if (!std::memcmp(b, "data", 4)) {
             dataBytes = size;
+            if (dataOff) *dataOff = pos;
             return channels && bits == 16;
         }
         if (!std::memcmp(b, "fmt ", 4) && size >= 16) {
@@ -96,6 +98,20 @@ inline uint8_t peak8(int v) {
 }
 
 }  // namespace
+
+bool wavInfo(IStorage& fs, IStorage::Handle h, uint32_t& channels, uint32_t& rate, uint32_t& dataBytes,
+             uint32_t& dataOff) {
+    return parseWav(fs, h, channels, rate, dataBytes, &dataOff);
+}
+
+bool Files::newProject() {
+    if (busy()) return false;
+    current_ = 0;
+    partial_ = false;
+    for (char* n : trackName_) n[0] = 0;
+    std::snprintf(status_, sizeof status_, "New project: F1 saves it");
+    return true;
+}
 
 void Files::init(Engine* engine, const Platform* p) {
     engine_ = engine;

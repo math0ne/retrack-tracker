@@ -1,0 +1,38 @@
+# Performance mode: Shift + an effect's F-key latches it on every track
+# (again: off); Shift + an effect pad latches it on that track.
+wait 300
+opt all start 0
+tone_shape steady
+tone 330
+tap 0
+wait 2000
+tap 0
+wait 300
+tone off
+press PERFORMANCE
+wait 100
+hold SHIFT
+wait 100
+screen ../build/sim/check/perf_latch_shift.png
+press F3
+release SHIFT
+wait 100
+expect_perf 1 3 on
+screen ../build/sim/check/perf_latch_on.png
+hold SHIFT
+press F3
+release SHIFT
+wait 100
+expect_perf 1 3 off
+# A pad: Shift + pad latches it on its track, again unlatches.
+hold SHIFT
+tap 5
+release SHIFT
+wait 100
+expect_perf 1 2 on
+hold SHIFT
+tap 5
+release SHIFT
+wait 100
+expect_perf 1 2 off
+press PATTERN

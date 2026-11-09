@@ -84,7 +84,8 @@ characters) builds version X.Y, runs the simulator checks and publishes a
 release with `PolyendTracLooperv<XY>.ptf` and an SD-card zip. Plain pushes
 don't build; Actions > build > Run workflow makes a test build (the image as
 the run's artifact, no release). The build is reproducible: the same commit
-gives a byte-identical image here and on CI.
+gives a byte-identical image here and on CI. A release's notes start with
+`docs/releases/vX.Y.md` when the tag has one.
 
 ```
 git tag v0.2
@@ -121,7 +122,7 @@ while it is muted.
 | F2 PLAY | Stop: the track goes silent and back to its start. Play: it starts again from its start on the next bar line (press again to cancel) |
 | F3 MUTE | Mute on/off |
 | F4 TEMPO | Tap: metronome on/off (the label is bright while it is on). Hold + encoder: tempo, 1 bpm a step (a knob shows while held). Shift + hold + encoder: click level. Delete clears tracks |
-| F5 MODE | Tap: the mode bar, two pages of playback modes; the key under one picks it, F8 in the bar turns the page (it opens on the page with the track's mode). Any other key closes it. Hold on a Granular track: the grain menu, which stays open (F1–F4 and F6–F7 pick a knob, the encoder turns it, F8 is blank, F5 closes it) |
+| F5 MODE | Tap: the mode bar, two pages of playback modes; the key under one picks it and the bar stays open, so you can try several; the lit one again closes it. F8 in the bar turns the page (it opens on the page with the track's mode). Any other key closes it. Hold on a Granular track: the grain menu, which stays open (F1–F4 and F6–F7 pick a knob, the encoder turns it, F8 is blank, F5 closes it) |
 | F6 INPUT | Tap: the Input page (the cell shows the source and the input level). Hold + encoder: input gain (a knob with the input level shows while held) |
 | F7 VOLUME | The selected track's volume, with its output level in the cell. Tap: its strip on the mixer (level, sends, filter). Hold + encoder: a volume knob (the encoder alone sets it too) |
 | F8 UNDO | Undo the last overdub or replace; after an undo it reads REDO and brings it back |
@@ -181,12 +182,14 @@ are the selected track's options (see [Track options and tempo](../README.md#tra
 | Play | Transport: everything stops, or starts from bar 1 (what was playing plays, stopped tracks stay stopped); Shift + Play: metronome on / off |
 | Delete | Clear the selected track; Shift + Delete clears all |
 | Up / Down, any pad | Select track |
+| Left / Right | Lock the selected track's loop length before a take: hold + encoder sets it in bars (down to Off), a tap is a bar less / more. One Rec press then records exactly that long |
 | Encoder | Selected track volume; Shift + encoder = input gain |
 | Pattern | Home: the loop lanes, from any page; leaves performance mode |
 | Perform / Instr | Performance mode |
 | Master | Mixer page on / off (Shift + F8 there: name the strip's track) |
 | Note / S.Edit | Loop editor for the selected track |
 | S.Load | The sample loader: folders and WAVs on the card; Right / F1 opens a folder or loads the WAV into the selected track, Left / F2 up |
+| S.Play | The sound board: four WAVs on pads 1-4, played from the card (see below) |
 | FX1 / FX2 | That effect slot's page on / off |
 | Config | Settings page (F1 firmware, F2 MIDI, F3 measure the recording latency) |
 | File | Projects (save / load / name) and WAV export |
@@ -229,6 +232,7 @@ firmware or OpenTracker, and the way to install a new looper build.
 | F3 LOAD | Load the selected project (Up/Down); press twice, it replaces the loops you have |
 | F5 EXPORT | The selected track as a WAV |
 | F6 EXPORT | Every track with a loop as WAVs |
+| F7 NEW | A new project: press twice; every loop is cleared, the track names too, and F1 then saves the next numbered project. The settings stay |
 | F8 HOME | Back to the lanes |
 
 A project is a folder `Looper/Projects/NNN`: `project.bin` and `trackN.wav` per
@@ -250,6 +254,35 @@ clearing, undo and the editor's edits on a track being saved or exported.
 A load that has to leave a track out (an unreadable or non-44.1 kHz WAV, a
 long take with no card ready) says which, and F1 then saves a new project
 instead of overwriting the original.
+
+## Sound board (S.Play)
+
+**S.Play** opens four cells, one for each of the top row's first four pads:
+each can hold a WAV from the card (16-bit PCM, 44.1 kHz, mono or stereo, any
+length). On this page those pads play their WAVs over the loops, one at a
+time: a press stops what plays (a 3 ms fade) and starts its own. Shift + pad
+or Left / Right select a pad without playing it. The other pads do nothing
+here.
+
+| Key | Action |
+|---|---|
+| F1 LOAD | Pick the selected pad's WAV in the sample loader (Right / F1 puts it on the pad; S.Play goes back) |
+| F2 CLEAR | Take the WAV off the selected pad (press twice) |
+| F3 PLAY | One-shot (every press plays it from the top), Toggle (a press starts it, the next stops it) or Gate (plays while held) |
+| F4 STOP | Stop everything the board plays |
+| F5 TO LOOPS | Yes: the board goes into the input, so the monitor plays it and a take records it. No: straight to the output only |
+| Encoder | The board's level |
+| F8 HOME | Back to the lanes (what plays goes on) |
+
+Each pad keeps the first second of its WAV in SDRAM (two seconds mono), so
+it sounds the moment it is pressed; the rest is read from the card while it
+plays, 16 KB at a time into a 64 KB ring. The board (the
+WAV on each pad, the play mode, the level, To loops) is saved to
+`Looper/soundboard.txt` a second after a change and loaded at start-up; the
+WAV starts load in the background (a loading pad blinks). The board's 0.84 MB
+of SDRAM comes out of the loop memory, which is why a track holds about 20.4 s
+in RAM. To loops adds the board to the input as it is, so the Rec latency
+setting moves it that much early in a take.
 
 ## Stop, mute and starting things
 
@@ -287,7 +320,7 @@ clears it. The bindings and the clock setting are saved with the settings.
 Above, track 1 is a 24 s take with the chord stabs overdubbed over its first
 half (undo is ready on F8), next to two ordinary 4 s loops.
 
-With a card in, a take that outgrows its RAM (past about 19.5 s stereo, 39 s
+With a card in, a take that outgrows its RAM (past about 18.2 s stereo, 36 s
 mono) keeps going onto the card, up to 5 minutes stereo or 10 mono per track.
 Every take is written to the card as it records; one that grows past its RAM
 keeps its first part there and streams the rest through a 2 s buffer, read
@@ -327,7 +360,7 @@ card has caught up, what the ring holds.
 ```mermaid
 flowchart LR
     subgraph audio["Audio interrupt, every 2.9 ms"]
-        R["record / overdub"] --> M[("track RAM: first ~19.5 s")]
+        R["record / overdub"] --> M[("track RAM: first ~18.2 s")]
         R --> G[("2 s ring, the end of the track's RAM")]
         P["playback, grains"] --> M
         P --> G
@@ -407,10 +440,10 @@ failed card commands).
 
 ## Limits found so far
 
-- **Memory:** 16 MB SDRAM = about 21.5 s of stereo audio per track (after the
+- **Memory:** 16 MB SDRAM = about 20.4 s of stereo audio per track (after the
   1 MB of the two FX slots' delay lines and the long-take waveforms); a RAM
-  loop's undo needs it to fit in half of that, so a loop between about 10.8 s
-  and 19.5 s keeps its undo on the card instead (without a card: none). Mono
+  loop's undo needs it to fit in half of that, so a loop between about 10.2 s
+  and 18.2 s keeps its undo on the card instead (without a card: none). Mono
   tracks double it. Copy / paste works on loops in RAM up to half the memory (duplicating a
   track works on any, long takes too: a card job of a few seconds). Longer takes go to
   the SD card (5 minutes stereo), undo included (it uses the card's second

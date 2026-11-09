@@ -32,6 +32,9 @@ wait 700
 expect_ch right 0.2
 expect_ch left silent
 shot ../build/sim/check/modes_reverse.png
+# The bar stays open after a pick; the lit mode again closes it.
+press F2
+expect_mode 1 Reverse
 
 # Every other mode makes sound. Page 1 of the bar: F1..F7 (F8 turns the page).
 press F5
@@ -41,13 +44,13 @@ wait 200
 reset_levels
 wait 1500
 expect_audio 0.2
-press F5
 press F4
 expect_mode 1 Halfspeed
 wait 200
 reset_levels
 wait 1500
 expect_audio 0.2
+press F4
 # Half speed: no overdub (the hint shows)
 press REC
 wait 100
@@ -60,7 +63,6 @@ reset_levels
 wait 1000
 expect_audio 0.2
 # Half speed and double speed backwards (tape style).
-press F5
 press F6
 expect_mode 1 Halfrev
 wait 200
@@ -68,7 +70,6 @@ reset_levels
 wait 1500
 expect_audio 0.2
 shot ../build/sim/check/modes_half_rev.png
-press F5
 press F7
 expect_mode 1 Doublerev
 wait 200
@@ -76,7 +77,6 @@ reset_levels
 wait 1500
 expect_audio 0.2
 # Page 2, the grain modes: F8 in the bar turns to it.
-press F5
 press F8
 wait 50
 shot ../build/sim/check/modes_bar_page2.png
@@ -87,7 +87,8 @@ reset_levels
 wait 1500
 expect_audio 0.2
 shot ../build/sim/check/modes_half_time.png
-# The bar opens on the page with the track's mode.
+# Pattern closes the bar; it opens again on the page with the track's mode.
+press PATTERN
 press F5
 press F2
 expect_mode 1 Octaveup
@@ -95,16 +96,15 @@ wait 200
 reset_levels
 wait 1500
 expect_audio 0.2
-press F5
 press F3
 expect_mode 1 Octavedn
 wait 200
 reset_levels
 wait 1500
 expect_audio 0.2
-press F5
 press F4
 expect_mode 1 Granular
+press F4
 wait 300
 reset_levels
 wait 1500

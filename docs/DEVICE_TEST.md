@@ -100,17 +100,36 @@ Listen for clicks or dropouts in each one; a click with `cpu max` well under
 With the 32 KB-cluster card in: the first start takes a moment longer (it
 allocates `Looper/Stream/track1..4.raw` and `.b.raw`, 53 MB each). Config
 shows "Recording time per track: 5 min stereo". Record a take of about 40 s:
-the lane says **card** once it passes ~19.5 s. Play it a few times round,
-listen past 19.5 s for gaps or clicks, try Half speed / Double, Reverse and
+the lane says **card** once it passes ~18.2 s. Play it a few times round,
+listen past 18.2 s for gaps or clicks, try Half speed / Double, Reverse and
 Ping-pong, a tempo change, a jump pad into the second half. Overdub a whole
 pass (and replace one), then F8: the pass before comes back after a moment
 of silence; F8 again brings it back. Granular on it (Spread up: still
-sounding). In the editor: trim, undo the trim, erase a part past 19.5 s, cut
+sounding). In the editor: trim, undo the trim, erase a part past 18.2 s, cut
 the first 10 s (a few seconds). Save the project, load it again, play it.
 Then clear it and record a short loop. The serial telemetry line ends with `stream under N over M err E`:
 `under` counts frames played as silence (a jump makes a few thousand),
 `over` takes cut short because the card fell behind, `err` failed card
 commands. All three should stay 0 in plain playback.
+
+## New in 1.1
+
+- **Sound board (S.Play):** F1 on pad 1, pick a WAV (16-bit, 44.1 kHz) longer
+  than a second, put it on the pad. Press pad 1: it starts at once and plays
+  to the end with no gap after the first second (that part streams from the
+  card). Load pads 2-4 and press them in turn: each press stops the last one
+  without a click. Try F3's three play modes, F4, and the encoder's level.
+  Record a take while a pad plays (F5 To loops: Yes): the take has it; with
+  No it does not. Power off and on: the four pads come back.
+- **Sound board with long takes:** a long take playing from the card and a
+  long WAV on the board at once; no gaps in either.
+- **New project (File F7, twice):** every loop clears, the names too; F1 then
+  saves a new numbered project, not over the last one.
+- **Length lock (Left / Right on home):** two taps of Right, one Rec press:
+  the take stops by itself after two bars.
+- **Mode bar (F5):** it stays open while you try modes; the lit one again
+  closes it.
+- **Power:** hold it 1.5 s on a few different pages; it switches off on each.
 
 ## If something goes wrong
 

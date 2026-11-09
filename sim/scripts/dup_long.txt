@@ -1,7 +1,7 @@
 # Copy on the home page with a long take (its tail on the card): the copy is
 # a file job, read as the take plays, and goes into the next track in time
 # with it, its own tail on its own stream file. A 30 s take: 330 Hz for 15 s,
-# then 660 Hz (from 19.5 s on, on the card).
+# then 660 Hz (from 18.2 s on, on the card).
 wait 300
 opt all start 0
 tone_shape steady

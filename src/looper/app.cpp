@@ -116,6 +116,10 @@ bool App::init(const Platform& p) {
     // Split the loop memory into four tracks: frames (4 B) plus two peak bytes
     // (left, right) per kPeakFrames, for the RAM and for a long take's stream
     // file (its waveform stays in RAM).
+    // The sound board's slot starts and voice rings come off the top first.
+    if (p_.loopMemBytes < Soundboard::kMemBytes * 4) return false;
+    p_.loopMemBytes = (p_.loopMemBytes - Soundboard::kMemBytes) & ~15u;
+    sb_.init(&p_, p_.loopMem + p_.loopMemBytes);
     TrackMemory mem[kTracks];
     const uint32_t perTrack = (p_.loopMemBytes / kTracks) & ~15u;
     const uint32_t streamPeaks = (kStreamFrames / kPeakFrames + 1) * 2;
@@ -137,10 +141,14 @@ bool App::init(const Platform& p) {
     files_.loadConfig(cfg_);   // defaults when there is no card or no file yet
     midi_.init(&p_, &engine_);
     engine_.setRealtimeHook(p_.midiDinRealtime);
+    static_assert(Engine::kSourceScratchBytes <= Soundboard::kScratchBytes, "the engine's source scratch");
+    engine_.setSource(&App::sbFill, this, sb_.scratch());
     applyConfig();
     p_.audio->setCallback(&App::audioFill, this);
     return p_.audio->start();
 }
+
+bool App::sbFill(float* l, float* r, uint32_t n, void* ctx) { return static_cast<App*>(ctx)->sb_.render(l, r, n); }
 
 void App::audioFill(int16_t* out, uint32_t frames, void* ctx) {
     App* a = static_cast<App*>(ctx);
@@ -179,6 +187,8 @@ void App::loop() {
     }
     streamer_.service();   // long takes: a card command per track at most (they cannot wait)
     files_.service();   // one step of a save / load / export
+    sb_.service();      // the sound board: its voices read ahead, slot starts loaded
+    engine_.setSourceToInput(sb_.toLoops());
 
     const uint32_t now = p_.clock->millis();
     if (powerHeld_ && now - powerDownMs_ >= kPowerHoldMs && p_.powerOff) {
@@ -281,6 +291,22 @@ void App::telemetry() {
 // ---------------------------------------------------------------------------
 // Input
 
+void App::stepLength(int bars) {
+    const int bar = engine_.beatsPerBar() ? engine_.beatsPerBar() : 4;
+    int v = engine_.opt(OptParam::kLength, selected_);
+    for (int i = 0; i < (bars < 0 ? -bars : bars); ++i)
+        v = bars > 0 ? (v / bar + 1) * bar : ((v + bar - 1) / bar - 1) * bar;
+    v = v < 0 ? 0 : (v > kMaxLenBeats ? kMaxLenBeats : v);
+    engine_.post(Engine::kOpt, uint8_t(selected_), int16_t((int(OptParam::kLength) << 8) | v));
+}
+
+void App::lengthText(int len, char* buf, size_t n) const {
+    const int bar = engine_.beatsPerBar() ? engine_.beatsPerBar() : 4;
+    if (!len) std::snprintf(buf, n, "Off");
+    else if (len % bar == 0) std::snprintf(buf, n, "%d bar%s", len / bar, len == bar ? "" : "s");
+    else std::snprintf(buf, n, "%d beats", len);
+}
+
 void App::hint(int t, const char* msg, uint32_t now) {
     hintTrack_ = t;
     hintText_ = msg;
@@ -325,14 +351,15 @@ bool onModePage2(PlayMode m) {
 
 void App::onFKey(int key) {
     const uint8_t t = uint8_t(selected_);
-    if (modeBar_) {   // the key under a mode label picks it; F8 turns the page
+    if (modeBar_) {   // the key under a mode label picks it and the bar stays open; the lit one again
+                      // closes it; F8 turns the page
         const int m = kModeBarKeys[modePage_ & 1][key & 7];
         if (m == kModeMore) {
             modePage_ ^= 1;
             return;
         }
-        if (m >= 0) engine_.post(Engine::kMode, t, int16_t(m));
-        modeBar_ = false;
+        if (m >= 0 && m != int(engine_.mode(selected_))) engine_.post(Engine::kMode, t, int16_t(m));
+        else if (m >= 0) modeBar_ = false;
         return;
     }
     switch (key) {
@@ -366,7 +393,7 @@ void App::undoDub(bool redo) {
 
 bool App::shiftLayer() const {
     return (shift_ || shiftHold_ >= 0) && !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ &&
-           !nameEdit_ && !samples_ &&
+           !nameEdit_ && !samples_ && !sbPage_ &&
            !manual_ && !modeBar_ && !grainMenu_ && !f5Held_ && !f6Held_ && !f7Held_;
 }
 
@@ -452,13 +479,13 @@ void App::onInput(const ot::InputEvent& ev) {
     }
     if (ev.type == E::kEncoder) {
         if (shiftHold_ == 4) {   // Shift + F5 held: the track's fixed length, whole bars (0: off)
-            const int bar = engine_.beatsPerBar() ? engine_.beatsPerBar() : 4;
-            int v = engine_.opt(OptParam::kLength, selected_);
-            for (int i = 0; i < (ev.delta < 0 ? -ev.delta : ev.delta); ++i)
-                v = ev.delta > 0 ? (v / bar + 1) * bar : ((v + bar - 1) / bar - 1) * bar;
-            v = v < 0 ? 0 : (v > kMaxLenBeats ? kMaxLenBeats : v);
-            engine_.post(Engine::kOpt, uint8_t(selected_), int16_t((int(OptParam::kLength) << 8) | v));
+            stepLength(ev.delta);
             shiftTurned_ = true;
+            return;
+        }
+        if (lenHeld_) {   // Left / Right held: the same
+            stepLength(ev.delta);
+            lenTurned_ = true;
             return;
         }
         if (shiftHold_ == 5) {   // Shift + F6 held: the sound threshold (on-sound starts)
@@ -557,6 +584,10 @@ void App::onInput(const ot::InputEvent& ev) {
             mixerEncoder(ev.delta);
             return;
         }
+        if (sbPage_) {   // the sound board's level
+            sb_.setLevel(sb_.level() + ev.delta * 2);
+            return;
+        }
         if (shift_) {
             int g = int(cfg_.gain) + ev.delta * 2;
             cfg_.gain = uint8_t(g < 0 ? 0 : (g > 100 ? 100 : g));
@@ -597,7 +628,7 @@ void App::onInput(const ot::InputEvent& ev) {
         return;
     }
     const bool home = !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !modeBar_ &&
-                      !nameEdit_ && !samples_;
+                      !nameEdit_ && !samples_ && !sbPage_;
     if (shiftHold_ >= 0 && ev.id == b::F1 + shiftHold_) {   // a held Shift-layer key, Shift or not
         if (!down) shiftKeyUp(ev.timeMs);
         return;
@@ -687,6 +718,21 @@ void App::onInput(const ot::InputEvent& ev) {
         }
         return;
     }
+    // Home page Left / Right: lock the loop length before a take. Held, the
+    // encoder sets it in bars; a tap is a bar less / more.
+    if ((ev.id == b::Left || ev.id == b::Right) && (home || lenHeld_)) {
+        if (down && lenHeld_) return;   // the arrows auto-repeat while held
+        if (down) {
+            lenHeld_ = true;
+            lenTurned_ = false;
+            lenDownMs_ = ev.timeMs;
+        } else if (lenHeld_) {
+            lenHeld_ = false;
+            if (!lenTurned_ && ev.timeMs - lenDownMs_ < kTapMs)   // a tap, not a hold (the lane shows the length)
+                stepLength(ev.id == b::Right ? 1 : -1);
+        }
+        return;
+    }
     // Home page F4: a tap turns the metronome on / off; held, the encoder sets the click level.
     if (ev.id == b::F4 && (home || f4Held_)) {
         if (down) {
@@ -760,6 +806,12 @@ void App::onInput(const ot::InputEvent& ev) {
         }
         return;
     }
+    if (ev.id == b::SamplePlayback) {   // the sound board (from its WAV picker: back to it)
+        const bool open = sbPage_ && sbAssign_ < 0;
+        goHome();
+        sbPage_ = !open;
+        return;
+    }
     if (ev.id == b::Fx1 || ev.id == b::Fx2) {   // that slot's FX page
         const int s = ev.id == b::Fx1 ? 0 : 1;
         const bool same = fxPage_ == s;
@@ -773,6 +825,10 @@ void App::onInput(const ot::InputEvent& ev) {
     const bool nav = b::isFKey(ev.id) || ev.id == b::Left || ev.id == b::Right || ev.id == b::Up || ev.id == b::Down;
     if (nameEdit_ && (nav || ev.id == b::Delete)) {
         nameKey(ev.id);
+        return;
+    }
+    if (sbPage_ && nav) {
+        sbKey(ev.id);
         return;
     }
     if (samples_ && nav) {
@@ -912,7 +968,8 @@ void App::closePerf() {
 
 void App::goHome() {
     mixer_ = edit_ = config_ = file_ = fwPage_ = inPage_ = midiPage_ = manual_ = grainMenu_ = false;
-    nameEdit_ = samples_ = false;
+    nameEdit_ = samples_ = sbPage_ = false;
+    sbAssign_ = -1;
     midi_.learn(-1);
     fxPage_ = -1;
     fxBar_ = modeBar_ = false;
@@ -935,6 +992,14 @@ void App::onPad(int pad, bool down) {
             char c = kNamePads[t][col];
             if (shift_ && c >= 'A' && c <= 'Z') c = char(c + 32);
             nameType(c);
+        }
+        return;
+    }
+    if (!down) sb_.release(pad);   // the sound board's gate mode (also after leaving its page)
+    if (sbPage_) {   // the sound board: pads 1..4 play their WAVs (Shift: select, silent); the rest nothing
+        if (down && pad < Soundboard::kSlots) {
+            sbSel_ = pad;
+            if (!shift_) sb_.press(pad);
         }
         return;
     }
@@ -1001,6 +1066,21 @@ void App::updateLeds(uint32_t now) {
     const bool fast = (now / 125) & 1;                 // 4 Hz: recording
     const bool slow = (now / 300) & 1;                 // ~1.7 Hz: overdub
     constexpr float kOff = 0.0f, kFaint = 0.06f, kDimL = 0.18f, kMid = 0.45f, kFull = 1.0f;
+    if (sbPage_) {   // the sound board: a WAV faint, playing full, the selection mid, loading blinking
+        for (int i = 0; i < ot::kPadCount; ++i) {   // the board's pads; the rest dark
+            const Soundboard::SlotState st = i < Soundboard::kSlots ? sb_.slot(i).state : Soundboard::SlotState::kEmpty;
+            float lv = kOff;
+            if (i >= Soundboard::kSlots) lv = kOff;
+            else if (sb_.progress(i) >= 0.0f) lv = kFull;
+            else if (st == Soundboard::SlotState::kPending) lv = slow ? kDimL : kOff;
+            else if (i == sbSel_) lv = kMid;
+            else if (st == Soundboard::SlotState::kReady) lv = kFaint * 2.0f;
+            const uint8_t b = uint8_t(lv * 255.0f * float(cfg_.pads) / 100.0f);
+            L.setPad(uint8_t(i), b, b, b);
+        }
+        L.show();
+        return;
+    }
     const uint32_t beat = engine_.barFrames() / (engine_.beatsPerBar() ? engine_.beatsPerBar() : 4);
     for (int t = 0; t < kTracks; ++t) {
         const TrackView& v = engine_.view(t);
@@ -1315,6 +1395,7 @@ void App::render(uint32_t now) {
     else if (manual_) drawManual();
     else if (nameEdit_) drawName();
     else if (samples_) drawSamples();
+    else if (sbPage_) drawSoundboard(now);
     else if (mixer_) drawMixer();
     else {
         for (int t = 0; t < kTracks; ++t) drawLane(t, now);
@@ -1323,13 +1404,11 @@ void App::render(uint32_t now) {
     drawFKeys();
     // Pop-up knobs: F7 held (input gain), an effect pad held in performance mode.
     const bool shiftPop = shiftHold_ >= 0 && (shiftTurned_ || p_.clock->millis() - shiftDownMs_ >= 250);
-    if (shiftPop && shiftHold_ == 4) {   // Shift + F5 held: the length
+    const bool lenPop = lenHeld_ && (lenTurned_ || p_.clock->millis() - lenDownMs_ >= 250);
+    if ((shiftPop && shiftHold_ == 4) || lenPop) {   // Shift + F5 or Left / Right held: the length
         char v[16], ttl[32];
         const int len = engine_.opt(OptParam::kLength, selected_);
-        const int bar = engine_.beatsPerBar() ? engine_.beatsPerBar() : 4;
-        if (!len) std::snprintf(v, sizeof v, "Off");
-        else if (len % bar == 0) std::snprintf(v, sizeof v, "%d bar%s", len / bar, len == bar ? "" : "s");
-        else std::snprintf(v, sizeof v, "%d beats", len);
+        lengthText(len, v, sizeof v);
         std::snprintf(ttl, sizeof ttl, "Track %d length", selected_ + 1);
         drawPopupKnob(ttl, v, float(len) / float(kMaxLenBeats), lenShown_, kTrackColor[selected_], 0.0f);
     } else if (shiftPop && shiftHold_ == 5) {   // Shift + F6 held: the threshold, with the input level
@@ -1458,6 +1537,12 @@ void App::drawLane(int t, uint32_t now) {
         if (s == TrackState::kClearing) {
             color(kDim);
             text(wx + kWaveW / 2, wy + kWaveH / 2, kFontSmall, Disp::kOptCenter, "clearing...");
+        } else if (const int lk = engine_.opt(OptParam::kLength, t)) {   // a locked length: the take stops there
+            char v[16];
+            lengthText(lk, v, sizeof v);
+            std::snprintf(buf, sizeof buf, "Length locked: %s", v);
+            color(sel ? kSel : kDim);
+            text(wx + kWaveW / 2, wy + kWaveH / 2 - 20, kFontSmall, Disp::kOptCenter, buf);
         }
     } else if (waveValid_[t]) {
         // Played part bright, the rest dimmed: the same bitmap twice under two
@@ -1680,11 +1765,9 @@ void App::drawFKeys() {
                     break;
                 case 4: {   // the fixed length when there is one, else how a take stops
                     const int len = engine_.opt(OptParam::kLength, selected_);
-                    const int bar = engine_.beatsPerBar() ? engine_.beatsPerBar() : 4;
                     static const char* const kStop[3] = {"Free", "On bar", "On beat"};
                     title[i] = "STOP";
-                    if (len && len % bar == 0) std::snprintf(val[i], sizeof val[i], "%d bar%s", len / bar, len == bar ? "" : "s");
-                    else if (len) std::snprintf(val[i], sizeof val[i], "%d beats", len);
+                    if (len) lengthText(len, val[i], sizeof val[i]);
                     else std::snprintf(val[i], sizeof val[i], "%s", kStop[engine_.opt(OptParam::kStop, selected_) % 3]);
                     break;
                 }
@@ -1750,11 +1833,31 @@ void App::drawFKeys() {
             static const char* const kV[8] = {"Insert", "Back", "All", "", "", "", "Keep old", "Save name"};
             title[i] = kT[i];
             std::snprintf(val[i], sizeof val[i], "%s", kV[i]);
+        } else if (sbPage_) {   // the sound board
+            static const char* const kPlay[3] = {"One-shot", "Toggle", "Gate"};
+            const Soundboard::Slot& sl = sb_.slot(sbSel_);
+            const bool armed = confirm_ == i && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0;
+            title[i] = "";
+            val[i][0] = 0;
+            switch (i) {
+                case 0: title[i] = "LOAD"; std::snprintf(val[i], sizeof val[i], "Pad %d", sbSel_ + 1); break;
+                case 1:
+                    title[i] = "CLEAR";
+                    std::snprintf(val[i], sizeof val[i], "%s",
+                                  sl.state == Soundboard::SlotState::kEmpty ? "-" : (armed ? "Sure?" : "Pad"));
+                    hot = armed;
+                    break;
+                case 2: title[i] = "PLAY"; std::snprintf(val[i], sizeof val[i], "%s", kPlay[int(sb_.mode()) % 3]); break;
+                case 3: title[i] = "STOP"; std::snprintf(val[i], sizeof val[i], "All"); hot = sb_.playing() > 0; break;
+                case 4: title[i] = "TO LOOPS"; std::snprintf(val[i], sizeof val[i], "%s", sb_.toLoops() ? "Yes" : "No"); break;
+                case 7: title[i] = "HOME"; std::snprintf(val[i], sizeof val[i], "Loops"); break;
+                default: break;
+            }
         } else if (samples_) {   // F1 open / load, F2 up a folder, F8 home
             const bool dir = files_.sampleIsDir(sampleSel_);
             static const char* const kT[8] = {"", "FOLDER", "", "", "", "", "", "HOME"};
             title[i] = i == 0 ? (dir ? "OPEN" : "LOAD") : kT[i];
-            const char* v = i == 0 ? (dir ? "Folder" : (files_.sampleCount() ? "Into track" : "-"))
+            const char* v = i == 0 ? (dir ? "Folder" : (files_.sampleCount() ? (sbAssign_ >= 0 ? "Onto pad" : "Into track") : "-"))
                             : i == 1 ? (files_.sampleDir()[0] ? "Up" : "-") : i == 7 ? "Loops" : "";
             std::snprintf(val[i], sizeof val[i], "%s", v);
         } else if (config_ && fwPage_) {   // F1 flash (twice), F2 rescan, F7 back, F8 home
@@ -1831,6 +1934,11 @@ void App::drawFKeys() {
                     std::snprintf(val[i], sizeof val[i], "Track %c", char('1' + selected_));
                     break;
                 case 5: title[i] = "EXPORT"; std::snprintf(val[i], sizeof val[i], "All"); break;
+                case 6:
+                    title[i] = "NEW";
+                    std::snprintf(val[i], sizeof val[i], "%s", armed ? "Sure?" : "Project");
+                    hot = armed;
+                    break;
                 case 7: title[i] = "HOME"; std::snprintf(val[i], sizeof val[i], "Loops"); break;
                 default: title[i] = ""; val[i][0] = 0; break;
             }
@@ -1928,7 +2036,7 @@ void App::drawFKeys() {
             }
         }
         uint32_t hc = tc;
-        if (config_ || file_ || inPage_ || nameEdit_ || samples_) hc = kAmber;
+        if (config_ || file_ || inPage_ || nameEdit_ || samples_ || sbPage_) hc = kAmber;
         else if (edit_) hc = (i == 4 || i == 5) ? kAmber : kTrackColor[editTrack_];
         else if (fxPage_ >= 0) hc = stripColor(4 + fxPage_);
         else if (mixer_ && !modeBar_) hc = stripColor(i);
@@ -1948,6 +2056,7 @@ void App::drawFKeys() {
             uint32_t tcol = kDim;
             if (hot) tcol = pick ? kSel : kInk;
             else if (file_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
+            else if (sbPage_) tcol = i < 5 ? scale(hc, 0.9f) : kDim;
             else if (inPage_) tcol = i < 5 ? scale(hc, 0.9f) : kDim;
             else if (edit_) tcol = i < 7 ? scale(hc, 0.9f) : kDim;
             else if (fxPage_ >= 0) tcol = i < 6 ? scale(hc, 0.9f) : kDim;
@@ -1966,7 +2075,7 @@ void App::drawFKeys() {
     // Home page: the input level inside the INPUT cell, the track's level inside VOLUME
     // (not under the Shift layer, where those keys do other things).
     if (!modeBar_ && !mixer_ && fxPage_ < 0 && !edit_ && !config_ && !file_ && !inPage_ && !manual_ && !shiftLayer() &&
-        !grainPanel() && !perfKeys() && !nameEdit_ && !samples_) {
+        !grainPanel() && !perfKeys() && !nameEdit_ && !samples_ && !sbPage_) {
         const int x0 = 5 * kKeyW + 10, x1 = 6 * kKeyW - 10;
         for (int c = 0; c < 2; ++c) {
             const float m = inMeter_[c];
@@ -3021,6 +3130,19 @@ void App::fileKey(uint8_t id) {
             return;
         case b::F5: files_.exportTracks(uint8_t(1u << selected_)); break;
         case b::F6: files_.exportTracks(0x0F); break;
+        case b::F7:   // new project: clears every loop, so press twice
+            if (!files_.busy()) {
+                if (confirm_ == 6 && int32_t(confirmUntilMs_ - now) > 0) {
+                    confirm_ = -1;
+                    engine_.post(Engine::kClearAll);
+                    files_.newProject();
+                } else {
+                    confirm_ = 6;
+                    confirmUntilMs_ = now + 2000;
+                }
+                return;
+            }
+            break;
         case b::F8: goHome(); break;
         case b::Up:
             if (projSel_ > 0) --projSel_;
@@ -3104,6 +3226,10 @@ void App::drawFile() {
     if (confirm_ == 2 && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0) {
         color(kAmber);
         text(400, 408, kFontBody, Disp::kOptCenter, "Press LOAD again: it replaces the loops you have");
+    }
+    if (confirm_ == 6 && int32_t(confirmUntilMs_ - p_.clock->millis()) > 0) {
+        color(kAmber);
+        text(400, 408, kFontBody, Disp::kOptCenter, "Press NEW again: it clears every loop (save first?)");
     }
 }
 
@@ -3257,6 +3383,15 @@ void App::sampleKey(uint8_t id) {
                 std::snprintf(sub, sizeof sub, "%s", files_.sampleName(sampleSel_));
                 files_.openSampleDir(sub);
                 sampleSel_ = 0;
+            } else if (sbAssign_ >= 0) {   // picking a sound board pad's WAV: onto the pad, back to the board
+                char path[Soundboard::kPathLen + 32];
+                std::snprintf(path, sizeof path, "%s%s%s", files_.sampleDir(), files_.sampleDir()[0] ? "/" : "",
+                              files_.sampleName(sampleSel_));
+                const int pad = sbAssign_;
+                sb_.assign(pad, path);
+                goHome();
+                sbPage_ = true;
+                sbSel_ = pad;
             } else if ((files_.lockedTracks() >> selected_) & 1) {
                 hint(selected_, files_.lockReason(), now);
             } else {
@@ -3279,12 +3414,19 @@ void App::drawSamples() {
     char buf[96];
     char nm[Files::kNameLen + 8];
     color(kAmber);
-    std::snprintf(buf, sizeof buf, "LOAD SAMPLE  into %s", trackLabel(selected_, nm, sizeof nm));
-    text(20, 22, kFontBig, Disp::kOptCenterY, buf);
-    const TrackState ts = TrackState(engine_.view(selected_).state.load());
-    color(ts == TrackState::kEmpty ? kDim : kRed);
-    text(780, 22, kFontSmall, Disp::kOptRightX | Disp::kOptCenterY,
-         ts == TrackState::kEmpty ? "empty" : "holds a loop: clear it first");
+    if (sbAssign_ >= 0) {   // a sound board pad's WAV
+        std::snprintf(buf, sizeof buf, "LOAD SAMPLE  onto sound board pad %d", sbAssign_ + 1);
+        text(20, 22, kFontBig, Disp::kOptCenterY, buf);
+        color(kDim);
+        text(780, 22, kFontSmall, Disp::kOptRightX | Disp::kOptCenterY, "S.Play: back");
+    } else {
+        std::snprintf(buf, sizeof buf, "LOAD SAMPLE  into %s", trackLabel(selected_, nm, sizeof nm));
+        text(20, 22, kFontBig, Disp::kOptCenterY, buf);
+        const TrackState ts = TrackState(engine_.view(selected_).state.load());
+        color(ts == TrackState::kEmpty ? kDim : kRed);
+        text(780, 22, kFontSmall, Disp::kOptRightX | Disp::kOptCenterY,
+             ts == TrackState::kEmpty ? "empty" : "holds a loop: clear it first");
+    }
     color(kDim);
     std::snprintf(buf, sizeof buf, "/%s", files_.sampleDir());
     text(28, 60, kFontSmall, Disp::kOptCenterY, buf);
@@ -3315,6 +3457,123 @@ void App::drawSamples() {
     }
     color(files_.busy() ? kAmber : kInk);
     text(40, 384, kFontSmall, Disp::kOptCenterY, files_.status());
+}
+
+// ---------------------------------------------------------------------------
+// Sound board (S.Play)
+
+void App::sbKey(uint8_t id) {
+    const uint32_t now = p_.clock->millis();
+    switch (id) {
+        case b::Left:
+        case b::Up:
+            if (sbSel_ > 0) --sbSel_;
+            break;
+        case b::Right:
+        case b::Down:
+            if (sbSel_ < Soundboard::kSlots - 1) ++sbSel_;
+            break;
+        case b::F1: {   // the selected pad's WAV, from the sample loader
+            const int pad = sbSel_;
+            goHome();
+            samples_ = true;
+            sbAssign_ = pad;
+            files_.listSamples();
+            if (sampleSel_ >= files_.sampleCount()) sampleSel_ = 0;
+            return;
+        }
+        case b::F2:   // clear the pad: press twice
+            if (sb_.slot(sbSel_).state == Soundboard::SlotState::kEmpty) break;
+            if (confirm_ == 1 && int32_t(confirmUntilMs_ - now) > 0) {
+                sb_.clear(sbSel_);
+                break;
+            }
+            confirm_ = 1;
+            confirmUntilMs_ = now + 2000;
+            return;
+        case b::F3: sb_.setMode(Soundboard::Play((int(sb_.mode()) + 1) % 3)); break;
+        case b::F4: sb_.stopAll(); break;
+        case b::F5: sb_.setToLoops(!sb_.toLoops()); break;
+        case b::F8: goHome(); break;
+        default: break;
+    }
+    confirm_ = -1;
+}
+
+void App::drawSoundboard(uint32_t now) {
+    (void)now;
+    char buf[96];
+    color(kAmber);
+    text(20, 22, kFontBig, Disp::kOptCenterY, "SOUND BOARD");
+    if (!files_.cardReady()) {
+        color(kRed);
+        std::snprintf(buf, sizeof buf, "No SD card");
+    } else {
+        color(kDim);
+        const int n = sb_.playing();
+        std::snprintf(buf, sizeof buf, "%s%d playing   level %d %%", sb_.loading() ? "loading...   " : "", n, sb_.level());
+    }
+    text(780, 22, kFontSmall, Disp::kOptRightX | Disp::kOptCenterY, buf);
+
+    // A cell per pad, in the order of the top row's first four pads: the
+    // WAV's name and length, a bar while it plays.
+    constexpr int kCellW = 184, kCellH = 300, kStepX = 196, kX0 = 11, kY0 = 60;
+    for (int i = 0; i < Soundboard::kSlots; ++i) {
+        const int x0 = kX0 + i * kStepX, y0 = kY0;
+        const int x1 = x0 + kCellW, y1 = y0 + kCellH, cx = (x0 + x1) / 2;
+        const Soundboard::Slot& sl = sb_.slot(i);
+        const float prog = sb_.progress(i);
+        const bool empty = sl.state == Soundboard::SlotState::kEmpty;
+        if (i == sbSel_) {
+            color(kSel);
+            fillRect(x0 - 2, y0 - 2, x1 + 2, y1 + 2, 7);
+        }
+        color(prog >= 0.0f ? 0x4A4A4A : (empty ? 0x141414 : kMeterBack));
+        fillRect(x0, y0, x1, y1, 8);
+        color(kDim);
+        std::snprintf(buf, sizeof buf, "PAD %d", i + 1);
+        text(cx, y0 + 24, kFontSmall, Disp::kOptCenter, buf);
+        if (empty) {
+            color(kFaint);
+            text(cx, (y0 + y1) / 2, kFontBody, Disp::kOptCenter, "empty");
+            continue;
+        }
+        const bool missing = sl.state == Soundboard::SlotState::kMissing;
+        color(prog >= 0.0f ? kInk : (missing ? kHelp : kSoft));
+        if (sl.state == Soundboard::SlotState::kPending) std::snprintf(buf, sizeof buf, "loading...");
+        else std::snprintf(buf, sizeof buf, "%.14s", sl.name);
+        text(cx, (y0 + y1) / 2 - 12, kFontBody, Disp::kOptCenter, buf);
+        if (sl.state == Soundboard::SlotState::kReady) {
+            char s[16];
+            fmtSeconds(s, sizeof s, sl.frames);
+            std::snprintf(buf, sizeof buf, "%s  %s", s, sl.mono ? "mono" : "stereo");
+            color(kDim);
+            text(cx, (y0 + y1) / 2 + 18, kFontSmall, Disp::kOptCenter, buf);
+        } else if (missing) {
+            text(cx, (y0 + y1) / 2 + 18, kFontSmall, Disp::kOptCenter, "not playable");
+        }
+        if (prog >= 0.0f) {
+            color(kInk);
+            fillRect(x0 + 12, y1 - 24, x0 + 12 + int(float(kCellW - 24) * prog), y1 - 16, 3);
+        }
+    }
+
+    // The selected pad, in full; the last message.
+    const Soundboard::Slot& sl = sb_.slot(sbSel_);
+    if (sl.state == Soundboard::SlotState::kEmpty) {
+        std::snprintf(buf, sizeof buf, "Pad %d: empty (F1 loads a WAV)", sbSel_ + 1);
+    } else if (sl.state == Soundboard::SlotState::kReady) {
+        char s[16];
+        fmtSeconds(s, sizeof s, sl.frames);
+        std::snprintf(buf, sizeof buf, "Pad %d: %s   %s   %s", sbSel_ + 1, sl.name, s, sl.mono ? "mono" : "stereo");
+    } else {
+        std::snprintf(buf, sizeof buf, "Pad %d: %.60s%s", sbSel_ + 1, sl.path,
+                      sl.state == Soundboard::SlotState::kPending ? " (loading)" : " (not playable)");
+    }
+    color(kInk);
+    text(20, 404, kFontSmall, Disp::kOptCenterY, buf);
+    color(kDim);
+    text(20, 424, kFontSmall, Disp::kOptCenterY, sb_.status());
 }
 
 void App::editClip(int op) {

@@ -7,7 +7,7 @@
 card_speed 8 16 1 150 64
 wait 300
 tone_shape steady
-# A 15-bar take of 330 Hz (30 s at 120 bpm), from the card past 19.5 s.
+# A 15-bar take of 330 Hz (30 s at 120 bpm), from the card past 18.2 s.
 tone 330
 tap 0
 wait 31000

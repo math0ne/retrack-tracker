@@ -23,6 +23,7 @@ press F5
 press F8
 press F4
 expect_mode 1 Granular
+press F4
 wait 300
 reset_levels
 wait 1000

@@ -67,7 +67,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat > notes.md <<'EOF'
+          # The release's own notes (docs/releases/vX.Y.md) first, when there are some.
+          : > notes.md
+          if [ -f "docs/releases/$GITHUB_REF_NAME.md" ]; then cat "docs/releases/$GITHUB_REF_NAME.md" >> notes.md; fi
+          cat >> notes.md <<'EOF'
           **Very beta**: expect bugs and performance issues. Keep the stock firmware on the card as the way back.
 
           Install: unzip the `-sdcard.zip` onto the SD card's root (it holds `Firmware/` with the image and an

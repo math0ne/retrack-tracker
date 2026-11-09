@@ -1,0 +1,50 @@
+# Left / Right on the home page lock the selected track's loop length before
+# a take: a tap is a bar less / more, a hold + encoder sets it. One Rec press
+# then records exactly that long (120 bpm, 4 / 4: a bar is 2 s).
+wait 300
+opt all start 0
+tone_shape steady
+tone 330
+# Two taps of Right: 2 bars (8 beats); Left past Off stays Off.
+press RIGHT
+press RIGHT
+wait 50
+expect_opt 1 length 8
+press LEFT
+press LEFT
+press LEFT
+wait 50
+expect_opt 1 length 0
+# Held + encoder: 3 bars; the release is not a tap.
+hold RIGHT
+wait 100
+enc 1
+wait 300
+enc 1
+wait 300
+enc 1
+wait 300
+screen ../build/sim/check/length_lock_held.png
+release RIGHT
+wait 50
+expect_opt 1 length 12
+hold LEFT
+wait 500
+enc -1
+release LEFT
+wait 50
+expect_opt 1 length 8
+screen ../build/sim/check/length_lock_empty.png
+# One Rec press: the take stops itself after 2 bars and plays.
+press REC
+wait 4500
+expect_state 1 PLAY
+expect_len 1 4.0
+# Track 2 keeps its own (off); on another page Left / Right are that page's.
+press DOWN
+expect_opt 2 length 0
+press MASTER
+press RIGHT
+wait 50
+expect_opt 2 length 0
+press PATTERN

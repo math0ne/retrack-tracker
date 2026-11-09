@@ -44,7 +44,7 @@ To go back, flash the stock firmware the same way (Config > F1 Firmware).
 
 ### Four stereo tracks on one bar clock
 
-Each track records up to about 21.5 s of stereo (43 s mono) in the Tracker's
+Each track records up to about 20.4 s of stereo (40 s mono) in the Tracker's
 16 MB SDRAM, and with an SD card up to **5 minutes** (10 mono): a longer take
 goes on to the card (see [Long takes](docs/REFERENCE.md#long-takes-on-the-sd-card)). The first take sets the bar; every later take, every playback
 mode and every effect follows the same bar clock, so nothing drifts. Takes
@@ -71,7 +71,8 @@ A take in progress, a pulsing dot by the lane's tag, the REC key showing what a 
 The mode bar (F5) has two pages: Forward, Reverse, Ping-pong, Half speed,
 Double, Half rev and Double rev; then Half time, Octave up, Octave down and
 Granular. Each mode reads from the bar clock, so a track stays in time in any
-mode and a switch carries on from where it is.
+mode and a switch carries on from where it is. The bar stays open after a pick, so you
+can try several; press the lit mode again (or any other key) to close it.
 
 | Page 1: playback | Page 2: grains |
 |---|---|
@@ -171,11 +172,13 @@ the card).
 
 File saves and loads projects (every loop as a WAV plus all settings, the
 track names too) and exports tracks as WAVs, in the background while the
-loops play; F4 names the selected project. S.Load lists the card's folders
+loops play; F4 names the selected project, F7 (twice) starts a new one. S.Load lists the card's folders
 and WAV files (16-bit, 44.1 kHz, mono or stereo) and loads one into the
 selected track (empty): it comes in stopped, its Play starts it on the bar,
 and on an empty session it sets the bar. Longer than the track's RAM, it goes
-on to the card like a long take. Config holds
+on to the card like a long take. S.Play is a sound board: a WAV on each of
+the top row's first four pads, played from the card over the loops (one at a
+time; one-shot, toggle or gate), into the input so a take records it if you like. Config holds
 the settings, the recording latency, a firmware flasher (the way back to the
 stock firmware) and MIDI: clock out or follow, and eight learnable footswitch actions. Song opens
 a seven-chapter manual on the device.
@@ -220,12 +223,13 @@ included, is in [the reference](docs/REFERENCE.md#controls).
 | Encoder | The selected track's volume, or the value being set; Shift + encoder: input gain (on pages: fine steps) |
 | Encoder push | Tap tempo, three taps or more |
 | Up / Down | Select a track (on pages: a row) |
-| Left / Right | On pages: a column, strip or knob |
+| Left / Right | Home: lock the loop length (hold + encoder: bars; tap: a bar less / more). On pages: a column, strip or knob |
 | Pattern | Home: the loop lanes, from any page; leaves performance mode |
 | Perform (or Instr) | Performance mode: tap to latch, hold for while held |
 | Master | The mixer |
 | Note (or S.Edit) | The loop editor for the selected track |
 | S.Load | Load a WAV from the card into the selected track |
+| S.Play | The sound board: four WAVs on pads 1-4, played from the card |
 | FX1 / FX2 | That send effect's page |
 | Config | Settings |
 | File | Projects and WAV export |
@@ -245,7 +249,7 @@ included, is in [the reference](docs/REFERENCE.md#controls).
 - **Room:** 424 MB for the stream files (two of 53 MB per track), allocated
   once in one contiguous run each, so a freshly formatted card is best; then
   the projects and exports. With no room the looper still works, with takes
-  up to the RAM's 21.5 s (Config shows the recording time).
+  up to the RAM's 20.4 s (Config shows the recording time).
 - **Speed:** a decent card (Class 10 / U1 or better). Four tracks playing long
   takes need about 0.7 MB/s, four overdubbing 1.4 MB/s.
 - Keep `PolyendTracker_1.9.2.ptf` in `/Firmware` as the way back.
@@ -262,7 +266,7 @@ included, is in [the reference](docs/REFERENCE.md#controls).
 - **Undo / redo** (F8, or Insert / Shift + Insert) take back the
   last overdub or replace and bring it back, as often as you like, at any
   length. The audio under an overdub is kept at the end of the track's own
-  memory for loops up to half of it (about 10.8 s stereo, 21.5 s mono); a
+  memory for loops up to half of it (about 10.2 s stereo, 20.4 s mono); a
   longer one (with a card) keeps its passes on the card's two files, like a
   long take, though it plays all from RAM. Trims, cuts and erases clear it.
 - **Stop fade** (Input page, Tempo card, last row): Stop fades the track
@@ -329,7 +333,7 @@ are on the Input page; the tempo settings below are on its Tempo card.
 | Stop | **Free**: the take ends when you press. **On bar** / **On beat**: it records on to the next bar / beat line (a press less than an eighth of a unit late stops on the line it just passed). Default On bar. |
 | Length | Off, or a fixed length in whole bars (up to 64 beats): recording stops by itself. A fixed length shows in place of the Stop value. |
 | Start | **Count-in** (default): the count-in's bars of click (Tempo card), then the take starts on the bar line; with loops running it waits for the next bar line at least half a bar away. **Now**: at once. **On sound**: the track arms and starts when the input crosses the threshold, keeping the 6 ms before it so the attack is not cut; with no loop yet the bar clock starts there. The armed lane shows the input level against the threshold. Press again to cancel. |
-| Channels (Input page) | Stereo, Mono L, Mono R, Mono sum. Mono uses half the memory, so a track holds about 43 s in RAM (10 minutes with long takes on the card). Only while the track is empty. |
+| Channels (Input page) | Stereo, Mono L, Mono R, Mono sum. Mono uses half the memory, so a track holds about 40 s in RAM (10 minutes with long takes on the card). Only while the track is empty. |
 | After rec | Play, Overdub or Stop when the take ends. |
 | Tempo | **Tape** (default): a tempo change speeds the track up or down and its pitch follows. **Stretch**: it keeps its pitch, played through two cross-faded 46 ms grains while the tempo is not 100 % (at 100 % it plays as recorded). Stretch tracks do not overdub off 100 %; a take recorded on one off 100 % is still resampled like tape. |
 

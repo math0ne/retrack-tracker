@@ -1720,14 +1720,32 @@ void Engine::render(int16_t* out, const int16_t* in, uint32_t frames) {
     float (&busR)[kFxSlots][128] = busR_;
     std::memset(busL_, 0, sizeof busL_);
     std::memset(busR_, 0, sizeof busR_);
+    // The sound board: into the input (so a take records it, and the monitor
+    // plays it), or straight to the mix; to the mix too when the monitor is off.
+    bool srcOut = false;
+    if (srcFn_) {
+        std::memset(srcL_, 0, n * sizeof(float));
+        std::memset(srcR_, 0, n * sizeof(float));
+        if (srcFn_(srcL_, srcR_, n, srcCtx_)) {
+            const bool toIn = srcToIn_.load(std::memory_order_relaxed);
+            if (toIn) {
+                for (uint32_t f = 0; f < n; ++f) {
+                    inMix_[2 * f] = sat16(float(in ? in[2 * f] : 0) + srcL_[f]);
+                    inMix_[2 * f + 1] = sat16(float(in ? in[2 * f + 1] : 0) + srcR_[f]);
+                }
+                in = inMix_;
+            }
+            srcOut = !toIn || !monitor_;
+        }
+    }
     uint8_t inPk[2] = {0, 0};
     for (uint32_t f = 0; f < n; ++f) {
         const int16_t l = in ? in[2 * f] : 0, r = in ? in[2 * f + 1] : 0;
         const uint8_t pl = peak8(l, 0), pr = peak8(r, 0);
         if (pl > inPk[0]) inPk[0] = pl;
         if (pr > inPk[1]) inPk[1] = pr;
-        mixL[f] = monitor_ ? float(l) : 0.0f;
-        mixR[f] = monitor_ ? float(r) : 0.0f;
+        mixL[f] = (monitor_ ? float(l) : 0.0f) + (srcOut ? srcL_[f] : 0.0f);
+        mixR[f] = (monitor_ ? float(r) : 0.0f) + (srcOut ? srcR_[f] : 0.0f);
         // Monitoring through the effects: the input on the chosen send buses,
         // at the selected track's send levels (what a take on it will get).
         if (monitor_ && monitorFx_)
